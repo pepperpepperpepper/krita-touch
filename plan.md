@@ -444,6 +444,31 @@ Disk reality:
 - Android workdirs can be huge (`_build/`, `_install/`, `_staging/`).
 - Keep `_packaging/*.apk` and delete the rest when space is tight.
 
+### 3.7 Build installable artifacts (AppImage + APK)
+
+This repo includes a small helper that calls into `krita-docker-setup` to build
+installable artifacts.
+
+From `~/dev/krita/krita-docker-setup/persistent/krita/`:
+
+```bash
+# Linux AppImage (output: ~/dev/krita/krita-docker-setup/persistent/*.AppImage)
+touch-infra/build-artifacts.sh --appimage
+
+# Android debug APK (output: ~/dev/krita/krita-docker-setup/persistent/wd/krita/_packaging/*.apk)
+touch-infra/build-artifacts.sh --android-apk --android-container krita-android-1
+```
+
+If this repo is *not* checked out inside `krita-docker-setup/persistent/krita`,
+set `KRITA_DOCKER_SETUP_DIR=/path/to/krita-docker-setup`.
+
+If your wrapper repo needs our infra fixes (non-hanging Android smoke, etc.),
+apply the patch series first:
+
+```bash
+touch-infra/apply-krita-docker-env-patches.sh
+```
+
 ---
 
 ## 4) Headless Smoke Tests (Linux + Android)
@@ -1052,6 +1077,14 @@ DoD:
 
 - `arm64-v8a` APK built
 - Genymotion Cloud CI smoke runs install+launch+screenshot+logcat
+
+### M9 — Installable artifacts (AppImage + APK)
+
+DoD:
+
+- Linux: AppImage built and launches.
+- Android: `arm64-v8a` APK built and installs.
+- Smoke suite can be run against the shipped artifacts.
 
 ---
 
