@@ -166,6 +166,173 @@ bool KisConfig::disableTouchOnCanvas() const
     }
 }
 
+bool KisConfig::touchModeEnabled(bool defaultValue) const
+{
+#ifdef Q_OS_ANDROID
+    const bool platformDefault = true;
+#else
+    const bool platformDefault = false;
+#endif
+
+    return (defaultValue ? platformDefault : m_cfg.readEntry("touchModeEnabled", platformDefault));
+}
+
+void KisConfig::setTouchModeEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchModeEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchRightHanded(bool defaultValue) const
+{
+    return (defaultValue ? false : m_cfg.readEntry("touchRightHanded", false));
+}
+
+void KisConfig::setTouchRightHanded(bool value) const
+{
+    m_cfg.writeEntry("touchRightHanded", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+int KisConfig::touchSidebarOffset(bool defaultValue) const
+{
+    return (defaultValue ? 0 : m_cfg.readEntry("touchSidebarOffset", 0));
+}
+
+void KisConfig::setTouchSidebarOffset(int value) const
+{
+    m_cfg.writeEntry("touchSidebarOffset", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchRotateWithPinchEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchRotateWithPinchEnabled", true));
+}
+
+void KisConfig::setTouchRotateWithPinchEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchRotateWithPinchEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchQuickPinchToFitEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchQuickPinchToFitEnabled", true));
+}
+
+void KisConfig::setTouchQuickPinchToFitEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchQuickPinchToFitEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchQuickShapeEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchQuickShapeEnabled", true));
+}
+
+void KisConfig::setTouchQuickShapeEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchQuickShapeEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchQuickMenuEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchQuickMenuEnabled", true));
+}
+
+void KisConfig::setTouchQuickMenuEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchQuickMenuEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+QStringList KisConfig::defaultTouchQuickMenuActionIds()
+{
+    return QStringList{
+        QStringLiteral("edit_undo"),
+        QStringLiteral("edit_redo"),
+        QStringLiteral("KisToolSelectTouch"),
+        QStringLiteral("KisToolTransform"),
+        QStringLiteral("deselect"),
+        QStringLiteral("view_show_canvas_only"),
+    };
+}
+
+QStringList KisConfig::touchQuickMenuActionIds(bool defaultValue) const
+{
+    QStringList actionIds = defaultValue ? defaultTouchQuickMenuActionIds()
+                                         : m_cfg.readEntry("touchQuickMenuActionIds", defaultTouchQuickMenuActionIds());
+
+    while (actionIds.size() < 6) {
+        actionIds.append(QString());
+    }
+    if (actionIds.size() > 6) {
+        actionIds = actionIds.mid(0, 6);
+    }
+    return actionIds;
+}
+
+void KisConfig::setTouchQuickMenuActionIds(const QStringList &actionIds) const
+{
+    QStringList sanitized = actionIds;
+    while (sanitized.size() < 6) {
+        sanitized.append(QString());
+    }
+    if (sanitized.size() > 6) {
+        sanitized = sanitized.mid(0, 6);
+    }
+
+    m_cfg.writeEntry("touchQuickMenuActionIds", sanitized);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchClipboardGestureEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchClipboardGestureEnabled", true));
+}
+
+void KisConfig::setTouchClipboardGestureEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchClipboardGestureEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchUndoRedoGesturesEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchUndoRedoGesturesEnabled", true));
+}
+
+void KisConfig::setTouchUndoRedoGesturesEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchUndoRedoGesturesEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchFullscreenGestureEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchFullscreenGestureEnabled", true));
+}
+
+void KisConfig::setTouchFullscreenGestureEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchFullscreenGestureEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
+bool KisConfig::touchClearLayerGestureEnabled(bool defaultValue) const
+{
+    return (defaultValue ? true : m_cfg.readEntry("touchClearLayerGestureEnabled", true));
+}
+
+void KisConfig::setTouchClearLayerGestureEnabled(bool value) const
+{
+    m_cfg.writeEntry("touchClearLayerGestureEnabled", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
 bool KisConfig::useProjections(bool defaultValue) const
 {
     return (defaultValue ? true : m_cfg.readEntry("useProjections", true));
@@ -2986,4 +3153,3 @@ QDebug operator<<(QDebug debug, const KisConfig::CanvasSurfaceBitDepthMode &mode
 
     return debug.space();
 }
-

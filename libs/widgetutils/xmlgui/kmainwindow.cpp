@@ -566,6 +566,8 @@ void KisKMainWindow::applyMainWindowSettings(const KConfigGroup &cg)
 
     QWidget *focusedWidget = QApplication::focusWidget();
 
+    const bool hideDesktopChrome = property("_krita_touch_hide_chrome").toBool();
+
     const bool oldLetDirtySettings = d->letDirtySettings;
     d->letDirtySettings = false;
 
@@ -620,6 +622,30 @@ void KisKMainWindow::applyMainWindowSettings(const KConfigGroup &cg)
         state = QByteArray::fromBase64(state);
         // One day will need to load the version number, but for now, assume 0
         restoreState(state);
+    }
+
+    if (hideDesktopChrome) {
+        if (QMenuBar *mb = internalMenuBar(this)) {
+            mb->hide();
+        }
+        if (QStatusBar *sb = internalStatusBar(this)) {
+            sb->hide();
+        }
+        foreach (KisToolBar *toolbar, toolBars()) {
+            if (toolbar) {
+                toolbar->hide();
+            }
+        }
+        const auto qtoolbars = findChildren<QToolBar *>(QString(), Qt::FindDirectChildrenOnly);
+        for (QToolBar *toolbar : qtoolbars) {
+            if (!toolbar) {
+                continue;
+            }
+            if (toolbar->objectName() == QLatin1String("touchTopBar")) {
+                continue;
+            }
+            toolbar->hide();
+        }
     }
 
     if (focusedWidget) {
@@ -835,4 +861,3 @@ QString KisKMainWindow::dbusName() const
 }
 
 #include "moc_kmainwindow.cpp"
-

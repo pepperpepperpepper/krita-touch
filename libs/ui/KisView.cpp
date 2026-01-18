@@ -28,7 +28,10 @@
 #include <QApplication>
 #include <QScreen>
 #include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
 #include <QDropEvent>
+#include <QLabel>
 #include <QList>
 #include <QPrintDialog>
 #include <QToolBar>
@@ -133,6 +136,13 @@ public:
     bool isCurrent {false};
     bool showFloatingMessage {true};
     QPointer<KisFloatingMessage> savedFloatingMessage;
+
+    bool touchColorDropAdjustActive {false};
+    QPoint touchColorDropAdjustStartPos;
+    int touchColorDropAdjustStartThreshold {0};
+    int touchColorDropAdjustThreshold {0};
+    QPointer<QLabel> touchColorDropThresholdLabel;
+
     KisSignalCompressor floatingMessageCompressor;
     QMdiSubWindow *subWindow {nullptr};
 
@@ -198,6 +208,21 @@ public:
     };
 
 };
+
+namespace {
+
+QPoint clampOverlayPos(const QWidget *parent, const QPoint &desired, const QSize &overlaySize)
+{
+    if (!parent) {
+        return desired;
+    }
+
+    const int maxX = qMax(0, parent->width() - overlaySize.width());
+    const int maxY = qMax(0, parent->height() - overlaySize.height());
+    return QPoint(qBound(0, desired.x(), maxX), qBound(0, desired.y(), maxY));
+}
+
+} // namespace
 
 KisView::KisView(KisDocument *document, KisViewManager *viewManager, QWidget *parent)
     : QWidget(parent)
@@ -443,8 +468,47 @@ KisCoordinatesConverter *KisView::viewConverter() const
     return &d->viewConverter;
 }
 
+void KisView::resetTouchColorDropAdjustState()
+{
+    d->touchColorDropAdjustActive = false;
+    d->touchColorDropAdjustStartPos = QPoint();
+    d->touchColorDropAdjustStartThreshold = 0;
+    d->touchColorDropAdjustThreshold = 0;
+
+    if (d->touchColorDropThresholdLabel) {
+        d->touchColorDropThresholdLabel->hide();
+    }
+}
+
+void KisView::showTouchColorDropThresholdOverlay(const QPoint &anchorPos, int threshold)
+{
+    if (!d->touchColorDropThresholdLabel) {
+        d->touchColorDropThresholdLabel = new QLabel(this);
+        d->touchColorDropThresholdLabel->setObjectName(QStringLiteral("kisTouchColorDropThresholdLabel"));
+        d->touchColorDropThresholdLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+        d->touchColorDropThresholdLabel->setAlignment(Qt::AlignCenter);
+        d->touchColorDropThresholdLabel->setStyleSheet(QStringLiteral(
+            "QLabel {"
+            "  background: rgba(0, 0, 0, 180);"
+            "  color: white;"
+            "  border-radius: 10px;"
+            "  padding: 8px 12px;"
+            "}"));
+    }
+
+    d->touchColorDropThresholdLabel->setText(i18n("Threshold: %1%", qBound(1, threshold, 100)));
+    d->touchColorDropThresholdLabel->adjustSize();
+
+    const QSize size = d->touchColorDropThresholdLabel->size();
+    const QPoint desired = anchorPos + QPoint(18, -size.height() - 18);
+    d->touchColorDropThresholdLabel->move(clampOverlayPos(this, desired, size));
+    d->touchColorDropThresholdLabel->show();
+}
+
 void KisView::dragEnterEvent(QDragEnterEvent *event)
 {
+    resetTouchColorDropAdjustState();
+
     dbgUI << Q_FUNC_INFO
           << "Formats: " << event->mimeData()->formats()
           << "Urls: " << event->mimeData()->urls()
@@ -453,6 +517,26 @@ void KisView::dragEnterEvent(QDragEnterEvent *event)
     if (shouldAcceptDrag(event)) {
         event->accept();
         setFocus(); // activate view if it should accept the drop
+
+        KisConfig cfg(true);
+        if (!cfg.touchModeEnabled()) {
+            return;
+        }
+
+        const QMimeData *data = event->mimeData();
+        if (!data || (!data->hasColor() && !data->hasFormat("krita/x-colorsetentry"))) {
+            return;
+        }
+
+        KConfigGroup configGroup = KSharedConfig::openConfig()->group("KritaFill/KisToolFill");
+        const int startThreshold = qBound(1, configGroup.readEntry<int>("thresholdAmount", 8), 100);
+
+        d->touchColorDropAdjustActive = true;
+        d->touchColorDropAdjustStartPos = event->pos();
+        d->touchColorDropAdjustStartThreshold = startThreshold;
+        d->touchColorDropAdjustThreshold = startThreshold;
+
+        showTouchColorDropThresholdOverlay(event->pos(), startThreshold);
     } else {
         event->ignore();
     }
@@ -464,6 +548,11 @@ void KisView::dropEvent(QDropEvent *event)
     dbgUI << "\t Formats: " << event->mimeData()->formats();
     dbgUI << "\t Urls: " << event->mimeData()->urls();
     dbgUI << "\t Has images: " << event->mimeData()->hasImage();
+
+    struct TouchColorDropResetGuard {
+        KisView *view {nullptr};
+        ~TouchColorDropResetGuard() { if (view) view->resetTouchColorDropAdjustState(); }
+    } touchColorDropReset { this };
 
     if (!shouldAcceptDrag(event)) {
         return;
@@ -849,7 +938,14 @@ void KisView::dropEvent(QDropEvent *event)
                 )
             );
         } else {
-            const int threshold = configGroup.readEntry("thresholdAmount", 8);
+            int threshold = qBound(1, configGroup.readEntry("thresholdAmount", 8), 100);
+            if (d->touchColorDropAdjustActive) {
+                const int adjusted = qBound(1, d->touchColorDropAdjustThreshold, 100);
+                if (adjusted != threshold) {
+                    threshold = adjusted;
+                    configGroup.writeEntry("thresholdAmount", threshold);
+                }
+            }
             const int opacitySpread = configGroup.readEntry("opacitySpread", 100);
             const bool antiAlias = configGroup.readEntry("antiAlias", true);
             const int grow = configGroup.readEntry("growSelection", 0);
@@ -1070,7 +1166,37 @@ void KisView::dragMoveEvent(QDragMoveEvent *event)
         event->accept();
     } else {
         event->ignore();
+        return;
     }
+
+    if (!d->touchColorDropAdjustActive) {
+        return;
+    }
+
+    KisConfig cfg(true);
+    if (!cfg.touchModeEnabled()) {
+        return;
+    }
+
+    const QMimeData *data = event->mimeData();
+    if (!data || (!data->hasColor() && !data->hasFormat("krita/x-colorsetentry"))) {
+        return;
+    }
+
+    constexpr qreal kPxPerThresholdStep = 6.0;
+    const int dx = event->pos().x() - d->touchColorDropAdjustStartPos.x();
+    const int deltaSteps = qRound(dx / kPxPerThresholdStep);
+
+    const int threshold = qBound(1, d->touchColorDropAdjustStartThreshold + deltaSteps, 100);
+    d->touchColorDropAdjustThreshold = threshold;
+
+    showTouchColorDropThresholdOverlay(event->pos(), threshold);
+}
+
+void KisView::dragLeaveEvent(QDragLeaveEvent *event)
+{
+    resetTouchColorDropAdjustState();
+    QWidget::dragLeaveEvent(event);
 }
 
 KisDocument *KisView::document() const

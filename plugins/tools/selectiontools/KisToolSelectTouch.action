@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ActionCollection version="2" name="Tools">
+  <Actions category="Touch Selection Tool">
+    <text>Tool Shortcuts</text>
+    <Action name="KisToolSelectTouch">
+      <icon>tool_outline_selection</icon>
+      <text>Touch Selection Tool</text>
+      <whatsThis></whatsThis>
+      <toolTip>Touch Selection Tool</toolTip>
+      <iconText>Touch Selection Tool</iconText>
+      <shortcut></shortcut>
+      <isCheckable>false</isCheckable>
+      <statusTip></statusTip>
+    </Action>
+  </Actions>
+</ActionCollection>
+

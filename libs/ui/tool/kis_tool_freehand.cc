@@ -15,6 +15,7 @@
 #include <QThreadPool>
 #include <QApplication>
 #include <QScreen>
+#include <QLineF>
 
 #include <Eigen/Core>
 
@@ -32,6 +33,7 @@
 #include <kis_painter.h>
 #include <brushengine/kis_paintop.h>
 #include <kis_selection.h>
+#include <kis_undo_adapter.h>
 #include <brushengine/kis_paintop_preset.h>
 #include <brushengine/KisOptimizedBrushOutline.h>
 
@@ -49,8 +51,56 @@
 #include "kis_tool_freehand_helper.h"
 #include "strokes/freehand_stroke.h"
 #include "kis_tool_utils.h"
+#include "kis_figure_painting_tool_helper.h"
 
 using namespace std::placeholders; // For _1 placeholder
+
+namespace {
+
+struct TouchQuickShapeLine {
+    QPointF p0;
+    QPointF p1;
+};
+
+qreal distancePointToSegment(const QPointF &p, const QPointF &a, const QPointF &b)
+{
+    const QPointF ab = b - a;
+    const qreal len2 = QPointF::dotProduct(ab, ab);
+    if (len2 <= 1e-6) {
+        return QLineF(p, a).length();
+    }
+
+    const qreal t = qBound<qreal>(0.0, QPointF::dotProduct(p - a, ab) / len2, 1.0);
+    const QPointF proj = a + t * ab;
+    return QLineF(p, proj).length();
+}
+
+std::optional<TouchQuickShapeLine> detectTouchQuickShapeLine(const QVector<QPointF> &points)
+{
+    if (points.size() < 2) {
+        return std::nullopt;
+    }
+
+    const QPointF p0 = points.first();
+    const QPointF p1 = points.last();
+
+    const qreal length = QLineF(p0, p1).length();
+    if (length < 80.0) {
+        return std::nullopt;
+    }
+
+    const qreal tolerance = qMax<qreal>(3.0, length * 0.02);
+
+    for (int i = 1; i < points.size() - 1; i++) {
+        if (distancePointToSegment(points[i], p0, p1) > tolerance) {
+            return std::nullopt;
+        }
+    }
+
+    return TouchQuickShapeLine{p0, p1};
+}
+
+} // namespace
 
 
 KisToolFreehand::KisToolFreehand(KoCanvasBase * canvas, const QCursor & cursor,
@@ -84,6 +134,14 @@ KisToolFreehand::~KisToolFreehand()
 {
     delete m_helper;
     delete m_infoBuilder;
+}
+
+void KisToolFreehand::resetTouchQuickShapeTracking()
+{
+    m_touchQuickShapeTracking = false;
+    m_touchQuickShapePoints.clear();
+    m_touchQuickShapeLastRecordedPixelPos = QPointF();
+    m_touchQuickShapeSinceLastMove.invalidate();
 }
 
 void KisToolFreehand::mouseMoveEvent(KoPointerEvent *event)
@@ -167,6 +225,8 @@ void KisToolFreehand::activate(const QSet<KoShape*> &shapes)
 
 void KisToolFreehand::deactivate()
 {
+    resetTouchQuickShapeTracking();
+
     if (mode() == PAINT_MODE) {
         endStroke();
         setMode(KisTool::HOVER_MODE);
@@ -234,6 +294,19 @@ void KisToolFreehand::beginPrimaryAction(KoPointerEvent *event)
         canvas2->viewManager()->disableControls();
     }
 
+    resetTouchQuickShapeTracking();
+    {
+        KisConfig cfg(true);
+        if (cfg.touchModeEnabled() && cfg.touchQuickShapeEnabled()) {
+            const QPointF p = convertToPixelCoord(event);
+            m_touchQuickShapeTracking = true;
+            m_touchQuickShapePoints.reserve(128);
+            m_touchQuickShapePoints.append(p);
+            m_touchQuickShapeLastRecordedPixelPos = p;
+            m_touchQuickShapeSinceLastMove.start();
+        }
+    }
+
     initStroke(event);
 }
 
@@ -246,13 +319,36 @@ void KisToolFreehand::continuePrimaryAction(KoPointerEvent *event)
     /**
      * Actual painting
      */
+    if (m_touchQuickShapeTracking) {
+        const QPointF p = convertToPixelCoord(event);
+        if (QLineF(p, m_touchQuickShapeLastRecordedPixelPos).length() > 1.0) {
+            m_touchQuickShapePoints.append(p);
+            m_touchQuickShapeLastRecordedPixelPos = p;
+            m_touchQuickShapeSinceLastMove.restart();
+        }
+    }
+
     doStroke(event);
 }
 
 void KisToolFreehand::endPrimaryAction(KoPointerEvent *event)
 {
-    Q_UNUSED(event);
     CHECK_MODE_SANITY_OR_RETURN(KisTool::PAINT_MODE);
+
+    std::optional<TouchQuickShapeLine> quickShapeLine;
+    if (m_touchQuickShapeTracking) {
+        const QPointF p = convertToPixelCoord(event);
+        if (m_touchQuickShapePoints.isEmpty() || QLineF(p, m_touchQuickShapePoints.last()).length() > 0.01) {
+            m_touchQuickShapePoints.append(p);
+            m_touchQuickShapeLastRecordedPixelPos = p;
+        }
+
+        constexpr qint64 kHoldMs = 350;
+        const bool held = m_touchQuickShapeSinceLastMove.isValid() && m_touchQuickShapeSinceLastMove.elapsed() >= kHoldMs;
+        if (held) {
+            quickShapeLine = detectTouchQuickShapeLine(m_touchQuickShapePoints);
+        }
+    }
 
     endStroke();
 
@@ -266,6 +362,31 @@ void KisToolFreehand::endPrimaryAction(KoPointerEvent *event)
     }
 
     setMode(KisTool::HOVER_MODE);
+
+    if (quickShapeLine) {
+        KisImageWSP img = image();
+        KisNodeSP node = currentNode();
+        KisCanvas2 *canvas2 = dynamic_cast<KisCanvas2 *>(canvas());
+
+        if (img && node && canvas2 && canvas2->viewManager() && canvas2->viewManager()->undoAdapter()) {
+            // Ensure the just-finished stroke has landed before we attempt to undo it.
+            img->waitForDone();
+
+            canvas2->viewManager()->undoAdapter()->undoLastCommand();
+
+            KisFigurePaintingToolHelper helper(kundo2_i18n("QuickShape"),
+                                               img,
+                                               node,
+                                               canvas()->resourceManager(),
+                                               KisToolShapeUtils::StrokeStyleForeground,
+                                               KisToolShapeUtils::FillStyleNone);
+
+            helper.paintLine(KisPaintInformation(quickShapeLine->p0),
+                             KisPaintInformation(quickShapeLine->p1));
+        }
+    }
+
+    resetTouchQuickShapeTracking();
 }
 
 bool KisToolFreehand::trySampleByPaintOp(KoPointerEvent *event, AlternateAction action)
@@ -495,5 +616,3 @@ KisOptimizedBrushOutline KisToolFreehand::getOutlinePath(const QPointF &document
     else
         return KisOptimizedBrushOutline();
 }
-
-

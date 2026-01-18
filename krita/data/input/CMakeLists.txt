@@ -3,6 +3,7 @@ install(FILES
     kritadefault.profile
     painttoolsaicompatible.profile
     photoshopcompatible.profile
+    touch-gestures-only.profile
     DESTINATION  ${KDE_INSTALL_DATADIR}/krita/input
 )
 if (WIN32)
@@ -11,4 +12,3 @@ if (WIN32)
         DESTINATION  ${KDE_INSTALL_DATADIR}/krita/input
     )
 endif()
-

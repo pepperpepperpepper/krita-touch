@@ -12,6 +12,7 @@
 #include "kis_tool_transform.h"
 
 
+#include <cmath>
 #include <math.h>
 #include <limits>
 
@@ -189,6 +190,127 @@ void KisToolTransform::outlineChanged()
 {
     Q_EMIT freeTransformChanged();
     m_canvas->updateCanvas();
+}
+
+bool KisToolTransform::touchTransformHitTest(const QPointF &widgetPoint) const
+{
+    if (!m_canvas || !m_strokeId) {
+        return false;
+    }
+
+    if (m_currentArgs.mode() != ToolTransformArgs::FREE_TRANSFORM &&
+        m_currentArgs.mode() != ToolTransformArgs::PERSPECTIVE_4POINT) {
+        return false;
+    }
+
+    const QRectF originalRect = m_transaction.originalRect();
+    if (originalRect.isEmpty()) {
+        return false;
+    }
+
+    const QPointF imagePoint = m_canvas->coordinatesConverter()->widgetToImage(widgetPoint);
+
+    const KisTransformUtils::MatricesPack m(m_currentArgs);
+    const QTransform t = m.finalTransform();
+
+    QPolygonF polygon;
+    polygon << t.map(originalRect.topLeft()) << t.map(originalRect.topRight()) << t.map(originalRect.bottomRight())
+            << t.map(originalRect.bottomLeft());
+
+    return polygon.containsPoint(imagePoint, Qt::WindingFill);
+}
+
+bool KisToolTransform::touchTransformGestureBegin(const QPointF &widgetP0, const QPointF &widgetP1)
+{
+    m_touchTransformGestureActive = false;
+
+    if (!m_canvas || !m_strokeId) {
+        return false;
+    }
+
+    if (m_currentArgs.mode() != ToolTransformArgs::FREE_TRANSFORM) {
+        return false;
+    }
+
+    const qreal startDistance = QVector2D(widgetP1 - widgetP0).length();
+    if (startDistance < 5.0) {
+        return false;
+    }
+
+    m_touchTransformGestureActive = true;
+
+    m_touchTransformGestureStartDistance = startDistance;
+    m_touchTransformGestureStartAngle = std::atan2(widgetP1.y() - widgetP0.y(), widgetP1.x() - widgetP0.x());
+    m_touchTransformGestureLastAngle = m_touchTransformGestureStartAngle;
+    m_touchTransformGestureAccumRotation = 0.0;
+
+    const QPointF startCenterWidget = (widgetP0 + widgetP1) * 0.5;
+    m_touchTransformGestureStartCenterImage = m_canvas->coordinatesConverter()->widgetToImage(startCenterWidget);
+
+    m_touchTransformGestureBaseTransformedCenter = m_currentArgs.transformedCenter();
+    m_touchTransformGestureBaseScaleX = m_currentArgs.scaleX();
+    m_touchTransformGestureBaseScaleY = m_currentArgs.scaleY();
+    m_touchTransformGestureBaseAZ = m_currentArgs.aZ();
+
+    return m_touchTransformGestureActive;
+}
+
+void KisToolTransform::touchTransformGestureUpdate(const QPointF &widgetP0, const QPointF &widgetP1)
+{
+    if (!m_touchTransformGestureActive || !m_canvas || !m_strokeId) {
+        return;
+    }
+
+    if (m_currentArgs.mode() != ToolTransformArgs::FREE_TRANSFORM) {
+        return;
+    }
+
+    const qreal distance = QVector2D(widgetP1 - widgetP0).length();
+    if (distance < 5.0 || qFuzzyIsNull(m_touchTransformGestureStartDistance)) {
+        return;
+    }
+
+    const qreal scaleDelta = distance / m_touchTransformGestureStartDistance;
+    const qreal angle = std::atan2(widgetP1.y() - widgetP0.y(), widgetP1.x() - widgetP0.x());
+    qreal deltaAngle = angle - m_touchTransformGestureLastAngle;
+    if (deltaAngle > M_PI) {
+        deltaAngle -= 2.0 * M_PI;
+    } else if (deltaAngle < -M_PI) {
+        deltaAngle += 2.0 * M_PI;
+    }
+    m_touchTransformGestureAccumRotation += deltaAngle;
+    m_touchTransformGestureLastAngle = angle;
+
+    const QPointF centerWidget = (widgetP0 + widgetP1) * 0.5;
+    const QPointF centerImage = m_canvas->coordinatesConverter()->widgetToImage(centerWidget);
+    const QPointF translationDelta = centerImage - m_touchTransformGestureStartCenterImage;
+
+    const double newScaleX = m_touchTransformGestureBaseScaleX * scaleDelta;
+    const double newScaleY = m_touchTransformGestureBaseScaleY * scaleDelta;
+
+    // Avoid allowing the transform to collapse to zero via noisy pinch events.
+    constexpr double kMinAbsScale = 0.01;
+    if (std::abs(newScaleX) < kMinAbsScale || std::abs(newScaleY) < kMinAbsScale) {
+        return;
+    }
+
+    m_currentArgs.setScaleX(newScaleX);
+    m_currentArgs.setScaleY(newScaleY);
+    m_currentArgs.setAZ(m_touchTransformGestureBaseAZ + m_touchTransformGestureAccumRotation);
+    m_currentArgs.setTransformedCenter(m_touchTransformGestureBaseTransformedCenter + translationDelta);
+
+    if (mode() != KisTool::PAINT_MODE) {
+        currentStrategy()->externalConfigChanged();
+    }
+    outlineChanged();
+    updateOptionWidget();
+    updateApplyResetAvailability();
+    setFunctionalCursor();
+}
+
+void KisToolTransform::touchTransformGestureEnd()
+{
+    m_touchTransformGestureActive = false;
 }
 
 void KisToolTransform::canvasUpdateRequested()

@@ -1633,7 +1633,10 @@ void KisViewManager::showHideScrollbars()
     KisConfig cfg(true);
     bool toggled = actionCollection()->action("view_show_canvas_only")->isChecked();
 
-    if ( (toggled && cfg.hideScrollbarsFullscreen()) || (!toggled && cfg.hideScrollbars()) ) {
+    // Touch Mode is finger-first (pan/zoom/rotate) and should not display scrollbars (Procreate-like).
+    const bool hideForTouchMode = cfg.touchModeEnabled();
+
+    if (hideForTouchMode || (toggled && cfg.hideScrollbarsFullscreen()) || (!toggled && cfg.hideScrollbars())) {
         d->currentImageView->canvasController()->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         d->currentImageView->canvasController()->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     } else {

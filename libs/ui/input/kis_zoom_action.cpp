@@ -7,11 +7,14 @@
 #include "kis_zoom_action.h"
 
 #include <QApplication>
+#include <QMetaObject>
 #include <QNativeGestureEvent>
+#include <QPointer>
 
 #include <klocalizedstring.h>
 
 #include <KoCanvasControllerWidget.h>
+#include <KoToolManager.h>
 
 #include <kis_canvas2.h>
 #include <kis_canvas_controller.h>
@@ -40,6 +43,9 @@ public:
 
     qreal startZoom {1.0};
     qreal lastDiscreteZoomDistance {0.0};
+
+    QPointer<QObject> touchTransformTool;
+    bool touchTransformActive {false};
 };
 
 QPointF KisZoomAction::Private::centerPoint(QTouchEvent* event)
@@ -113,6 +119,45 @@ void KisZoomAction::deactivate(int shortcut)
 void KisZoomAction::begin(int shortcut, QEvent *event)
 {
     KisAbstractInputAction::begin(shortcut, event);
+
+    d->touchTransformTool.clear();
+    d->touchTransformActive = false;
+
+    if (event && (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate)) {
+        QTouchEvent *touchEvent = dynamic_cast<QTouchEvent *>(event);
+        if (touchEvent && touchEvent->touchPoints().count() > 1) {
+            KisConfig cfg(true);
+            if (cfg.touchModeEnabled()) {
+                KoToolManager *toolManager = KoToolManager::instance();
+                if (toolManager && toolManager->activeToolId() == QStringLiteral("KisToolTransform")) {
+                    QObject *toolObj = dynamic_cast<QObject *>(toolManager->toolById(inputManager()->canvas(), toolManager->activeToolId()));
+                    if (toolObj) {
+                        const QPointF p0 = touchEvent->touchPoints().at(0).pos();
+                        const QPointF p1 = touchEvent->touchPoints().at(1).pos();
+                        const QPointF centerWidget = (p0 + p1) * 0.5;
+
+                        bool hit = false;
+                        const bool canHitTest = QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
+                                                                         Q_RETURN_ARG(bool, hit),
+                                                                         Q_ARG(QPointF, centerWidget));
+
+                        if (canHitTest && hit) {
+                            bool began = false;
+                            const bool invokedBegin =
+                                QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
+                                                          Q_RETURN_ARG(bool, began),
+                                                          Q_ARG(QPointF, p0),
+                                                          Q_ARG(QPointF, p1));
+                            if (invokedBegin && began) {
+                                d->touchTransformTool = toolObj;
+                                d->touchTransformActive = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     d->lastDistance = 0.f;
 
@@ -190,11 +235,33 @@ void KisZoomAction::begin(int shortcut, QEvent *event)
         }
 }
 
+void KisZoomAction::end(QEvent *event)
+{
+    Q_UNUSED(event);
+
+    if (d->touchTransformActive && d->touchTransformTool) {
+        QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureEnd", Qt::DirectConnection);
+    }
+
+    d->touchTransformActive = false;
+    d->touchTransformTool.clear();
+}
+
 void KisZoomAction::inputEvent( QEvent* event )
 {
     switch (event->type()) {
         case QEvent::TouchUpdate: {
             QTouchEvent *tevent = static_cast<QTouchEvent*>(event);
+
+            if (d->touchTransformActive && d->touchTransformTool && tevent->touchPoints().count() > 1) {
+                const QPointF p0 = tevent->touchPoints().at(0).pos();
+                const QPointF p1 = tevent->touchPoints().at(1).pos();
+
+                QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
+                                          Q_ARG(QPointF, p0),
+                                          Q_ARG(QPointF, p1));
+                return;
+            }
 
             if (tevent->touchPoints().count() != 2) {
                 // Sanity check. The input state machine should only invoke
@@ -370,4 +437,3 @@ KisInputActionGroup KisZoomAction::inputActionGroup(int shortcut) const
     Q_UNUSED(shortcut);
     return ViewTransformActionGroup;
 }
-

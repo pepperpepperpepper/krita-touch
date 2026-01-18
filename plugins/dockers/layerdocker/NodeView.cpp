@@ -16,7 +16,10 @@
 #include <kis_config.h>
 #include <kis_icon.h>
 #include <ksharedconfig.h>
+#include <KisMainWindow.h>
+#include <KisPart.h>
 #include <KisKineticScroller.h>
+#include <kactioncollection.h>
 
 #include <QtDebug>
 #include <QContextMenuEvent>
@@ -30,6 +33,7 @@
 #include <QPainter>
 #include <QScrollBar>
 #include <QScroller>
+#include <QTimer>
 
 #include "kis_node_view_color_scheme.h"
 
@@ -55,6 +59,11 @@ public:
 #ifdef DRAG_WHILE_DRAG_WORKAROUND
         , isDragging(false)
 #endif
+        , touchOptionsCandidateActive(false)
+        , touchSwipeCandidateActive(false)
+        , touchVisibilityHoldCandidateActive(false)
+        , touchVisibilityHoldTriggered(false)
+        , touchVisibilityHoldTimer(nullptr)
     {
     }
     NodeDelegate delegate;
@@ -64,6 +73,18 @@ public:
 #ifdef DRAG_WHILE_DRAG_WORKAROUND
     bool isDragging;
 #endif
+
+    QPersistentModelIndex touchOptionsCandidateIndex;
+    bool touchOptionsCandidateActive;
+    QPersistentModelIndex touchSwipeCandidateIndex;
+    QPoint touchSwipeStartPos;
+    bool touchSwipeCandidateActive;
+
+    QPersistentModelIndex touchVisibilityHoldCandidateIndex;
+    QPoint touchVisibilityHoldStartPos;
+    bool touchVisibilityHoldCandidateActive;
+    bool touchVisibilityHoldTriggered;
+    QTimer *touchVisibilityHoldTimer;
 };
 
 
@@ -94,6 +115,10 @@ NodeView::NodeView(QWidget *parent)
                     this, SLOT(slotScrollerStateChanged(QScroller::State)));
         }
     }
+
+    d->touchVisibilityHoldTimer = new QTimer(this);
+    d->touchVisibilityHoldTimer->setSingleShot(true);
+    connect(d->touchVisibilityHoldTimer, &QTimer::timeout, this, &NodeView::slotTouchVisibilityHoldTimeout);
 }
 
 NodeView::~NodeView()
@@ -182,15 +207,156 @@ bool NodeView::viewportEvent(QEvent *e)
         switch(e->type()) {
         case QEvent::MouseButtonPress: {
             DRAG_WHILE_DRAG_WORKAROUND_STOP();
+            d->touchOptionsCandidateActive = false;
+            d->touchOptionsCandidateIndex = QModelIndex();
+            d->touchSwipeCandidateActive = false;
+            d->touchSwipeCandidateIndex = QModelIndex();
+            d->touchVisibilityHoldCandidateActive = false;
+            d->touchVisibilityHoldTriggered = false;
+            d->touchVisibilityHoldCandidateIndex = QModelIndex();
+            d->touchVisibilityHoldStartPos = QPoint();
+            if (d->touchVisibilityHoldTimer) {
+                d->touchVisibilityHoldTimer->stop();
+            }
 
-            const QPoint pos = static_cast<QMouseEvent*>(e)->pos();
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(e);
+            const QPoint pos = mouseEvent->pos();
             d->lastPos = pos;
 
             if (!indexAt(pos).isValid()) {
                 return QTreeView::viewportEvent(e);
             }
+
+            const QModelIndex rawIndex = QTreeView::indexAt(pos);
+            const QModelIndex rawBuddyIndex = rawIndex.isValid() ? model()->buddy(rawIndex) : QModelIndex();
+            const bool pressedOnSelectedRow =
+                rawIndex.isValid() &&
+                rawIndex.column() == DEFAULT_COL &&
+                selectionModel() &&
+                selectionModel()->isSelected(rawBuddyIndex);
+
+            const KisConfig cfg(true);
+            const bool touchModeMouse =
+                cfg.touchModeEnabled() &&
+                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
+                mouseEvent->button() == Qt::LeftButton;
+
+            // Procreate-like layer "solo": press-and-hold the visibility icon.
+            // We delay the normal visibility toggle so short tap still toggles.
+            if (touchModeMouse &&
+                rawIndex.isValid() &&
+                rawIndex.column() == VISIBILITY_COL &&
+                d->touchVisibilityHoldTimer) {
+                d->touchVisibilityHoldCandidateActive = true;
+                d->touchVisibilityHoldTriggered = false;
+                d->touchVisibilityHoldCandidateIndex = rawIndex;
+                d->touchVisibilityHoldStartPos = pos;
+
+                constexpr int kHoldMs = 450;
+                d->touchVisibilityHoldTimer->start(kHoldMs);
+
+                e->accept();
+                return true;
+            }
+
             QModelIndex index = model()->buddy(indexAt(pos));
             if (d->delegate.editorEvent(e, model(), optionForIndex(index), index)) {
+                return true;
+            }
+
+            if (cfg.touchModeEnabled() &&
+                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
+                mouseEvent->button() == Qt::LeftButton) {
+                if (rawIndex.isValid() && rawIndex.column() == DEFAULT_COL && rawBuddyIndex.isValid()) {
+                    d->touchSwipeCandidateActive = true;
+                    d->touchSwipeCandidateIndex = rawBuddyIndex;
+                    d->touchSwipeStartPos = pos;
+
+                    if (pressedOnSelectedRow) {
+                        d->touchOptionsCandidateActive = true;
+                        d->touchOptionsCandidateIndex = rawBuddyIndex;
+                    }
+                }
+            }
+        } break;
+        case QEvent::MouseButtonRelease: {
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(e);
+            const QPoint pos = mouseEvent->pos();
+
+            if (d->touchVisibilityHoldCandidateActive && mouseEvent->button() == Qt::LeftButton) {
+                if (d->touchVisibilityHoldTimer) {
+                    d->touchVisibilityHoldTimer->stop();
+                }
+
+                const int dragDistance = (pos - d->touchVisibilityHoldStartPos).manhattanLength();
+                if (!d->touchVisibilityHoldTriggered &&
+                    d->touchVisibilityHoldCandidateIndex.isValid() &&
+                    dragDistance <= qApp->startDragDistance()) {
+                    QMouseEvent pressEvent(
+                        QEvent::MouseButtonPress,
+                        d->touchVisibilityHoldStartPos,
+                        Qt::LeftButton,
+                        Qt::LeftButton,
+                        mouseEvent->modifiers());
+                    d->delegate.editorEvent(&pressEvent,
+                                            model(),
+                                            optionForIndex(d->touchVisibilityHoldCandidateIndex),
+                                            d->touchVisibilityHoldCandidateIndex);
+                }
+
+                d->touchVisibilityHoldCandidateActive = false;
+                d->touchVisibilityHoldTriggered = false;
+                d->touchVisibilityHoldCandidateIndex = QModelIndex();
+                d->touchVisibilityHoldStartPos = QPoint();
+
+                e->accept();
+                return true;
+            }
+
+            d->touchSwipeCandidateActive = false;
+            d->touchSwipeCandidateIndex = QModelIndex();
+
+            if (!d->touchOptionsCandidateActive || mouseEvent->button() != Qt::LeftButton) {
+                d->touchOptionsCandidateActive = false;
+                d->touchOptionsCandidateIndex = QModelIndex();
+                break;
+            }
+
+            const int dragDistance = (pos - d->lastPos).manhattanLength();
+            if (dragDistance > qApp->startDragDistance()) {
+                d->touchOptionsCandidateActive = false;
+                d->touchOptionsCandidateIndex = QModelIndex();
+                break;
+            }
+
+            const QModelIndex rawIndex = QTreeView::indexAt(pos);
+            if (!rawIndex.isValid() || rawIndex.column() != DEFAULT_COL) {
+                d->touchOptionsCandidateActive = false;
+                d->touchOptionsCandidateIndex = QModelIndex();
+                break;
+            }
+
+            const QModelIndex buddyIndex = model()->buddy(rawIndex);
+            if (!buddyIndex.isValid() || buddyIndex != d->touchOptionsCandidateIndex) {
+                d->touchOptionsCandidateActive = false;
+                d->touchOptionsCandidateIndex = QModelIndex();
+                break;
+            }
+
+            KisMainWindow *mainWindow = KisPart::instance()->currentMainwindow();
+            KisKActionCollection *actionCollection = mainWindow ? mainWindow->actionCollection() : nullptr;
+            QAction *action =
+                actionCollection ? actionCollection->action(QStringLiteral("touch_layer_options_sheet")) : nullptr;
+            if (!action && actionCollection) {
+                action = actionCollection->action(QStringLiteral("layer_properties"));
+            }
+
+            d->touchOptionsCandidateActive = false;
+            d->touchOptionsCandidateIndex = QModelIndex();
+
+            if (action) {
+                action->trigger();
+                e->accept();
                 return true;
             }
         } break;
@@ -206,7 +372,75 @@ bool NodeView::viewportEvent(QEvent *e)
             }
 #endif
 
-            const QPoint pos = static_cast<QMouseEvent*>(e)->pos();
+            QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(e);
+            const QPoint pos = mouseEvent->pos();
+
+            if (d->touchVisibilityHoldCandidateActive &&
+                (mouseEvent->buttons() & Qt::LeftButton) &&
+                d->touchVisibilityHoldCandidateIndex.isValid()) {
+                const int dragDistance = (pos - d->touchVisibilityHoldStartPos).manhattanLength();
+                if (dragDistance > qApp->startDragDistance()) {
+                    if (d->touchVisibilityHoldTimer) {
+                        d->touchVisibilityHoldTimer->stop();
+                    }
+                    d->touchVisibilityHoldCandidateActive = false;
+                    d->touchVisibilityHoldTriggered = false;
+                    d->touchVisibilityHoldCandidateIndex = QModelIndex();
+                    d->touchVisibilityHoldStartPos = QPoint();
+                }
+            }
+
+            if (d->touchSwipeCandidateActive &&
+                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
+                (mouseEvent->buttons() & Qt::LeftButton) &&
+                d->touchSwipeCandidateIndex.isValid()) {
+
+                const QPoint delta = pos - d->touchSwipeStartPos;
+                const int dx = delta.x();
+                const int dy = delta.y();
+                const int absDx = qAbs(dx);
+                const int absDy = qAbs(dy);
+
+                const int minSwipePx = qMax(qApp->startDragDistance() * 2, 36);
+                if (absDy >= minSwipePx && absDy > absDx) {
+                    // Treat as a scroll/drag; don't keep a swipe candidate alive.
+                    d->touchSwipeCandidateActive = false;
+                    d->touchSwipeCandidateIndex = QModelIndex();
+                } else if (absDx >= minSwipePx && absDx >= absDy * 2) {
+                    // Swipe left: show layer options (Lock/Duplicate/Delete).
+                    // Swipe right: multi-select toggle (Procreate-style).
+                    if (dx < 0) {
+                        KisMainWindow *mainWindow = KisPart::instance()->currentMainwindow();
+                        KisKActionCollection *actionCollection = mainWindow ? mainWindow->actionCollection() : nullptr;
+                        QAction *action =
+                            actionCollection ? actionCollection->action(QStringLiteral("touch_layer_options_sheet")) : nullptr;
+                        if (!action && actionCollection) {
+                            action = actionCollection->action(QStringLiteral("layer_properties"));
+                        }
+
+                        if (action) {
+                            action->setData(mouseEvent->globalPos());
+                            action->trigger();
+                        }
+                    } else {
+                        if (selectionModel()) {
+                            selectionModel()->select(d->touchSwipeCandidateIndex,
+                                                     QItemSelectionModel::Toggle | QItemSelectionModel::Rows);
+                            selectionModel()->setCurrentIndex(d->touchSwipeCandidateIndex,
+                                                             QItemSelectionModel::NoUpdate);
+                        }
+                    }
+
+                    d->touchSwipeCandidateActive = false;
+                    d->touchSwipeCandidateIndex = QModelIndex();
+                    d->touchOptionsCandidateActive = false;
+                    d->touchOptionsCandidateIndex = QModelIndex();
+
+                    e->accept();
+                    return true;
+                }
+            }
+
             QModelIndex hovered = indexAt(pos);
             if (hovered != d->hovered) {
                 if (d->hovered.isValid()) {
@@ -484,7 +718,28 @@ void NodeView::slotUpdateIcons()
     d->delegate.slotUpdateIcon();
 }
 
+void NodeView::slotTouchVisibilityHoldTimeout()
+{
+    if (!d->touchVisibilityHoldCandidateActive ||
+        d->touchVisibilityHoldTriggered ||
+        !d->touchVisibilityHoldCandidateIndex.isValid()) {
+        return;
+    }
+
+    d->touchVisibilityHoldTriggered = true;
+    toggleSolo(d->touchVisibilityHoldCandidateIndex);
+}
+
 void NodeView::slotScrollerStateChanged(QScroller::State state){
+    if (state != QScroller::Inactive && d->touchVisibilityHoldCandidateActive) {
+        if (d->touchVisibilityHoldTimer) {
+            d->touchVisibilityHoldTimer->stop();
+        }
+        d->touchVisibilityHoldCandidateActive = false;
+        d->touchVisibilityHoldTriggered = false;
+        d->touchVisibilityHoldCandidateIndex = QModelIndex();
+        d->touchVisibilityHoldStartPos = QPoint();
+    }
     KisKineticScroller::updateCursor(this, state);
 }
 

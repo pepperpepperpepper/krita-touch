@@ -24,6 +24,7 @@
 #include "kis_pan_action.h"
 #include "kis_rotate_canvas_action.h"
 #include "KisPopupWidgetAction.h"
+#include "KisTouchQuickMenuAction.h"
 #include "kis_tool_invocation_action.h"
 #include "kis_zoom_action.h"
 #include "kis_shortcut_configuration.h"
@@ -444,6 +445,7 @@ void KisInputProfileManager::Private::createActions()
     actions.append(new KisRotateCanvasAction());
     actions.append(new KisZoomAction());
     actions.append(new KisPopupWidgetAction());
+    actions.append(new KisTouchQuickMenuAction());
     actions.append(new KisSelectLayerAction());
     actions.append(new KisGammaExposureAction());
     actions.append(new KisChangeFrameAction());

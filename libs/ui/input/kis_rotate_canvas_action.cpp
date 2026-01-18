@@ -7,14 +7,18 @@
 #include "kis_rotate_canvas_action.h"
 
 #include <QApplication>
+#include <QMetaObject>
 #include <QNativeGestureEvent>
+#include <QPointer>
 #include <klocalizedstring.h>
 
 #include "kis_cursor.h"
 #include "kis_canvas_controller.h"
 #include <kis_canvas2.h>
+#include <kis_config.h>
 #include "kis_input_manager.h"
 #include <KoViewTransformStillPoint.h>
+#include <KoToolManager.h>
 
 #include <math.h>
 
@@ -33,6 +37,9 @@ public:
     qreal touchRotation {0.0};
     bool allowRotation {false};
     KoViewTransformStillPoint actionStillPoint;
+
+    QPointer<QObject> touchTransformTool;
+    bool touchTransformActive {false};
 };
 
 
@@ -84,6 +91,8 @@ void KisRotateCanvasAction::begin(int shortcut, QEvent *event)
     d->previousAngle = 0;
     d->snapRotation = 0;
     d->touchRotation = 0;
+    d->touchTransformTool.clear();
+    d->touchTransformActive = false;
 
     KisCanvasController *canvasController =
         dynamic_cast<KisCanvasController*>(inputManager()->canvas()->canvasController());
@@ -94,6 +103,46 @@ void KisRotateCanvasAction::begin(int shortcut, QEvent *event)
     switch(shortcut) {
         case RotateModeShortcut:
         case DiscreteRotateModeShortcut: {
+            if (event && (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate)) {
+                QTouchEvent *touchEvent = dynamic_cast<QTouchEvent *>(event);
+                if (touchEvent && touchEvent->touchPoints().count() > 1) {
+                    KisConfig cfg(true);
+                    if (cfg.touchModeEnabled()) {
+                        KoToolManager *toolManager = KoToolManager::instance();
+                        if (toolManager && toolManager->activeToolId() == QStringLiteral("KisToolTransform")) {
+                            QObject *toolObj =
+                                dynamic_cast<QObject *>(toolManager->toolById(inputManager()->canvas(), toolManager->activeToolId()));
+
+                            if (toolObj) {
+                                const QPointF p0 = touchEvent->touchPoints().at(0).pos();
+                                const QPointF p1 = touchEvent->touchPoints().at(1).pos();
+                                const QPointF centerWidget = (p0 + p1) * 0.5;
+
+                                bool hit = false;
+                                const bool canHitTest =
+                                    QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
+                                                             Q_RETURN_ARG(bool, hit),
+                                                             Q_ARG(QPointF, centerWidget));
+
+                                if (canHitTest && hit) {
+                                    bool began = false;
+                                    const bool invokedBegin =
+                                        QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
+                                                                 Q_RETURN_ARG(bool, began),
+                                                                 Q_ARG(QPointF, p0),
+                                                                 Q_ARG(QPointF, p1));
+                                    if (invokedBegin && began) {
+                                        d->touchTransformTool = toolObj;
+                                        d->touchTransformActive = true;
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // If the canvas has been rotated to an angle that is not an exact multiple of DISCRETE_ANGLE_STEP,
             // we need to adjust the final discrete rotation by that angle difference.
             // trunc() is used to round the negative numbers towards zero.
@@ -118,6 +167,13 @@ void KisRotateCanvasAction::begin(int shortcut, QEvent *event)
 void KisRotateCanvasAction::end(QEvent *event)
 {
     Q_UNUSED(event);
+
+    if (d->touchTransformActive && d->touchTransformTool) {
+        QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureEnd", Qt::DirectConnection);
+        d->touchTransformTool.clear();
+        d->touchTransformActive = false;
+        return;
+    }
 
     KisCanvasController *canvasController =
         dynamic_cast<KisCanvasController*>(inputManager()->canvas()->canvasController());
@@ -187,6 +243,16 @@ void KisRotateCanvasAction::inputEvent(QEvent* event)
 
             if (touchEvent->touchPoints().count() != 2)
                 break;
+
+            if (d->touchTransformActive && d->touchTransformTool) {
+                const QPointF p0 = touchEvent->touchPoints().at(0).pos();
+                const QPointF p1 = touchEvent->touchPoints().at(1).pos();
+
+                QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
+                                          Q_ARG(QPointF, p0),
+                                          Q_ARG(QPointF, p1));
+                return;
+            }
 
             QTouchEvent::TouchPoint tp0 = touchEvent->touchPoints().at(0);
             QTouchEvent::TouchPoint tp1 = touchEvent->touchPoints().at(1);

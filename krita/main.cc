@@ -201,6 +201,19 @@ Java_org_krita_android_JNIWrappers_openFileFromIntent(JNIEnv* /*env*/,
     }
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_org_krita_android_JNIWrappers_runTouchSmokeFromIntent(JNIEnv* /*env*/,
+                                                           jobject /*obj*/,
+                                                           jstring str)
+{
+    QAndroidJniObject jScenario(str);
+    if (jScenario.isValid()) {
+        const QString scenario = jScenario.toString();
+        QMetaObject::invokeMethod(KisApplication::instance(), "touchSmokeScenarioRequested",
+                                  Qt::QueuedConnection, Q_ARG(QString, scenario));
+    }
+}
+
 #define MAIN_EXPORT __attribute__ ((visibility ("default")))
 #define MAIN_FN main
 #elif defined Q_OS_WIN

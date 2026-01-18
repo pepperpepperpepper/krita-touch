@@ -37,6 +37,7 @@ struct Q_DECL_HIDDEN KisApplicationArguments::Private
     QString windowLayout;
     QString session;
     QString fileLayer;
+    QString touchSmokeScenario;
     bool canvasOnly {false};
     bool noSplash {false};
     bool fullScreen {false};
@@ -87,6 +88,13 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("canvasonly"), i18n("Start Krita in canvas-only mode")));
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("nosplash"), i18n("Do not show the splash screen")));
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("fullscreen"), i18n("Start Krita in full-screen mode")));
+    {
+        QCommandLineOption opt(QStringList() << QLatin1String("touch-smoke"),
+                               i18n("Run a deterministic touch UI scenario for headless smoke tests"),
+                               QLatin1String("scenario"));
+        opt.setFlags(QCommandLineOption::HiddenFromHelp);
+        parser.addOption(opt);
+    }
     {
         QCommandLineOption opt(QStringList() << QLatin1String("dpi"), i18n("Override display DPI"), QLatin1String("dpiX,dpiY"));
         opt.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -183,12 +191,17 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
     d->workspace = parser.value("workspace");
     d->windowLayout = parser.value("windowlayout");
     d->session = parser.value("load-session");
+    d->touchSmokeScenario = parser.value("touch-smoke").trimmed();
     d->doTemplate = parser.isSet("template");
     d->exportAs = parser.isSet("export");
     d->exportSequence = parser.isSet("export-sequence");
     d->canvasOnly = parser.isSet("canvasonly");
     d->noSplash = parser.isSet("nosplash");
     d->fullScreen = parser.isSet("fullscreen");
+
+    if (d->touchSmokeScenario.isEmpty()) {
+        d->touchSmokeScenario = QString::fromUtf8(qgetenv("KRITA_TOUCH_SMOKE")).trimmed();
+    }
 
     KoResourcePaths::s_overrideAppDataLocation = parser.value("resource-location");
 
@@ -213,6 +226,7 @@ KisApplicationArguments::KisApplicationArguments(const KisApplicationArguments &
     d->session = rhs.session();
     d->noSplash = rhs.noSplash();
     d->fullScreen = rhs.fullScreen();
+    d->touchSmokeScenario = rhs.touchSmokeScenario();
 
 }
 
@@ -230,6 +244,7 @@ void KisApplicationArguments::operator=(const KisApplicationArguments &rhs)
     d->session = rhs.session();
     d->noSplash = rhs.noSplash();
     d->fullScreen = rhs.fullScreen();
+    d->touchSmokeScenario = rhs.touchSmokeScenario();
 }
 
 QByteArray KisApplicationArguments::serialize()
@@ -262,6 +277,7 @@ QByteArray KisApplicationArguments::serialize()
     ds << d->colorModel;
     ds << d->colorDepth;
     ds << d->fileLayer;
+    ds << d->touchSmokeScenario;
 
     buf.close();
 
@@ -301,6 +317,9 @@ KisApplicationArguments KisApplicationArguments::deserialize(QByteArray &seriali
     ds >> args.d->colorModel;
     ds >> args.d->colorDepth;
     ds >> args.d->fileLayer;
+    if (!buf.atEnd()) {
+        ds >> args.d->touchSmokeScenario;
+    }
 
     buf.close();
 
@@ -350,6 +369,11 @@ QString KisApplicationArguments::session() const
 QString KisApplicationArguments::fileLayer() const
 {
     return d->fileLayer;
+}
+
+QString KisApplicationArguments::touchSmokeScenario() const
+{
+    return d->touchSmokeScenario;
 }
 
 bool KisApplicationArguments::canvasOnly() const

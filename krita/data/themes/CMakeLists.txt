@@ -16,6 +16,6 @@ KritaBright.colors
 KritaDark.colors
 KritaDarkOrange.colors
 KritaDarker.colors
+TouchProcreateDark.colors
  ${schemefiles} DESTINATION ${KDE_INSTALL_DATADIR}/color-schemes
 )
-

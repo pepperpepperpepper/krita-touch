@@ -11,6 +11,9 @@
 #include <brushengine/kis_paintop_settings.h>
 #include <kis_distance_information.h>
 
+#include <QElapsedTimer>
+#include <QVector>
+
 #include "kis_types.h"
 #include "kis_tool_paint.h"
 #include "kis_smoothing_options.h"
@@ -89,6 +92,8 @@ protected Q_SLOTS:
 private:
     friend class KisToolFreehandPaintingInformationBuilder;
 
+    void resetTouchQuickShapeTracking();
+
     /**
      * Adjusts a coordinates according to a KisPaintingAssistant,
      * if available.
@@ -126,6 +131,11 @@ private:
     KisSignalCompressorWithParam<qreal> m_brushResizeCompressor;
 
     std::optional<KoPointerEventWrapper> m_beginAlternateActionEvent;
+
+    QVector<QPointF> m_touchQuickShapePoints;
+    QPointF m_touchQuickShapeLastRecordedPixelPos;
+    QElapsedTimer m_touchQuickShapeSinceLastMove;
+    bool m_touchQuickShapeTracking {false};
 };
 
 

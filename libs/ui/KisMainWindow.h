@@ -307,6 +307,20 @@ private Q_SLOTS:
 
     void slotUpdateSaveActionTitle(const QString &documentPath);
     void slotUpdateReadWriteMode(bool readWrite);
+    void slotTouchModeToggled(bool enabled);
+    void slotTouchRightHandedToggled(bool enabled);
+    void slotTouchRotateWithPinchToggled(bool enabled);
+    void slotTouchQuickPinchToFitToggled(bool enabled);
+    void slotTouchQuickShapeEnabledToggled(bool enabled);
+    void slotTouchQuickMenuEnabledToggled(bool enabled);
+    void slotTouchClipboardGestureEnabledToggled(bool enabled);
+    void slotTouchClearLayerGestureEnabledToggled(bool enabled);
+    void slotTouchUndoRedoGesturesEnabledToggled(bool enabled);
+    void slotTouchFullscreenGestureEnabledToggled(bool enabled);
+    void slotShowTouchActionsSheet();
+    void slotShowTouchQuickMenuConfigSheet();
+    void slotShowTouchCopyPasteOverlay();
+    void slotShowTouchLayerOptionsSheet();
 
     /**
      *  Saves the current document with a new name.
@@ -477,6 +491,7 @@ private:
     void setMainWindowLayoutForCurrentMainWidget(int widgetIndex, bool widgetIndexChanged);
     void adjustLayoutForWelcomePage();
     void applyActionIconOverridesFromLocalXML();
+    void applyTouchMode(bool enabled);
 
 private:
 

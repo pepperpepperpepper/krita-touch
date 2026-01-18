@@ -182,6 +182,17 @@ public:
 
     static ToolTransformArgs::TransformMode toArgsMode(KisToolTransform::TransformToolMode toolMode);
 
+    /**
+     * Touch-first helpers for Procreate-like pinch/rotate/translate during transform.
+     *
+     * These are invoked via Qt meta-object from the touch gesture input actions,
+     * so keep the API stable and avoid requiring compile-time deps from libs/ui.
+     */
+    Q_INVOKABLE bool touchTransformHitTest(const QPointF &widgetPoint) const;
+    Q_INVOKABLE bool touchTransformGestureBegin(const QPointF &widgetP0, const QPointF &widgetP1);
+    Q_INVOKABLE void touchTransformGestureUpdate(const QPointF &widgetP0, const QPointF &widgetP1);
+    Q_INVOKABLE void touchTransformGestureEnd();
+
 public Q_SLOTS:
     void activate(const QSet<KoShape*> &shapes) override;
     void deactivate() override;
@@ -323,6 +334,17 @@ private:
 
     KisAsynchronousStrokeUpdateHelper m_asyncUpdateHelper;
 
+    bool m_touchTransformGestureActive {false};
+    QPointF m_touchTransformGestureStartCenterImage;
+    qreal m_touchTransformGestureStartDistance {0.0};
+    qreal m_touchTransformGestureStartAngle {0.0};
+    qreal m_touchTransformGestureLastAngle {0.0};
+    qreal m_touchTransformGestureAccumRotation {0.0};
+    QPointF m_touchTransformGestureBaseTransformedCenter;
+    double m_touchTransformGestureBaseScaleX {1.0};
+    double m_touchTransformGestureBaseScaleY {1.0};
+    double m_touchTransformGestureBaseAZ {0.0};
+
 private Q_SLOTS:
     void slotTrackerChangedConfig(KisToolChangesTrackerDataSP status);
     void slotUiChangedConfig(bool needsPreviewRecalculation);
@@ -395,4 +417,3 @@ private Q_SLOTS:
 
 
 #endif // KIS_TOOL_TRANSFORM_H_
-

@@ -6,68 +6,31 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>116</width>
-    <height>341</height>
+    <width>180</width>
+    <height>520</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Form</string>
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
+   <property name="leftMargin">
+    <number>6</number>
+   </property>
+   <property name="topMargin">
+    <number>6</number>
+   </property>
+   <property name="rightMargin">
+    <number>6</number>
+   </property>
+   <property name="bottomMargin">
+    <number>6</number>
+   </property>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
-     <item>
-      <widget class="KisStretchedIconButton" name="btnOpen">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnSave">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnSaveAs">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_2">
+    <layout class="QHBoxLayout" name="horizontalLayoutUndoRedo">
+     <property name="spacing">
+      <number>6</number>
+     </property>
      <item>
       <widget class="KisStretchedIconButton" name="btnUndo">
        <property name="sizePolicy">
@@ -103,9 +66,143 @@
     </layout>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_3">
+    <layout class="QHBoxLayout" name="horizontalLayoutSliders">
+     <property name="spacing">
+      <number>10</number>
+     </property>
      <item>
-      <widget class="KisStretchedIconButton" name="btnOpacityUp">
+      <layout class="QVBoxLayout" name="verticalLayoutSize">
+       <property name="spacing">
+        <number>4</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="lblSizeTitle">
+         <property name="text">
+          <string>Size</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="sliderSize">
+         <property name="minimumSize">
+          <size>
+           <width>44</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>72</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="lblSizeValue">
+         <property name="text">
+          <string>—</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <layout class="QVBoxLayout" name="verticalLayoutOpacity">
+       <property name="spacing">
+        <number>4</number>
+       </property>
+       <item>
+        <widget class="QLabel" name="lblOpacityTitle">
+         <property name="text">
+          <string>Opacity</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSlider" name="sliderOpacity">
+         <property name="minimumSize">
+          <size>
+           <width>44</width>
+           <height>0</height>
+          </size>
+         </property>
+         <property name="maximumSize">
+          <size>
+           <width>72</width>
+           <height>16777215</height>
+          </size>
+         </property>
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="lblOpacityValue">
+         <property name="text">
+          <string>—</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+   </layout>
+  </item>
+  <item>
+   <widget class="KisColorButton" name="btnColor">
+    <property name="sizePolicy">
+     <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+      <horstretch>0</horstretch>
+      <verstretch>0</verstretch>
+     </sizepolicy>
+    </property>
+    <property name="minimumSize">
+     <size>
+      <width>0</width>
+      <height>56</height>
+     </size>
+    </property>
+    <property name="text">
+     <string> </string>
+    </property>
+   </widget>
+  </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>10</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayoutBottomButtons">
+     <property name="spacing">
+      <number>6</number>
+     </property>
+     <item>
+      <widget class="KisStretchedIconButton" name="btnModify">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
          <horstretch>0</horstretch>
@@ -121,7 +218,7 @@
       </widget>
      </item>
      <item>
-      <widget class="KisStretchedIconButton" name="btnBrightnessUp">
+      <widget class="KisStretchedIconButton" name="btnActions">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
          <horstretch>0</horstretch>
@@ -137,206 +234,19 @@
       </widget>
      </item>
     </layout>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_4">
-     <item>
-      <widget class="KisStretchedIconButton" name="btnOpacityDown">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnBrightnessDown">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_5">
-     <item>
-      <widget class="KisStretchedIconButton" name="btnRotateLeft">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnResetCanvas">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnRotateRight">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_6">
-     <item>
-      <widget class="KisStretchedIconButton" name="btnBrushSizeUp">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnZoomUp">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout_7">
-     <item>
-      <widget class="KisStretchedIconButton" name="btnBrushSizeDown">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <widget class="KisStretchedIconButton" name="btnZoomDown">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="text">
-        <string>...</string>
-       </property>
-       <property name="autoRaise">
-        <bool>true</bool>
-       </property>
-      </widget>
-     </item>
-    </layout>
-   </item>
-   <item>
-    <widget class="KisStretchedIconButton" name="btnPreviousPreset">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="text">
-      <string>...</string>
-     </property>
-     <property name="autoRaise">
-      <bool>true</bool>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <widget class="KisStretchedIconButton" name="btnClear">
-     <property name="sizePolicy">
-      <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-       <horstretch>0</horstretch>
-       <verstretch>0</verstretch>
-      </sizepolicy>
-     </property>
-     <property name="text">
-      <string>...</string>
-     </property>
-     <property name="autoRaise">
-      <bool>true</bool>
-     </property>
-    </widget>
    </item>
   </layout>
  </widget>
  <customwidgets>
+ <customwidget>
+  <class>KisStretchedIconButton</class>
+  <extends>QToolButton</extends>
+  <header location="global">KisStretchedIconButton.h</header>
+ </customwidget>
   <customwidget>
-   <class>KisStretchedIconButton</class>
-   <extends>QToolButton</extends>
-   <header location="global">KisStretchedIconButton.h</header>
+   <class>KisColorButton</class>
+   <extends>QPushButton</extends>
+   <header>kis_color_button.h</header>
   </customwidget>
  </customwidgets>
  <resources/>

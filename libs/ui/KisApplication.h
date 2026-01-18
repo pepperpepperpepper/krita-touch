@@ -105,6 +105,7 @@ public Q_SLOTS:
     void executeRemoteArguments(QByteArray message, KisMainWindow *mainWindow);
     void remoteArguments(const QString &message);
     void fileOpenRequested(const QString & url);
+    void touchSmokeScenarioRequested(const QString &scenario);
     void setSplashScreenLoadingText(const QString&);
 
 private Q_SLOTS:

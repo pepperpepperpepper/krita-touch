@@ -54,6 +54,43 @@ public:
     void setTouchPainting(TouchPainting value) const;
     bool disableTouchOnCanvas() const;
 
+    bool touchModeEnabled(bool defaultValue = false) const;
+    void setTouchModeEnabled(bool value) const;
+
+    bool touchRightHanded(bool defaultValue = false) const;
+    void setTouchRightHanded(bool value) const;
+
+    int touchSidebarOffset(bool defaultValue = false) const;
+    void setTouchSidebarOffset(int value) const;
+
+    bool touchRotateWithPinchEnabled(bool defaultValue = false) const;
+    void setTouchRotateWithPinchEnabled(bool value) const;
+
+    bool touchQuickPinchToFitEnabled(bool defaultValue = false) const;
+    void setTouchQuickPinchToFitEnabled(bool value) const;
+
+    bool touchQuickShapeEnabled(bool defaultValue = false) const;
+    void setTouchQuickShapeEnabled(bool value) const;
+
+    bool touchQuickMenuEnabled(bool defaultValue = false) const;
+    void setTouchQuickMenuEnabled(bool value) const;
+
+    static QStringList defaultTouchQuickMenuActionIds();
+    QStringList touchQuickMenuActionIds(bool defaultValue = false) const;
+    void setTouchQuickMenuActionIds(const QStringList &actionIds) const;
+
+    bool touchClipboardGestureEnabled(bool defaultValue = false) const;
+    void setTouchClipboardGestureEnabled(bool value) const;
+
+    bool touchUndoRedoGesturesEnabled(bool defaultValue = false) const;
+    void setTouchUndoRedoGesturesEnabled(bool value) const;
+
+    bool touchFullscreenGestureEnabled(bool defaultValue = false) const;
+    void setTouchFullscreenGestureEnabled(bool value) const;
+
+    bool touchClearLayerGestureEnabled(bool defaultValue = false) const;
+    void setTouchClearLayerGestureEnabled(bool value) const;
+
     // XXX Unused?
     bool useProjections(bool defaultValue = false) const;
     void setUseProjections(bool useProj) const;

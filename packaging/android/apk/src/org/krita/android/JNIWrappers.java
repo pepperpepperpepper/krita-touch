@@ -12,5 +12,5 @@ class JNIWrappers {
     public static native boolean hasMainWindowLoaded();
     public static native void donationStateUpdated(int state);
     public static native void openFileFromIntent(String uri);
+    public static native void runTouchSmokeFromIntent(String scenario);
 }
-

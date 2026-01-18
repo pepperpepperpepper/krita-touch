@@ -285,6 +285,11 @@ set(kritaui_LIB_SRCS
     widgets/kis_widget_chooser.cpp
     widgets/kis_tool_button.cpp
     widgets/kis_floating_message.cpp
+    widgets/kis_touch_copypaste_overlay.cpp
+    widgets/kis_touch_actions_sheet.cpp
+    widgets/kis_touch_layer_options_sheet.cpp
+    widgets/kis_touch_quickmenu_config_sheet.cpp
+    widgets/kis_touch_quickmenu_overlay.cpp
     widgets/kis_lod_availability_widget.cpp
     widgets/KisLodAvailabilityData.cpp
     widgets/KisLodAvailabilityModel.cpp
@@ -350,6 +355,7 @@ set(kritaui_LIB_SRCS
     input/kis_change_frame_action.cpp
     input/kis_gamma_exposure_action.cpp
     input/KisPopupWidgetAction.cpp
+    input/KisTouchQuickMenuAction.cpp
     input/kis_change_primary_setting_action.cpp
     input/kis_abstract_shortcut.cpp
     input/kis_native_gesture_shortcut.cpp

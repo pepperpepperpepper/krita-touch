@@ -66,11 +66,19 @@ QColor KisNodeViewColorScheme::gridColor(const QStyleOptionViewItem &option, QTr
 
 int KisNodeViewColorScheme::visibilitySize() const
 {
+    KisConfig cfg(true);
+    if (cfg.touchModeEnabled()) {
+        return 28;
+    }
     return 16;
 }
 
 int KisNodeViewColorScheme::visibilityMargin() const
 {
+    KisConfig cfg(true);
+    if (cfg.touchModeEnabled()) {
+        return 6;
+    }
     return 2;
 }
 
@@ -78,7 +86,12 @@ int KisNodeViewColorScheme::visibilityMargin() const
 int KisNodeViewColorScheme::thumbnailSize() const
 {
     KisConfig cfg(true);
-    return cfg.layerThumbnailSize(false);
+    const int configured = cfg.layerThumbnailSize(false);
+    if (cfg.touchModeEnabled()) {
+        // Touch Mode needs larger targets for finger usability.
+        return qMax(configured, 56);
+    }
+    return configured;
 }
 
 int KisNodeViewColorScheme::thumbnailMargin() const

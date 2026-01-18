@@ -9,6 +9,8 @@
 
 #include "kis_abstract_input_action.h"
 
+#include <QPointF>
+
 class KisTouchGestureAction : public KisAbstractInputAction
 {
 public:
@@ -28,17 +30,29 @@ public:
         KisToolMove,
         KisToolTransform,
         ToggleEraserPreset,
+        CopyPasteOverlay,
     };
 
     KisTouchGestureAction();
 
     void begin(int shortcut, QEvent *event) override;
+    void inputEvent(QEvent *event) override;
     void end(QEvent *event) override;
 
     int priority() const override;
 
 private:
     int m_shortcut{-1};
+    bool m_triggeredThisGesture{false};
+
+    // Used for classifying 3-finger drag gestures into "swipe down" (clipboard)
+    // vs "scrub" (clear layer). Stored in global coordinates, averaged across points.
+    QPointF m_gestureStartPos;
+    QPointF m_gestureLastPos;
+    qreal m_gestureAccumAbsDx{0.0};
+    qreal m_gestureAccumAbsDy{0.0};
+    int m_gestureLastXSign{0};
+    int m_gestureXDirectionChanges{0};
 };
 
 #endif // __KISTOUCHGESTUREACTION_H_

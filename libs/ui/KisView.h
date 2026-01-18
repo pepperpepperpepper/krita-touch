@@ -39,6 +39,7 @@ class KConfigGroup;
 
 // Qt classes
 class QDragEnterEvent;
+class QDragLeaveEvent;
 class QDragMoveEvent;
 class QDropEvent;
 class QPrintDialog;
@@ -244,6 +245,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
 
     /**
@@ -259,6 +261,9 @@ public Q_SLOTS:
 
 private:
     bool shouldAcceptDrag(const QDropEvent *event) const;
+
+    void resetTouchColorDropAdjustState();
+    void showTouchColorDropThresholdOverlay(const QPoint &anchorPos, int threshold);
 
     class Private;
     Private * const d;

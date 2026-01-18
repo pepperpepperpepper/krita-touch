@@ -124,6 +124,7 @@ protected Q_SLOTS:
 
 private Q_SLOTS:
     void slotActionToggled(bool on, const QPersistentModelIndex &index, int property);
+    void slotTouchVisibilityHoldTimeout();
 
 private:
 

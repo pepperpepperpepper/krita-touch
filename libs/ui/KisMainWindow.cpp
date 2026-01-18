@@ -47,6 +47,8 @@
 #include <QTemporaryDir>
 #include <QScrollArea>
 #include <QActionGroup>
+#include <QSignalBlocker>
+#include <QToolBar>
 
 #include <kactioncollection.h>
 #include <kactionmenu.h>
@@ -57,6 +59,8 @@
 #include <kaboutdata.h>
 #include <kis_workspace_resource.h>
 #include <input/kis_input_manager.h>
+#include "input/kis_input_profile.h"
+#include "input/kis_input_profile_manager.h"
 #include "kis_selection_manager.h"
 #include "kis_icon_utils.h"
 #include <krecentfilesaction.h>
@@ -77,6 +81,10 @@
 #include <KoDockFactoryBase.h>
 #include <KoDockWidgetTitleBar.h>
 #include <kis_utility_title_bar.h>
+#include <kis_touch_actions_sheet.h>
+#include <kis_touch_quickmenu_config_sheet.h>
+#include <kis_touch_layer_options_sheet.h>
+#include <kis_touch_copypaste_overlay.h>
 #include <KoDocumentInfoDlg.h>
 #include <KoDocumentInfo.h>
 #include <KoFileDialog.h>
@@ -156,6 +164,168 @@
 #include <config-qmdiarea-always-show-subwindow-title.h>
 
 #include <mutex>
+
+namespace {
+
+void applyTouchMdiSubWindowChrome(QMdiSubWindow *subWindow, bool touch)
+{
+    if (!subWindow) {
+        return;
+    }
+
+    constexpr const char *kSavedFlagsProp = "_krita_touch_saved_mdi_subwindow_flags";
+    constexpr const char *kSavedStateProp = "_krita_touch_saved_mdi_subwindow_state";
+
+    if (touch) {
+        if (!subWindow->property(kSavedFlagsProp).isValid()) {
+            subWindow->setProperty(kSavedFlagsProp, int(subWindow->windowFlags()));
+        }
+        if (!subWindow->property(kSavedStateProp).isValid()) {
+            subWindow->setProperty(kSavedStateProp, int(subWindow->windowState()));
+        }
+
+        Qt::WindowFlags flags = subWindow->windowFlags();
+        flags |= Qt::FramelessWindowHint;
+        flags &= ~Qt::WindowTitleHint;
+        flags &= ~Qt::WindowSystemMenuHint;
+        flags &= ~Qt::WindowMinMaxButtonsHint;
+        flags &= ~Qt::WindowCloseButtonHint;
+        subWindow->setWindowFlags(flags);
+
+        subWindow->setOption(QMdiSubWindow::RubberBandMove, false);
+        subWindow->setOption(QMdiSubWindow::RubberBandResize, false);
+
+        subWindow->setWindowState(Qt::WindowMaximized);
+        subWindow->show();
+        return;
+    }
+
+    if (subWindow->property(kSavedFlagsProp).isValid()) {
+        subWindow->setWindowFlags(Qt::WindowFlags(subWindow->property(kSavedFlagsProp).toInt()));
+        subWindow->setProperty(kSavedFlagsProp, QVariant());
+    }
+
+    if (subWindow->property(kSavedStateProp).isValid()) {
+        subWindow->setWindowState(Qt::WindowStates(subWindow->property(kSavedStateProp).toInt()));
+        subWindow->setProperty(kSavedStateProp, QVariant());
+    }
+
+    KisConfig cfg(true);
+    const bool rubberBand = cfg.readEntry<int>("mdi_rubberband", cfg.useOpenGL());
+    subWindow->setOption(QMdiSubWindow::RubberBandMove, rubberBand);
+    subWindow->setOption(QMdiSubWindow::RubberBandResize, rubberBand);
+
+    subWindow->show();
+}
+
+void applyTouchMdiTabBarChrome(QTabBar *tabBar, bool touch)
+{
+    if (!tabBar) {
+        return;
+    }
+
+    constexpr const char *kSavedVisibleProp = "_krita_touch_saved_mdi_tabbar_visible";
+    constexpr const char *kSavedEnabledProp = "_krita_touch_saved_mdi_tabbar_enabled";
+    constexpr const char *kSavedMinHeightProp = "_krita_touch_saved_mdi_tabbar_min_height";
+    constexpr const char *kSavedMaxHeightProp = "_krita_touch_saved_mdi_tabbar_max_height";
+    constexpr const char *kHiddenProp = "_krita_touch_mdi_tabbar_hidden";
+
+    if (touch) {
+        if (!tabBar->property(kSavedVisibleProp).isValid()) {
+            tabBar->setProperty(kSavedVisibleProp, tabBar->isVisible());
+        }
+        if (!tabBar->property(kSavedEnabledProp).isValid()) {
+            tabBar->setProperty(kSavedEnabledProp, tabBar->isEnabled());
+        }
+        if (!tabBar->property(kSavedMinHeightProp).isValid()) {
+            tabBar->setProperty(kSavedMinHeightProp, tabBar->minimumHeight());
+        }
+        if (!tabBar->property(kSavedMaxHeightProp).isValid()) {
+            tabBar->setProperty(kSavedMaxHeightProp, tabBar->maximumHeight());
+        }
+
+        tabBar->setEnabled(false);
+        tabBar->setMinimumHeight(0);
+        tabBar->setMaximumHeight(0);
+        tabBar->hide();
+        tabBar->setProperty(kHiddenProp, true);
+        tabBar->updateGeometry();
+        return;
+    }
+
+    if (!tabBar->property(kHiddenProp).toBool()) {
+        return;
+    }
+
+    const bool wasEnabled = tabBar->property(kSavedEnabledProp).isValid()
+        ? tabBar->property(kSavedEnabledProp).toBool()
+        : true;
+    const bool wasVisible = tabBar->property(kSavedVisibleProp).isValid()
+        ? tabBar->property(kSavedVisibleProp).toBool()
+        : true;
+    const int minHeight = tabBar->property(kSavedMinHeightProp).isValid()
+        ? tabBar->property(kSavedMinHeightProp).toInt()
+        : 0;
+    const int maxHeight = tabBar->property(kSavedMaxHeightProp).isValid()
+        ? tabBar->property(kSavedMaxHeightProp).toInt()
+        : QWIDGETSIZE_MAX;
+
+    tabBar->setEnabled(wasEnabled);
+    tabBar->setMinimumHeight(minHeight);
+    tabBar->setMaximumHeight(maxHeight);
+    tabBar->setVisible(wasVisible);
+
+    tabBar->setProperty(kSavedVisibleProp, QVariant());
+    tabBar->setProperty(kSavedEnabledProp, QVariant());
+    tabBar->setProperty(kSavedMinHeightProp, QVariant());
+    tabBar->setProperty(kSavedMaxHeightProp, QVariant());
+    tabBar->setProperty(kHiddenProp, false);
+    tabBar->updateGeometry();
+}
+
+void applyTouchMdiAreaScrollbars(QMdiArea *mdiArea, bool touch)
+{
+    if (!mdiArea) {
+        return;
+    }
+
+    constexpr const char *kSavedHPolicyProp = "_krita_touch_saved_mdi_hscroll_policy";
+    constexpr const char *kSavedVPolicyProp = "_krita_touch_saved_mdi_vscroll_policy";
+    constexpr const char *kAppliedProp = "_krita_touch_mdi_scrollbars_hidden";
+
+    if (touch) {
+        if (!mdiArea->property(kSavedHPolicyProp).isValid()) {
+            mdiArea->setProperty(kSavedHPolicyProp, int(mdiArea->horizontalScrollBarPolicy()));
+        }
+        if (!mdiArea->property(kSavedVPolicyProp).isValid()) {
+            mdiArea->setProperty(kSavedVPolicyProp, int(mdiArea->verticalScrollBarPolicy()));
+        }
+
+        mdiArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        mdiArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        mdiArea->setProperty(kAppliedProp, true);
+        return;
+    }
+
+    if (!mdiArea->property(kAppliedProp).toBool()) {
+        return;
+    }
+
+    const Qt::ScrollBarPolicy hPolicy = mdiArea->property(kSavedHPolicyProp).isValid()
+        ? Qt::ScrollBarPolicy(mdiArea->property(kSavedHPolicyProp).toInt())
+        : Qt::ScrollBarAsNeeded;
+    const Qt::ScrollBarPolicy vPolicy = mdiArea->property(kSavedVPolicyProp).isValid()
+        ? Qt::ScrollBarPolicy(mdiArea->property(kSavedVPolicyProp).toInt())
+        : Qt::ScrollBarAsNeeded;
+
+    mdiArea->setHorizontalScrollBarPolicy(hPolicy);
+    mdiArea->setVerticalScrollBarPolicy(vPolicy);
+    mdiArea->setProperty(kSavedHPolicyProp, QVariant());
+    mdiArea->setProperty(kSavedVPolicyProp, QVariant());
+    mdiArea->setProperty(kAppliedProp, false);
+}
+
+} // namespace
 
 class ToolDockerFactory : public KoDockFactoryBase
 {
@@ -259,6 +429,24 @@ public:
     KisAction *fullScreenMode {nullptr};
     KisAction *showSessionManager {nullptr};
     KisAction *commandBarAction {nullptr};
+    KisAction *touchActionsSheetAction {nullptr};
+    KisAction *touchQuickMenuConfigureAction {nullptr};
+    KisAction *touchCopyPasteOverlayAction {nullptr};
+    KisAction *touchLayerOptionsSheetAction {nullptr};
+    KToggleAction *touchModeAction {nullptr};
+    KToggleAction *touchRightHandedAction {nullptr};
+    KToggleAction *touchRotateWithPinchAction {nullptr};
+    KToggleAction *touchQuickPinchToFitAction {nullptr};
+    KToggleAction *touchQuickShapeEnabledAction {nullptr};
+    KToggleAction *touchQuickMenuEnabledAction {nullptr};
+    KToggleAction *touchClipboardGestureEnabledAction {nullptr};
+    KToggleAction *touchClearLayerGestureEnabledAction {nullptr};
+    KToggleAction *touchUndoRedoGesturesEnabledAction {nullptr};
+    KToggleAction *touchFullscreenGestureEnabledAction {nullptr};
+    QActionGroup *touchPaintingModeGroup {nullptr};
+    KToggleAction *touchPaintingAutoAction {nullptr};
+    KToggleAction *touchPaintingEnabledAction {nullptr};
+    KToggleAction *touchPaintingDisabledAction {nullptr};
     KisAction *expandingSpacers[2];
 
     KActionMenu *styleMenu {nullptr};
@@ -281,6 +469,8 @@ public:
 
     QMap<QString, QDockWidget *> dockWidgetsMap;
     QByteArray dockerStateBeforeHiding;
+    QByteArray dockerStateBeforeTouchMode;
+    QString inputProfileBeforeTouchMode;
     KoToolDocker *toolOptionsDocker {nullptr};
 
     QCloseEvent *deferredClosingEvent {nullptr};
@@ -308,6 +498,18 @@ public:
     QUuid workspaceBorrowedBy;
 
     KateCommandBar *commandBar {nullptr};
+
+    bool touchModeActive {false};
+    bool touchModeRightHanded {false};
+    QString themeBeforeTouchMode;
+    bool menuBarVisibleBeforeTouchMode {true};
+    bool statusBarVisibleBeforeTouchMode {true};
+
+    QPointer<KisTouchActionsSheet> touchActionsSheet;
+    QPointer<KisTouchQuickMenuConfigSheet> touchQuickMenuConfigSheet;
+    QPointer<KisTouchCopyPasteOverlay> touchCopyPasteOverlay;
+    QPointer<KisTouchLayerOptionsSheet> touchLayerOptionsSheet;
+    QToolBar *touchTopBar {nullptr};
 
     KisActionManager * actionManager() {
         return viewManager->actionManager();
@@ -762,6 +964,10 @@ void KisMainWindow::showView(KisView *imageView, QMdiSubWindow *subwin)
         subwin->setOption(QMdiSubWindow::RubberBandMove, cfg.readEntry<int>("mdi_rubberband", cfg.useOpenGL()));
         subwin->setOption(QMdiSubWindow::RubberBandResize, cfg.readEntry<int>("mdi_rubberband", cfg.useOpenGL()));
         subwin->setWindowIcon(qApp->windowIcon());
+        if (d->touchModeActive) {
+            applyTouchMdiSubWindowChrome(subwin, true);
+            applyTouchMdiTabBarChrome(d->findTabBarHACK(), true);
+        }
 
 #ifdef Q_OS_MACOS
         connect(subwin, SIGNAL(destroyed()), SLOT(updateSubwindowFlags()));
@@ -1591,7 +1797,14 @@ void KisMainWindow::showEvent(QShowEvent *event)
 #ifdef Q_OS_ANDROID
     Q_EMIT sigFullscreenOnShow(true); // Android defaults to fullscreen.
 #endif
-    return KXmlGuiWindow::showEvent(event);
+
+    KXmlGuiWindow::showEvent(event);
+
+    // Apply touch chrome after show, once toolbars/dockers are created and KXmlGuiWindow has finalized its layout.
+    // This avoids desktop chrome flashing/remaining visible when Touch Mode is enabled by default.
+    QTimer::singleShot(0, this, [this]() {
+        applyTouchMode(KisConfig(true).touchModeEnabled());
+    });
 }
 
 void KisMainWindow::setMainWindowLayoutForCurrentMainWidget(int widgetIndex, bool widgetIndexChanged)
@@ -1618,7 +1831,12 @@ void KisMainWindow::setMainWindowLayoutForCurrentMainWidget(int widgetIndex, boo
     }
     else {
         setAutoSaveSettings(d->windowStateConfig, false);
-        statusBar()->setVisible(KisConfig(true).showStatusBar());
+        const KisConfig cfg(true);
+        if (cfg.touchModeEnabled()) {
+            statusBar()->hide();
+        } else {
+            statusBar()->setVisible(cfg.showStatusBar());
+        }
     }
 
     QList<QAction *> actions = d->dockWidgetMenu->menu()->actions();
@@ -2836,6 +3054,579 @@ void KisMainWindow::configChanged()
             dw->setFont(KisUiFont::dockFont());
         }
     }
+
+    const bool touchModeEnabled = cfg.touchModeEnabled();
+    if (d->touchModeAction) {
+        QSignalBlocker blocker(d->touchModeAction);
+        d->touchModeAction->setChecked(touchModeEnabled);
+    }
+    const bool touchRightHanded = cfg.touchRightHanded();
+    if (d->touchRightHandedAction) {
+        QSignalBlocker blocker(d->touchRightHandedAction);
+        d->touchRightHandedAction->setChecked(touchRightHanded);
+    }
+
+    const bool rotateWithPinchEnabled = cfg.touchRotateWithPinchEnabled();
+    if (d->touchRotateWithPinchAction) {
+        QSignalBlocker blocker(d->touchRotateWithPinchAction);
+        d->touchRotateWithPinchAction->setChecked(rotateWithPinchEnabled);
+    }
+
+    const bool quickPinchToFitEnabled = cfg.touchQuickPinchToFitEnabled();
+    if (d->touchQuickPinchToFitAction) {
+        QSignalBlocker blocker(d->touchQuickPinchToFitAction);
+        d->touchQuickPinchToFitAction->setChecked(quickPinchToFitEnabled);
+    }
+
+    const bool quickShapeEnabled = cfg.touchQuickShapeEnabled();
+    if (d->touchQuickShapeEnabledAction) {
+        QSignalBlocker blocker(d->touchQuickShapeEnabledAction);
+        d->touchQuickShapeEnabledAction->setChecked(quickShapeEnabled);
+    }
+
+    const bool quickMenuEnabled = cfg.touchQuickMenuEnabled();
+    if (d->touchQuickMenuEnabledAction) {
+        QSignalBlocker blocker(d->touchQuickMenuEnabledAction);
+        d->touchQuickMenuEnabledAction->setChecked(quickMenuEnabled);
+    }
+
+    const bool clipboardGestureEnabled = cfg.touchClipboardGestureEnabled();
+    if (d->touchClipboardGestureEnabledAction) {
+        QSignalBlocker blocker(d->touchClipboardGestureEnabledAction);
+        d->touchClipboardGestureEnabledAction->setChecked(clipboardGestureEnabled);
+    }
+
+    const bool clearLayerGestureEnabled = cfg.touchClearLayerGestureEnabled();
+    if (d->touchClearLayerGestureEnabledAction) {
+        QSignalBlocker blocker(d->touchClearLayerGestureEnabledAction);
+        d->touchClearLayerGestureEnabledAction->setChecked(clearLayerGestureEnabled);
+    }
+
+    const bool undoRedoGesturesEnabled = cfg.touchUndoRedoGesturesEnabled();
+    if (d->touchUndoRedoGesturesEnabledAction) {
+        QSignalBlocker blocker(d->touchUndoRedoGesturesEnabledAction);
+        d->touchUndoRedoGesturesEnabledAction->setChecked(undoRedoGesturesEnabled);
+    }
+
+    const bool fullscreenGestureEnabled = cfg.touchFullscreenGestureEnabled();
+    if (d->touchFullscreenGestureEnabledAction) {
+        QSignalBlocker blocker(d->touchFullscreenGestureEnabledAction);
+        d->touchFullscreenGestureEnabledAction->setChecked(fullscreenGestureEnabled);
+    }
+
+    const KisConfig::TouchPainting touchPainting = cfg.touchPainting();
+    if (d->touchPaintingAutoAction) {
+        QSignalBlocker blocker(d->touchPaintingAutoAction);
+        d->touchPaintingAutoAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_AUTO);
+    }
+    if (d->touchPaintingEnabledAction) {
+        QSignalBlocker blocker(d->touchPaintingEnabledAction);
+        d->touchPaintingEnabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_ENABLED);
+    }
+    if (d->touchPaintingDisabledAction) {
+        QSignalBlocker blocker(d->touchPaintingDisabledAction);
+        d->touchPaintingDisabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_DISABLED);
+    }
+    applyTouchMode(touchModeEnabled);
+}
+
+void KisMainWindow::slotTouchModeToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchRightHandedToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchRightHanded(enabled);
+}
+
+void KisMainWindow::slotTouchRotateWithPinchToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchRotateWithPinchEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchQuickPinchToFitToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchQuickPinchToFitEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchQuickShapeEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchQuickShapeEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchQuickMenuEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchQuickMenuEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchClipboardGestureEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchClipboardGestureEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchClearLayerGestureEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchClearLayerGestureEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchUndoRedoGesturesEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchUndoRedoGesturesEnabled(enabled);
+}
+
+void KisMainWindow::slotTouchFullscreenGestureEnabledToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchFullscreenGestureEnabled(enabled);
+}
+
+void KisMainWindow::slotShowTouchCopyPasteOverlay()
+{
+    QWidget *canvas = d->viewManager ? d->viewManager->canvas() : nullptr;
+    QWidget *anchor = canvas ? canvas : this;
+    if (!anchor) {
+        return;
+    }
+
+    if (!d->touchCopyPasteOverlay) {
+        d->touchCopyPasteOverlay = new KisTouchCopyPasteOverlay(actionCollection(), this);
+    } else {
+        d->touchCopyPasteOverlay->setActionCollection(actionCollection());
+    }
+
+    const int localY = qMax(64, anchor->height() / 8);
+    const QPoint globalPos = anchor->mapToGlobal(QPoint(anchor->rect().center().x(), localY));
+    d->touchCopyPasteOverlay->openAtGlobalPos(globalPos);
+}
+
+void KisMainWindow::slotShowTouchActionsSheet()
+{
+    QWidget *canvas = d->viewManager ? d->viewManager->canvas() : nullptr;
+    QWidget *anchor = canvas ? canvas : this;
+    if (!anchor) {
+        return;
+    }
+
+    if (!d->touchActionsSheet) {
+        d->touchActionsSheet = new KisTouchActionsSheet(actionCollection(), this);
+    } else {
+        d->touchActionsSheet->setActionCollection(actionCollection());
+    }
+
+    const QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
+    d->touchActionsSheet->openAtGlobalPos(globalPos);
+}
+
+void KisMainWindow::slotShowTouchQuickMenuConfigSheet()
+{
+    QWidget *canvas = d->viewManager ? d->viewManager->canvas() : nullptr;
+    QWidget *anchor = canvas ? canvas : this;
+    if (!anchor) {
+        return;
+    }
+
+    if (!d->touchQuickMenuConfigSheet) {
+        d->touchQuickMenuConfigSheet = new KisTouchQuickMenuConfigSheet(actionCollection(), this);
+    } else {
+        d->touchQuickMenuConfigSheet->setActionCollection(actionCollection());
+    }
+
+    int initialSlot = -1;
+    if (QAction *action = qobject_cast<QAction *>(sender())) {
+        const QVariant data = action->data();
+        if (data.canConvert<int>()) {
+            initialSlot = data.toInt();
+        }
+        action->setData(QVariant());
+    }
+
+    const QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
+    d->touchQuickMenuConfigSheet->openAtGlobalPos(globalPos, initialSlot);
+}
+
+void KisMainWindow::slotShowTouchLayerOptionsSheet()
+{
+    QWidget *canvas = d->viewManager ? d->viewManager->canvas() : nullptr;
+    QWidget *anchor = canvas ? canvas : this;
+    if (!anchor) {
+        return;
+    }
+
+    if (!d->touchLayerOptionsSheet) {
+        d->touchLayerOptionsSheet = new KisTouchLayerOptionsSheet(actionCollection(), this);
+    } else {
+        d->touchLayerOptionsSheet->setActionCollection(actionCollection());
+    }
+
+    QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
+    if (QAction *action = qobject_cast<QAction *>(sender())) {
+        const QVariant data = action->data();
+        if (data.canConvert<QPoint>()) {
+            const QPoint requested = data.toPoint();
+            if (!requested.isNull()) {
+                globalPos = requested;
+            }
+        }
+        action->setData(QVariant());
+    }
+
+    d->touchLayerOptionsSheet->openAtGlobalPos(globalPos);
+}
+
+void KisMainWindow::applyTouchMode(bool enabled)
+{
+    constexpr const char *kTouchInputProfileName = "Touch Gestures Only";
+    const bool touchRightHanded = enabled ? KisConfig(true).touchRightHanded() : false;
+
+    auto applyTouchDockChrome = [&](QDockWidget *dockWidget, bool touch) {
+        if (!dockWidget) {
+            return;
+        }
+
+        constexpr const char *kSavedFeaturesProp = "_krita_touch_saved_dock_features";
+        constexpr const char *kTitleHiddenProp = "_krita_touch_dock_title_hidden";
+
+        if (touch) {
+            if (!dockWidget->property(kSavedFeaturesProp).isValid()) {
+                dockWidget->setProperty(kSavedFeaturesProp, int(dockWidget->features()));
+            }
+            if (!dockWidget->property(kTitleHiddenProp).toBool()) {
+                dockWidget->setTitleBarWidget(new QWidget(dockWidget));
+                dockWidget->setProperty(kTitleHiddenProp, true);
+            }
+            dockWidget->setFeatures(QDockWidget::NoDockWidgetFeatures);
+        } else {
+            if (dockWidget->property(kTitleHiddenProp).toBool()) {
+                dockWidget->setTitleBarWidget(nullptr);
+                dockWidget->setProperty(kTitleHiddenProp, false);
+            }
+            if (dockWidget->property(kSavedFeaturesProp).isValid()) {
+                dockWidget->setFeatures(QDockWidget::DockWidgetFeatures(dockWidget->property(kSavedFeaturesProp).toInt()));
+                dockWidget->setProperty(kSavedFeaturesProp, QVariant());
+            }
+        }
+    };
+
+    // Let the XMLGUI layer know that this window wants the desktop chrome suppressed,
+    // so late applyMainWindowSettings() calls (e.g. during XMLGUI finalize) don't re-show it.
+    setProperty("_krita_touch_hide_chrome", enabled);
+
+    auto ensureTouchChrome = [&]() {
+        if (!enabled) {
+            return;
+        }
+
+#ifdef HAVE_QMDIAREA_ALWAYS_SHOW_SUBWINDOW_TITLE
+        // Procreate-like touch mode wants a full-bleed canvas. Krita enables this option to always
+        // show the subwindow title strip, but in touch mode we prefer it hidden.
+        if (d->mdiArea) {
+            d->mdiArea->setOption(QMdiArea::AlwaysShowSubwindowNameInTitleBar, false);
+        }
+#endif
+        applyTouchMdiAreaScrollbars(d->mdiArea, true);
+
+        // In TabbedView, QMdiArea shows the active subwindow title in a QTabBar (with close button).
+        // Hide it in touch mode to match Procreate's full-bleed canvas.
+        applyTouchMdiTabBarChrome(d->findTabBarHACK(), true);
+
+        // Hide any menu widget (platforms may render the "menu bar" differently).
+        if (QWidget *mw = menuWidget()) {
+            mw->setVisible(false);
+        }
+        if (QMenuBar *mb = menuBar()) {
+            mb->setVisible(false);
+            mb->setEnabled(false);
+        }
+        if (QStatusBar *sb = statusBar()) {
+            sb->setVisible(false);
+        }
+
+        if (!d->touchTopBar) {
+            d->touchTopBar = new QToolBar(i18n("Touch Top Bar"), this);
+            d->touchTopBar->setObjectName(QStringLiteral("touchTopBar"));
+            d->touchTopBar->setMovable(false);
+            d->touchTopBar->setFloatable(false);
+            d->touchTopBar->setContextMenuPolicy(Qt::PreventContextMenu);
+            d->touchTopBar->setIconSize(QSize(40, 40));
+            d->touchTopBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            d->touchTopBar->setStyleSheet(QStringLiteral(
+                "QToolBar#touchTopBar {"
+                "  background-color: rgba(30, 30, 30, 245);"
+                "  border: 0px;"
+                "  spacing: 10px;"
+                "  padding: 6px;"
+                "}"
+                "QToolButton {"
+                "  border-radius: 12px;"
+                "  padding: 8px;"
+                "}"
+                "QToolButton:pressed {"
+                "  background-color: rgba(255, 255, 255, 22);"
+                "}"));
+            addToolBar(Qt::TopToolBarArea, d->touchTopBar);
+
+            auto addActionIfPresent = [&](const QString &actionId) {
+                if (QAction *action = actionCollection()->action(actionId)) {
+                    d->touchTopBar->addAction(action);
+                }
+            };
+
+            auto addActionWithFallbackIcon = [&](const QString &actionId, const QString &fallbackIconName) {
+                QAction *action = actionCollection()->action(actionId);
+                if (!action) {
+                    return;
+                }
+                if (action->icon().isNull() && !fallbackIconName.isEmpty()) {
+                    action->setIcon(KisIconUtils::loadIcon(fallbackIconName));
+                }
+                d->touchTopBar->addAction(action);
+            };
+
+            addActionWithFallbackIcon(QStringLiteral("touch_actions_sheet"), QStringLiteral("config-performance"));
+            addActionIfPresent(QStringLiteral("KisToolSelectTouch"));
+            addActionIfPresent(QStringLiteral("KisToolTransform"));
+
+            QWidget *spacer = new QWidget(d->touchTopBar);
+            spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+            d->touchTopBar->addWidget(spacer);
+
+            addActionIfPresent(QStringLiteral("KritaShape/KisToolBrush"));
+            addActionIfPresent(QStringLiteral("eraser_preset_action"));
+            if (QDockWidget *layersDock = dockWidget(QStringLiteral("KisLayerBox"))) {
+                QAction *action = layersDock->toggleViewAction();
+                if (action && action->icon().isNull()) {
+                    action->setIcon(KisIconUtils::loadIcon("all-layers"));
+                }
+                if (action) {
+                    d->touchTopBar->addAction(action);
+                }
+            }
+            if (QDockWidget *colorDock = dockWidget(QStringLiteral("ColorSelectorNg"))) {
+                QAction *action = colorDock->toggleViewAction();
+                if (action && action->icon().isNull()) {
+                    action->setIcon(KisIconUtils::loadIcon("extended_color_selector"));
+                }
+                if (action) {
+                    d->touchTopBar->addAction(action);
+                }
+            }
+        }
+
+        d->touchTopBar->show();
+
+        // Hide all KXmlGui/KMainWindow toolbars (desktop chrome). On Android these can still be created
+        // even when Touch Mode is enabled by default, so we must enforce hiding them here.
+        for (KisToolBar *toolbar : toolBars()) {
+            if (!toolbar) {
+                continue;
+            }
+            if (toolbar->objectName() == QLatin1String("touchTopBar")) {
+                continue;
+            }
+            toolbar->hide();
+        }
+
+        // Some toolbars may not be KisToolBar instances (platform/toolkit dependent). Hide all direct
+        // child toolbars except our touch top bar.
+        const auto qtoolbars = findChildren<QToolBar *>(QString(), Qt::FindDirectChildrenOnly);
+        for (QToolBar *toolbar : qtoolbars) {
+            if (!toolbar || toolbar == d->touchTopBar) {
+                continue;
+            }
+            if (toolbar->objectName() == QLatin1String("touchTopBar")) {
+                continue;
+            }
+            toolbar->hide();
+        }
+
+        // Procreate-like touch mode hides docker title bars and docking affordances.
+        const auto dockWidgets = findChildren<QDockWidget *>(QString(), Qt::FindChildrenRecursively);
+        for (QDockWidget *dockWidget : dockWidgets) {
+            applyTouchDockChrome(dockWidget, true);
+        }
+
+        // Hide the MDI subwindow frame (title strip + close button). Procreate uses a full-bleed canvas.
+        if (d->mdiArea) {
+            const auto subWindows = d->mdiArea->subWindowList();
+            for (QMdiSubWindow *subWindow : subWindows) {
+                applyTouchMdiSubWindowChrome(subWindow, true);
+            }
+        }
+
+        if (d->viewManager) {
+            d->viewManager->showHideScrollbars();
+        }
+    };
+
+    // Touch mode can be enabled by default (kritarc / Android platform default)
+    // before all UI chrome is created. Ensure we always re-apply the touch chrome
+    // even if we consider the state unchanged.
+    if (d->touchModeActive == enabled && (!enabled || d->touchModeRightHanded == touchRightHanded)) {
+        ensureTouchChrome();
+        return;
+    }
+
+    const bool wasTouchModeActive = d->touchModeActive;
+    d->touchModeActive = enabled;
+
+    KisInputProfileManager *profileManager = KisInputProfileManager::instance();
+    auto trySetInputProfile = [&](const QString &profileName) {
+        if (profileName.isEmpty() || !profileManager) {
+            return;
+        }
+
+        KisInputProfile *profile = profileManager->profile(profileName);
+        if (!profile) {
+            return;
+        }
+
+        profileManager->setCurrentProfile(profile);
+        KisConfig cfg(false);
+        cfg.setCurrentInputProfile(profileName);
+    };
+
+    if (enabled) {
+        if (!wasTouchModeActive) {
+            d->dockerStateBeforeTouchMode = saveState();
+
+            d->inputProfileBeforeTouchMode = KisConfig(true).currentInputProfile();
+            if (d->inputProfileBeforeTouchMode.isEmpty() && profileManager && profileManager->currentProfile()) {
+                d->inputProfileBeforeTouchMode = profileManager->currentProfile()->name();
+            }
+
+#ifndef Q_OS_HAIKU
+            if (d->themeManager) {
+                d->themeBeforeTouchMode = d->themeManager->currentThemeName();
+            }
+#endif
+            if (QMenuBar *mb = menuBar()) {
+                d->menuBarVisibleBeforeTouchMode = mb->isVisible();
+            }
+            if (QStatusBar *sb = statusBar()) {
+                d->statusBarVisibleBeforeTouchMode = sb->isVisible();
+            }
+        }
+        d->touchModeRightHanded = touchRightHanded;
+        trySetInputProfile(QString::fromLatin1(kTouchInputProfileName));
+
+#ifndef Q_OS_HAIKU
+        if (d->themeManager && d->themeManager->currentThemeName() != QStringLiteral("Touch Procreate Dark")) {
+            d->themeManager->setCurrentTheme(QStringLiteral("Touch Procreate Dark"));
+        }
+#endif
+        if (QMenuBar *mb = menuBar()) {
+            mb->setVisible(false);
+            mb->setEnabled(false);
+        }
+        if (QStatusBar *sb = statusBar()) {
+            sb->setVisible(false);
+        }
+
+        const KisConfig cfg(true);
+        QString touchWorkspaceName = QStringLiteral("Touch Procreate-like");
+        if (touchRightHanded) {
+            touchWorkspaceName = QStringLiteral("Touch Procreate-like (Right)");
+        }
+
+        KoResourceServer<KisWorkspaceResource> *rserver = KisResourceServerProvider::instance()->workspaceServer();
+        KisWorkspaceResourceSP workspace = rserver->resource("", "", touchWorkspaceName);
+        if (workspace) {
+            restoreWorkspace(workspace);
+        }
+
+        Q_FOREACH (QObject* widget, children()) {
+            if (!widget->inherits("QDockWidget")) {
+                continue;
+            }
+            QDockWidget* dw = static_cast<QDockWidget*>(widget);
+
+            const bool keepVisible =
+                dw->objectName() == QLatin1String("ToolBox") ||
+                dw->objectName() == QLatin1String("TouchDocker") ||
+                (d->toolOptionsDocker && dw == d->toolOptionsDocker);
+
+            if (!keepVisible) {
+                dw->hide();
+            }
+        }
+
+        if (QDockWidget *touchDocker = dockWidget(QStringLiteral("TouchDocker"))) {
+            const Qt::DockWidgetArea area =
+                touchRightHanded ? Qt::LeftDockWidgetArea : Qt::RightDockWidgetArea;
+            touchDocker->setFloating(false);
+            addDockWidget(area, touchDocker);
+            touchDocker->show();
+            touchDocker->raise();
+        }
+
+        ensureTouchChrome();
+    } else {
+        d->touchModeRightHanded = false;
+        if (!d->dockerStateBeforeTouchMode.isEmpty()) {
+            restoreWorkspaceState(d->dockerStateBeforeTouchMode);
+            d->dockerStateBeforeTouchMode.clear();
+        }
+
+        const auto dockWidgets = findChildren<QDockWidget *>(QString(), Qt::FindChildrenRecursively);
+        for (QDockWidget *dockWidget : dockWidgets) {
+            applyTouchDockChrome(dockWidget, false);
+        }
+
+#ifdef HAVE_QMDIAREA_ALWAYS_SHOW_SUBWINDOW_TITLE
+        if (d->mdiArea) {
+            d->mdiArea->setOption(QMdiArea::AlwaysShowSubwindowNameInTitleBar, true);
+        }
+#endif
+        applyTouchMdiAreaScrollbars(d->mdiArea, false);
+
+        applyTouchMdiTabBarChrome(d->findTabBarHACK(), false);
+
+        if (d->mdiArea) {
+            const auto subWindows = d->mdiArea->subWindowList();
+            for (QMdiSubWindow *subWindow : subWindows) {
+                applyTouchMdiSubWindowChrome(subWindow, false);
+            }
+        }
+
+        if (!d->inputProfileBeforeTouchMode.isEmpty()) {
+            trySetInputProfile(d->inputProfileBeforeTouchMode);
+        }
+        d->inputProfileBeforeTouchMode.clear();
+
+        if (d->touchTopBar) {
+            d->touchTopBar->hide();
+        }
+
+#ifndef Q_OS_HAIKU
+        if (!d->themeBeforeTouchMode.isEmpty() && d->themeManager &&
+            d->themeManager->currentThemeName() != d->themeBeforeTouchMode) {
+            d->themeManager->setCurrentTheme(d->themeBeforeTouchMode);
+        }
+#endif
+        d->themeBeforeTouchMode.clear();
+
+        if (QMenuBar *mb = menuBar()) {
+            mb->setVisible(d->menuBarVisibleBeforeTouchMode);
+            mb->setEnabled(true);
+        }
+        if (QStatusBar *sb = statusBar()) {
+            sb->setVisible(d->statusBarVisibleBeforeTouchMode);
+        }
+
+        if (d->viewManager) {
+            d->viewManager->showHideScrollbars();
+        }
+    }
 }
 
 KisView* KisMainWindow::newView(QObject *document, QMdiSubWindow *subWindow)
@@ -3059,6 +3850,125 @@ void KisMainWindow::createActions()
 
     actionManager->createStandardAction(KStandardAction::Preferences, this, SLOT(slotPreferences()));
 
+    d->touchModeAction = new KToggleAction(i18nc("@action:inmenu", "Touch Mode"), this);
+    d->touchModeAction->setChecked(KisConfig(true).touchModeEnabled());
+    actionCollection()->addAction("touch_mode_enabled", d->touchModeAction);
+    connect(d->touchModeAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchModeToggled(bool)));
+
+    d->touchRightHandedAction = new KToggleAction(i18nc("@action:inmenu", "Right-handed Touch Layout"), this);
+    d->touchRightHandedAction->setChecked(KisConfig(true).touchRightHanded());
+    actionCollection()->addAction("touch_right_handed", d->touchRightHandedAction);
+    connect(d->touchRightHandedAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchRightHandedToggled(bool)));
+
+    d->touchRotateWithPinchAction = new KToggleAction(i18nc("@action:inmenu", "Rotate with Pinch"), this);
+    d->touchRotateWithPinchAction->setIcon(QIcon::fromTheme(QStringLiteral("object-rotate-right")));
+    d->touchRotateWithPinchAction->setChecked(KisConfig(true).touchRotateWithPinchEnabled());
+    actionCollection()->addAction("touch_rotate_with_pinch", d->touchRotateWithPinchAction);
+    connect(d->touchRotateWithPinchAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchRotateWithPinchToggled(bool)));
+
+    d->touchQuickPinchToFitAction = new KToggleAction(i18nc("@action:inmenu", "Quick Pinch to Fit"), this);
+    d->touchQuickPinchToFitAction->setIcon(QIcon::fromTheme(QStringLiteral("zoom-fit-best")));
+    d->touchQuickPinchToFitAction->setChecked(KisConfig(true).touchQuickPinchToFitEnabled());
+    actionCollection()->addAction("touch_quick_pinch_to_fit_enabled", d->touchQuickPinchToFitAction);
+    connect(d->touchQuickPinchToFitAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickPinchToFitToggled(bool)));
+
+    d->touchQuickShapeEnabledAction = new KToggleAction(i18nc("@action:inmenu", "QuickShape"), this);
+    d->touchQuickShapeEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("draw-freehand")));
+    d->touchQuickShapeEnabledAction->setChecked(KisConfig(true).touchQuickShapeEnabled());
+    actionCollection()->addAction("touch_quickshape_enabled", d->touchQuickShapeEnabledAction);
+    connect(d->touchQuickShapeEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickShapeEnabledToggled(bool)));
+
+    d->touchQuickMenuEnabledAction = new KToggleAction(i18nc("@action:inmenu", "QuickMenu Gesture"), this);
+    d->touchQuickMenuEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("view-grid")));
+    d->touchQuickMenuEnabledAction->setChecked(KisConfig(true).touchQuickMenuEnabled());
+    actionCollection()->addAction("touch_quickmenu_enabled", d->touchQuickMenuEnabledAction);
+    connect(d->touchQuickMenuEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickMenuEnabledToggled(bool)));
+
+    d->touchClipboardGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Copy/Paste Gesture"), this);
+    d->touchClipboardGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-paste")));
+    d->touchClipboardGestureEnabledAction->setChecked(KisConfig(true).touchClipboardGestureEnabled());
+    actionCollection()->addAction("touch_clipboard_gesture_enabled", d->touchClipboardGestureEnabledAction);
+    connect(d->touchClipboardGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchClipboardGestureEnabledToggled(bool)));
+
+    d->touchClearLayerGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Clear Layer Gesture"), this);
+    d->touchClearLayerGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-clear")));
+    d->touchClearLayerGestureEnabledAction->setChecked(KisConfig(true).touchClearLayerGestureEnabled());
+    actionCollection()->addAction("touch_clear_layer_gesture_enabled", d->touchClearLayerGestureEnabledAction);
+    connect(d->touchClearLayerGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchClearLayerGestureEnabledToggled(bool)));
+
+    d->touchUndoRedoGesturesEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Undo/Redo Gestures"), this);
+    d->touchUndoRedoGesturesEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-undo")));
+    d->touchUndoRedoGesturesEnabledAction->setChecked(KisConfig(true).touchUndoRedoGesturesEnabled());
+    actionCollection()->addAction("touch_undo_redo_gestures_enabled", d->touchUndoRedoGesturesEnabledAction);
+    connect(d->touchUndoRedoGesturesEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchUndoRedoGesturesEnabledToggled(bool)));
+
+    d->touchFullscreenGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Canvas Only Gesture"), this);
+    d->touchFullscreenGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("view-fullscreen")));
+    d->touchFullscreenGestureEnabledAction->setChecked(KisConfig(true).touchFullscreenGestureEnabled());
+    actionCollection()->addAction("touch_fullscreen_gesture_enabled", d->touchFullscreenGestureEnabledAction);
+    connect(d->touchFullscreenGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchFullscreenGestureEnabledToggled(bool)));
+
+    d->touchPaintingModeGroup = new QActionGroup(this);
+    d->touchPaintingModeGroup->setExclusive(true);
+    {
+        const KisConfig::TouchPainting touchPainting = KisConfig(true).touchPainting();
+
+        d->touchPaintingAutoAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Auto"), this);
+        d->touchPaintingAutoAction->setIcon(QIcon::fromTheme(QStringLiteral("dialog-question")));
+        d->touchPaintingAutoAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_AUTO);
+        d->touchPaintingAutoAction->setActionGroup(d->touchPaintingModeGroup);
+        actionCollection()->addAction("touch_painting_auto", d->touchPaintingAutoAction);
+        connect(d->touchPaintingAutoAction, &QAction::toggled, this, [](bool checked) {
+            if (!checked) {
+                return;
+            }
+            KisConfig cfg(false);
+            cfg.setTouchPainting(KisConfig::TOUCH_PAINTING_AUTO);
+        });
+
+        d->touchPaintingEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Enabled"), this);
+        d->touchPaintingEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("draw-brush")));
+        d->touchPaintingEnabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_ENABLED);
+        d->touchPaintingEnabledAction->setActionGroup(d->touchPaintingModeGroup);
+        actionCollection()->addAction("touch_painting_enabled", d->touchPaintingEnabledAction);
+        connect(d->touchPaintingEnabledAction, &QAction::toggled, this, [](bool checked) {
+            if (!checked) {
+                return;
+            }
+            KisConfig cfg(false);
+            cfg.setTouchPainting(KisConfig::TOUCH_PAINTING_ENABLED);
+        });
+
+        d->touchPaintingDisabledAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Disabled"), this);
+        d->touchPaintingDisabledAction->setIcon(QIcon::fromTheme(QStringLiteral("process-stop")));
+        d->touchPaintingDisabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_DISABLED);
+        d->touchPaintingDisabledAction->setActionGroup(d->touchPaintingModeGroup);
+        actionCollection()->addAction("touch_painting_disabled", d->touchPaintingDisabledAction);
+        connect(d->touchPaintingDisabledAction, &QAction::toggled, this, [](bool checked) {
+            if (!checked) {
+                return;
+            }
+            KisConfig cfg(false);
+            cfg.setTouchPainting(KisConfig::TOUCH_PAINTING_DISABLED);
+        });
+    }
+
+    d->touchActionsSheetAction = new KisAction(i18nc("@action:inmenu", "Actions"), this);
+    actionCollection()->addAction("touch_actions_sheet", d->touchActionsSheetAction);
+    connect(d->touchActionsSheetAction, SIGNAL(triggered(bool)), this, SLOT(slotShowTouchActionsSheet()));
+
+    d->touchQuickMenuConfigureAction = new KisAction(i18nc("@action:inmenu", "Configure QuickMenu"), this);
+    actionCollection()->addAction("touch_quickmenu_configure", d->touchQuickMenuConfigureAction);
+    connect(d->touchQuickMenuConfigureAction, SIGNAL(triggered(bool)), this, SLOT(slotShowTouchQuickMenuConfigSheet()));
+
+    d->touchCopyPasteOverlayAction = new KisAction(i18nc("@action:inmenu", "Copy/Paste"), this);
+    actionCollection()->addAction("touch_copypaste_overlay", d->touchCopyPasteOverlayAction);
+    connect(d->touchCopyPasteOverlayAction, SIGNAL(triggered(bool)), this, SLOT(slotShowTouchCopyPasteOverlay()));
+
+    d->touchLayerOptionsSheetAction = new KisAction(i18nc("@action:inmenu", "Layer Options"), this);
+    actionCollection()->addAction("touch_layer_options_sheet", d->touchLayerOptionsSheetAction);
+    connect(d->touchLayerOptionsSheetAction, SIGNAL(triggered(bool)), this, SLOT(slotShowTouchLayerOptionsSheet()));
+
     for (int i = 0; i < 2; i++) {
         d->expandingSpacers[i] = new KisAction(i18n("Expanding Spacer"));
         d->expandingSpacers[i]->setDefaultWidget(new QWidget(this));
@@ -3148,6 +4058,14 @@ void KisMainWindow::slotXmlGuiMakingChanges(bool finished)
 {
     if (finished) {
         subWindowActivated();
+    }
+
+    if (d->touchModeActive) {
+        QTimer::singleShot(0, this, [this]() {
+            if (d->touchModeActive) {
+                applyTouchMode(true);
+            }
+        });
     }
 }
 

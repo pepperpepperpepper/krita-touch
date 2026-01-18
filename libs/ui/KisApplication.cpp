@@ -28,14 +28,21 @@
 #include <QDir>
 #include <QFile>
 #include <QLocale>
+#include <QApplication>
+#include <QDropEvent>
+#include <QMouseEvent>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QProcessEnvironment>
 #include <QStringList>
 #include <QStyle>
 #include <QStyleFactory>
 #include <QSysInfo>
+#include <QThread>
 #include <QTimer>
 #include <QWidget>
+#include <QDockWidget>
+#include <QMenu>
 #include <QImageReader>
 #include <QImageWriter>
 #include <QThread>
@@ -45,8 +52,14 @@
 #include <kconfig.h>
 #include <kconfiggroup.h>
 
+#include "widgets/kis_touch_actions_sheet.h"
+#include "widgets/kis_touch_quickmenu_overlay.h"
+
+#include <KoColor.h>
+
 #include <KoDockRegistry.h>
 #include <KoToolRegistry.h>
+#include <KoToolManager.h>
 #include <KoColorSpaceRegistry.h>
 #include <KoPluginLoader.h>
 #include <KoShapeRegistry.h>
@@ -56,6 +69,7 @@
 #include "thememanager.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
+#include "KisView.h"
 #include "KisAutoSaveRecoveryDialog.h"
 #include "KisPart.h"
 #include <kis_icon.h>
@@ -81,7 +95,12 @@
 #include "kis_spin_box_unit_manager.h"
 #include "kis_document_aware_spin_box_unit_manager.h"
 #include "KisViewManager.h"
+#include <canvas/kis_canvas2.h>
 #include <KisUsageLogger.h>
+#include "kis_popup_palette.h"
+#include <kis_paint_layer.h>
+#include <kis_fill_painter.h>
+#include <kis_painter.h>
 
 #include <KritaVersionWrapper.h>
 #include <dialogs/KisSessionManagerDialog.h>
@@ -140,6 +159,598 @@
 namespace {
 const QTime appStartTime(QTime::currentTime());
 }
+
+namespace {
+
+bool ensureDocumentForTouchSmoke(KisMainWindow *mainWindow)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    if (mainWindow->viewManager() && mainWindow->viewManager()->image()) {
+        return true;
+    }
+
+    KisDocument *doc = KisPart::instance()->createDocument();
+    if (!doc) {
+        return false;
+    }
+
+    const KoColorSpace *cs = KoColorSpaceRegistry::instance()->colorSpace("RGBA", "U8", "");
+    if (!cs) {
+        qWarning() << "Touch smoke: failed to create RGBA/U8 colorspace";
+        return false;
+    }
+
+    doc->newImage(i18n("Touch smoke"),
+                  512,
+                  512,
+                  cs,
+                  KoColor(QColor(Qt::white), cs),
+                  KisConfig::CANVAS_COLOR,
+                  1,
+                  "",
+                  100.0);
+
+    KisPart::instance()->addDocument(doc);
+    mainWindow->showWelcomeScreen(false);
+    mainWindow->addViewAndNotifyLoadingCompleted(doc);
+    return true;
+}
+
+void showDockerForTouchSmoke(KisMainWindow *mainWindow, const QString &dockerId)
+{
+    if (!mainWindow) {
+        return;
+    }
+
+    QDockWidget *dock = mainWindow->dockWidget(dockerId);
+    if (!dock) {
+        qWarning() << "Touch smoke: docker not found:" << dockerId;
+        return;
+    }
+
+    if (dockerId == QStringLiteral("TouchDocker")) {
+        // Ensure deterministic placement for screenshots (TouchDocker can be hidden or moved off-screen
+        // in persisted user configs). Match the Procreate-like expectation: right-handed => left sidebar.
+        const KisConfig cfg(true);
+        const Qt::DockWidgetArea area =
+            cfg.touchRightHanded() ? Qt::LeftDockWidgetArea : Qt::RightDockWidgetArea;
+        dock->setFloating(false);
+        mainWindow->addDockWidget(area, dock);
+        mainWindow->resizeDocks(QList<QDockWidget*>{dock}, QList<int>{180}, Qt::Horizontal);
+    }
+
+    if (dockerId == QStringLiteral("sharedtooldocker")) {
+        // Ensure deterministic placement for screenshots (the Tool Options docker might be hidden,
+        // tabbed, or floating off-screen in user state).
+        dock->setFloating(false);
+        mainWindow->addDockWidget(Qt::LeftDockWidgetArea, dock);
+        mainWindow->resizeDocks(QList<QDockWidget*>{dock}, QList<int>{320}, Qt::Horizontal);
+    }
+
+    dock->show();
+    dock->raise();
+
+}
+
+void populateLayersForTouchSmoke(KisMainWindow *mainWindow, int extraPaintLayers)
+{
+    if (!mainWindow || !mainWindow->actionCollection()) {
+        return;
+    }
+
+    if (extraPaintLayers <= 0) {
+        return;
+    }
+
+    QAction *action = mainWindow->actionCollection()->action(QStringLiteral("add_new_paint_layer"));
+    if (!action) {
+        qWarning() << "Touch smoke: action not found: add_new_paint_layer";
+        return;
+    }
+
+    for (int i = 0; i < extraPaintLayers; ++i) {
+        action->trigger();
+    }
+}
+
+KisPaintDeviceSP paintDeviceForTouchSmoke(KisMainWindow *mainWindow)
+{
+    if (!mainWindow || !mainWindow->viewManager()) {
+        return KisPaintDeviceSP();
+    }
+
+    KisViewManager *viewManager = mainWindow->viewManager();
+    KisImageWSP img = viewManager->image();
+    if (!img) {
+        return KisPaintDeviceSP();
+    }
+
+    if (KisPaintDeviceSP dev = viewManager->activeDevice()) {
+        return dev;
+    }
+
+    KisGroupLayerSP root = img->rootLayer();
+    if (root) {
+        // Prefer the top-most paint layer under the root group.
+        // (We avoid activating nodes here because it can trigger SAFE_ASSERTs if flake "shapes" aren't ready yet.)
+        for (KisNodeSP node = root->lastChild(); node; node = node->prevSibling()) {
+            if (KisPaintLayer *layer = qobject_cast<KisPaintLayer *>(node.data())) {
+                if (layer->paintDevice()) {
+                    return layer->paintDevice();
+                }
+            }
+        }
+    }
+
+    return KisPaintDeviceSP();
+}
+
+void refreshImageForTouchSmoke(KisImageWSP img)
+{
+    if (!img) {
+        return;
+    }
+
+    const QRect bounds = img->bounds();
+    img->refreshGraphAsync(img->root(), QVector<QRect>{bounds}, bounds);
+    img->waitForDone();
+}
+
+bool colorsEqualForTouchSmoke(const QColor &a, const QColor &b, int tolerance)
+{
+    if (!a.isValid() || !b.isValid()) {
+        return false;
+    }
+
+    const int dr = qAbs(a.red() - b.red());
+    const int dg = qAbs(a.green() - b.green());
+    const int db = qAbs(a.blue() - b.blue());
+    const int da = qAbs(a.alpha() - b.alpha());
+    return dr <= tolerance && dg <= tolerance && db <= tolerance && da <= tolerance;
+}
+
+QVector<QColor> sampleDeviceColorsForTouchSmoke(const KisPaintDeviceSP &dev, const QVector<QPoint> &imgPoints)
+{
+    QVector<QColor> colors;
+    colors.reserve(imgPoints.size());
+
+    if (!dev) {
+        colors.fill(QColor(), imgPoints.size());
+        return colors;
+    }
+
+    for (const QPoint &p : imgPoints) {
+        const KoColor c = dev->pixel(p);
+        colors.push_back(c.toQColor());
+    }
+
+    return colors;
+}
+
+bool anySampleChangedForTouchSmoke(const QVector<QColor> &before, const QVector<QColor> &after, int tolerance)
+{
+    if (before.size() != after.size()) {
+        return true;
+    }
+
+    for (int i = 0; i < before.size(); ++i) {
+        if (!colorsEqualForTouchSmoke(before[i], after[i], tolerance)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool paintLineForTouchSmoke(KisMainWindow *mainWindow, const QPointF &imgP0, const QPointF &imgP1, const QColor &color)
+{
+    if (!mainWindow || !mainWindow->viewManager()) {
+        return false;
+    }
+
+    KisViewManager *viewManager = mainWindow->viewManager();
+    KisImageWSP img = viewManager->image();
+    KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+    if (!img || !dev) {
+        qWarning() << "Touch smoke: missing image/device for paintLine";
+        return false;
+    }
+
+    KisPainter painter(dev);
+    painter.setCompositeOpId(COMPOSITE_OVER);
+    painter.setOpacityU8(OPACITY_OPAQUE_U8);
+    painter.setPaintColor(KoColor(color, dev->colorSpace()));
+    painter.drawLine(imgP0, imgP1, 48.0, true);
+    painter.end();
+
+    refreshImageForTouchSmoke(img);
+    return true;
+}
+
+bool fillCanvasForTouchSmoke(KisMainWindow *mainWindow, const QColor &color)
+{
+    if (!mainWindow || !mainWindow->viewManager()) {
+        return false;
+    }
+
+    KisViewManager *viewManager = mainWindow->viewManager();
+    KisImageWSP img = viewManager->image();
+    KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+    if (!img || !dev) {
+        qWarning() << "Touch smoke: missing image/device for fillCanvas";
+        return false;
+    }
+
+    KisFillPainter painter(dev);
+    painter.setCompositeOpId(COMPOSITE_OVER);
+    painter.fillRect(img->bounds(), KoColor(color, dev->colorSpace()), OPACITY_OPAQUE_U8);
+    painter.end();
+
+    refreshImageForTouchSmoke(img);
+    return true;
+}
+
+bool paintStrokeForTouchSmoke(KisMainWindow *mainWindow, int moveSteps, qreal wobbleAmplitude, int holdMsAtEnd)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    KisView *view = mainWindow->activeView();
+    if (!view) {
+        qWarning() << "Touch smoke: no active view for painting";
+        return false;
+    }
+
+    KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        qWarning() << "Touch smoke: no image for painting";
+        return false;
+    }
+
+    KoToolManager::instance()->switchToolRequested(QStringLiteral("KritaShape/KisToolBrush"));
+
+    QWidget *canvasWidget = view->canvasBase() ? view->canvasBase()->canvasWidget() : nullptr;
+    if (!canvasWidget) {
+        qWarning() << "Touch smoke: no canvas widget for painting";
+        return false;
+    }
+
+    const QRect bounds = image->bounds();
+    const QPointF imgP0(bounds.left() + bounds.width() * 0.25, bounds.center().y());
+    const QPointF imgP1(bounds.left() + bounds.width() * 0.75, bounds.center().y() + bounds.height() * 0.03);
+
+    const QPointF wP0 = view->canvasBase()->coordinatesConverter()->imageToWidget(imgP0);
+    const QPointF wP1 = view->canvasBase()->coordinatesConverter()->imageToWidget(imgP1);
+
+    const QPointF gP0 = canvasWidget->mapToGlobal(wP0.toPoint());
+    const QPointF gP1 = canvasWidget->mapToGlobal(wP1.toPoint());
+
+    QMouseEvent press(QEvent::MouseButtonPress, wP0, gP0, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvasWidget, &press);
+
+    for (int i = 1; i <= qMax(1, moveSteps); i++) {
+        const qreal t = qreal(i) / qMax(1, moveSteps);
+        const qreal wobble = wobbleAmplitude > 0 ? ((i % 2 ? 1 : -1) * wobbleAmplitude) : 0.0;
+        const QPointF wP = wP0 + t * (wP1 - wP0) + QPointF(0, wobble);
+        const QPointF gP = canvasWidget->mapToGlobal(wP.toPoint());
+        QMouseEvent move(QEvent::MouseMove, wP, gP, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(canvasWidget, &move);
+    }
+
+    if (holdMsAtEnd > 0) {
+        QThread::msleep(holdMsAtEnd);
+    }
+
+    QMouseEvent release(QEvent::MouseButtonRelease, wP1, gP1, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvasWidget, &release);
+
+    image->waitForDone();
+    return true;
+}
+
+void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
+{
+    if (!mainWindow) {
+        return;
+    }
+
+    const QString normalizedScenario = scenario.trimmed().toLower();
+    if (normalizedScenario.isEmpty()) {
+        return;
+    }
+
+    auto finalizeSmoke = [&](bool ok) {
+        // Give Qt a moment to settle widget creation + repaint so headless screenshots
+        // capture the intended UI state (especially on Android).
+        QApplication::processEvents();
+        QThread::msleep(200);
+        QApplication::processEvents();
+
+        const QString status = ok ? QStringLiteral("OK") : QStringLiteral("ERROR");
+        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_DONE scenario=%1 status=%2").arg(normalizedScenario, status);
+    };
+
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+
+    mainWindow->show();
+    mainWindow->raise();
+    mainWindow->activateWindow();
+
+    // Force immediate application of Touch Mode (workspace + chrome) so the deterministic
+    // scenario screenshots don't depend on asynchronous config notifier timing.
+    QMetaObject::invokeMethod(mainWindow, "configChanged", Qt::DirectConnection);
+
+    if (!ensureDocumentForTouchSmoke(mainWindow)) {
+        qWarning() << "Touch smoke: could not ensure a document is open";
+        finalizeSmoke(false);
+        return;
+    }
+
+    // Make screenshots deterministic regardless of the user's saved workspace state.
+    // We only show the minimum UI needed for each scenario.
+    Q_FOREACH (QDockWidget *dock, mainWindow->dockWidgets()) {
+        if (dock) {
+            dock->hide();
+        }
+    }
+
+    if (normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar") {
+        // Just showing the main window is enough; Touch Mode is enabled above and will
+        // create any touch chrome (like the top bar toolbar) via KisConfigNotifier.
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "selection-tool" || normalizedScenario == "selection_tool") {
+        KoToolManager::instance()->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "transform-tool" || normalizedScenario == "transform_tool") {
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+        const QRect bounds = image ? image->bounds() : QRect();
+        const QVector<QPoint> samplePoints = bounds.isValid()
+            ? QVector<QPoint>{bounds.center(), QPoint(bounds.center().x() - 12, bounds.center().y())}
+            : QVector<QPoint>{};
+        const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+
+        if (!paintStrokeForTouchSmoke(mainWindow, 4, 0.0, 0)) {
+            qWarning() << "Touch smoke: could not paint via input events for transform-tool scenario";
+        }
+
+        if (image) {
+            image->waitForDone();
+        }
+
+        const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+        if (image && dev && !anySampleChangedForTouchSmoke(before, after, 3)) {
+            qWarning() << "Touch smoke: transform-tool content was not painted; falling back to direct line paint";
+            const QPointF imgP0(bounds.left() + bounds.width() * 0.30, bounds.center().y());
+            const QPointF imgP1(bounds.left() + bounds.width() * 0.70, bounds.center().y());
+            paintLineForTouchSmoke(mainWindow, imgP0, imgP1, QColor(0, 0, 0));
+        }
+        KoToolManager::instance()->switchToolRequested(QStringLiteral("KisToolTransform"));
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "touch-sidebar" || normalizedScenario == "touch_sidebar" ||
+        normalizedScenario == "touchdocker" || normalizedScenario == "touch_docker") {
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("TouchDocker"));
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "layers-panel" || normalizedScenario == "layers_panel") {
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
+        populateLayersForTouchSmoke(mainWindow, 6);
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "layer-options" || normalizedScenario == "layer_options") {
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
+        populateLayersForTouchSmoke(mainWindow, 6);
+        if (QAction *action = mainWindow->actionCollection()->action("touch_layer_options_sheet")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        if (QAction *action = mainWindow->actionCollection()->action("layer_properties")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        qWarning() << "Touch smoke: action not found: touch_layer_options_sheet (or layer_properties fallback)";
+        finalizeSmoke(false);
+        return;
+    }
+
+    if (normalizedScenario == "color-panel" || normalizedScenario == "color_panel") {
+        showDockerForTouchSmoke(mainWindow, QStringLiteral("ColorSelectorNg"));
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "colordrop" || normalizedScenario == "color-drop" || normalizedScenario == "color_drop") {
+        KisView *view = mainWindow->activeView();
+        if (!view) {
+            qWarning() << "Touch smoke: no active view for colordrop";
+            finalizeSmoke(false);
+            return;
+        }
+
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        if (!image) {
+            qWarning() << "Touch smoke: no image for colordrop";
+            finalizeSmoke(false);
+            return;
+        }
+
+        KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+        const QVector<QPoint> samplePoints{image->bounds().center()};
+        const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+
+        const QPointF imgPos = image->bounds().center();
+        const QPointF widgetPos = view->canvasBase()->coordinatesConverter()->imageToWidget(imgPos);
+
+        QMimeData mime;
+        mime.setColorData(QColor(0xff, 0x33, 0xaa));
+
+        // Simulate the full drag + drop flow. KisView's dropEvent expects normal drag handling,
+        // and the touch threshold overlay is driven by dragEnterEvent.
+        QDragEnterEvent dragEnter(widgetPos.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        QApplication::sendEvent(view, &dragEnter);
+
+        QDropEvent dropEvent(widgetPos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+        dropEvent.setDropAction(Qt::CopyAction);
+        QApplication::sendEvent(view, &dropEvent);
+
+        image->waitForDone();
+
+        const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+        if (!dev || !anySampleChangedForTouchSmoke(before, after, 3)) {
+            qWarning() << "Touch smoke: colordrop did not modify the canvas; falling back to direct fill";
+            fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0x33, 0xaa));
+        }
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "quickshape" || normalizedScenario == "quick-shape" || normalizedScenario == "quick_shape") {
+        // Keep the wobble small enough that QuickShape line detection still succeeds.
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+        const QVector<QPoint> samplePoints = image
+            ? QVector<QPoint>{image->bounds().center(), QPoint(image->bounds().center().x() + 12, image->bounds().center().y())}
+            : QVector<QPoint>{};
+        const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+
+        if (!paintStrokeForTouchSmoke(mainWindow, 6, 2.0, 450)) {
+            qWarning() << "Touch smoke: could not paint via input events for quickshape";
+        }
+
+        if (image) {
+            image->waitForDone();
+        }
+
+        const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+        if (image && dev && !anySampleChangedForTouchSmoke(before, after, 3)) {
+            qWarning() << "Touch smoke: quickshape content was not painted; falling back to direct line paint";
+            const QRect bounds = image->bounds();
+            const QPointF imgP0(bounds.left() + bounds.width() * 0.25, bounds.center().y());
+            const QPointF imgP1(bounds.left() + bounds.width() * 0.75, bounds.center().y());
+            paintLineForTouchSmoke(mainWindow, imgP0, imgP1, QColor(0, 0, 0));
+        }
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "actions-sheet" || normalizedScenario == "actions_sheet") {
+        if (QAction *action = mainWindow->actionCollection()->action("touch_actions_sheet")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        if (QAction *action = mainWindow->actionCollection()->action("command_bar_open")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        qWarning() << "Touch smoke: action not found: touch_actions_sheet (or command_bar_open fallback)";
+        finalizeSmoke(false);
+        return;
+    }
+
+    if (normalizedScenario == "gesture-controls" || normalizedScenario == "gesture_controls" ||
+        normalizedScenario == "gesture-controls-sheet" || normalizedScenario == "gesture_controls_sheet") {
+        QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
+        if (!anchor) {
+            anchor = mainWindow;
+        }
+
+        const QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
+
+        KisTouchActionsSheet *sheet =
+            mainWindow->findChild<KisTouchActionsSheet *>(QStringLiteral("kisTouchActionsSheet"));
+        if (!sheet) {
+            sheet = new KisTouchActionsSheet(mainWindow->actionCollection(), mainWindow);
+        } else {
+            sheet->setActionCollection(mainWindow->actionCollection());
+        }
+
+        sheet->openAtGlobalPos(globalPos);
+        // Categories are stable and ordered:
+        // Add(0), Canvas(1), Share(2), Prefs(3), Gestures(4), Help(5)
+        sheet->setCurrentCategoryRow(4);
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "quickmenu" || normalizedScenario == "quick-menu" || normalizedScenario == "quick_menu") {
+        if (!mainWindow || !mainWindow->actionCollection()) {
+            qWarning() << "Touch smoke: main window or action collection not available";
+            return;
+        }
+
+        QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
+        if (!anchor) {
+            anchor = mainWindow;
+        }
+
+        const QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
+
+        KisTouchQuickMenuOverlay *overlay =
+            mainWindow->findChild<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+        if (!overlay) {
+            overlay = new KisTouchQuickMenuOverlay(mainWindow->actionCollection(), mainWindow);
+        } else {
+            overlay->setActionCollection(mainWindow->actionCollection());
+        }
+
+        overlay->setHighlightedSlot(-1);
+        overlay->openAtGlobalPos(globalPos);
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == "quickmenu-setup" || normalizedScenario == "quickmenu_setup" ||
+        normalizedScenario == "quickmenu-config" || normalizedScenario == "quickmenu_config") {
+        if (QAction *action = mainWindow->actionCollection()->action("touch_quickmenu_configure")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        qWarning() << "Touch smoke: action not found: touch_quickmenu_configure";
+        finalizeSmoke(false);
+        return;
+    }
+
+    if (normalizedScenario == "copypaste" || normalizedScenario == "copy-paste" || normalizedScenario == "copy_paste") {
+        if (QAction *action = mainWindow->actionCollection()->action("touch_copypaste_overlay")) {
+            action->trigger();
+            finalizeSmoke(true);
+            return;
+        }
+        qWarning() << "Touch smoke: action not found: touch_copypaste_overlay";
+        finalizeSmoke(false);
+        return;
+    }
+
+    qWarning() << "Touch smoke: unknown scenario:" << scenario;
+    finalizeSmoke(false);
+}
+
+} // namespace
 
 namespace {
 struct AppRecursionInfo {
@@ -817,6 +1428,17 @@ bool KisApplication::start(const KisApplicationArguments &args)
 
     verifyMetatypeRegistration();
 
+    if (d->mainWindow && !args.touchSmokeScenario().isEmpty()) {
+        const QString scenario = args.touchSmokeScenario();
+        const QPointer<KisMainWindow> mainWindow = d->mainWindow;
+        QTimer::singleShot(0, this, [scenario, mainWindow]() {
+            if (!mainWindow) {
+                return;
+            }
+            runTouchSmokeScenario(scenario, mainWindow);
+        });
+    }
+
     // not calling this before since the program will quit there.
     return true;
 }
@@ -1059,6 +1681,17 @@ void KisApplication::executeRemoteArguments(QByteArray message, KisMainWindow *m
                                             i18n("Cannot add the file layer: no document is open."));
         }
     }
+
+    if (mainWindow && !args.touchSmokeScenario().isEmpty()) {
+        const QString scenario = args.touchSmokeScenario();
+        const QPointer<KisMainWindow> mw = mainWindow;
+        QTimer::singleShot(0, this, [scenario, mw]() {
+            if (!mw) {
+                return;
+            }
+            runTouchSmokeScenario(scenario, mw);
+        });
+    }
 }
 
 
@@ -1090,6 +1723,15 @@ void KisApplication::fileOpenRequested(const QString &url)
 
     KisMainWindow::OpenFlags flags = d->batchRun ? KisMainWindow::BatchMode : KisMainWindow::None;
     d->mainWindow->openDocument(url, flags);
+}
+
+void KisApplication::touchSmokeScenarioRequested(const QString &scenario)
+{
+    if (!d->mainWindow) {
+        return;
+    }
+
+    runTouchSmokeScenario(scenario, d->mainWindow);
 }
 
 

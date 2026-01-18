@@ -1,3 +1,8 @@
+touchPainting=2
+currentInputProfile=Touch Gestures Only
+touchModeEnabled=true
+touchQuickShapeEnabled=true
+
 [advancedColorSelector]
 allowHorizontalLayout=true
 colorSelectorConfiguration=3|0|5|0
