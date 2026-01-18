@@ -83,6 +83,7 @@ This plan lives in the Krita fork:
   - local HEAD commit: `ba208b5` (`smoke: make gmsaas marker wait non-hanging`)
   - push: `git -C ~/dev/krita/krita-docker-setup push -u origin infra/smoke-tests`
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
+  - GitHub: `git@github.com:pepperpepperpepper/krita-touch.git`
   - branch: `touch/procreate-mvp`
   - feature baseline commit: `bb8e957946` (`touch: procreate-mvp baseline`)
 
