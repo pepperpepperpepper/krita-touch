@@ -84,7 +84,7 @@ This plan lives in the Krita fork:
   - push: `git -C ~/dev/krita/krita-docker-setup push -u origin infra/smoke-tests`
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
   - branch: `touch/procreate-mvp`
-  - local HEAD commit: `bb8e957946` (`touch: procreate-mvp baseline`)
+  - feature baseline commit: `bb8e957946` (`touch: procreate-mvp baseline`)
 
 ### Present in working tree (WIP)
 
