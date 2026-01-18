@@ -553,7 +553,7 @@ More recent URLs (2026‑01‑17, after icon + dock-chrome updates):
 - Linux `top-bar`: https://tmp.uh-oh.wtf/2026/01/17/4c02cbbc-smoke-linux-krita-top-bar.png
 - Linux `touch-sidebar`: https://tmp.uh-oh.wtf/2026/01/17/d0371a13-smoke-linux-krita-touch-sidebar.png
 
-Latest URLs (2026‑01‑18, after hiding the MDI tab/title strip in Touch Mode + forcing QMdiArea scrollbars off):
+Prior URLs (2026‑01‑18, after hiding the MDI tab/title strip in Touch Mode + forcing QMdiArea scrollbars off):
 
 Android:
 
@@ -588,6 +588,42 @@ Linux:
 - `quickmenu`: https://tmp.uh-oh.wtf/2026/01/18/3b84bc5b-smoke-linux-krita-quickmenu.png (log: https://tmp.uh-oh.wtf/2026/01/18/732fbb6e-smoke-linux-krita-quickmenu-log.txt)
 - `quickmenu-setup`: https://tmp.uh-oh.wtf/2026/01/18/a5201549-smoke-linux-krita-quickmenu-setup.png (log: https://tmp.uh-oh.wtf/2026/01/18/90e5270f-smoke-linux-krita-quickmenu-setup-log.txt)
 - `copypaste`: https://tmp.uh-oh.wtf/2026/01/18/d77e0400-smoke-linux-krita-copypaste.png (log: https://tmp.uh-oh.wtf/2026/01/18/571f0dd2-smoke-linux-krita-copypaste-log.txt)
+
+Latest URLs (2026‑01‑18, full Linux + Android smoke suites pass):
+
+Android:
+
+- `top-bar`: https://tmp.uh-oh.wtf/2026/01/18/80765e42-smoke-android-krita-top-bar.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/4b2effc1-smoke-android-krita-top-bar-logcat.txt)
+- `touch-sidebar`: https://tmp.uh-oh.wtf/2026/01/18/30d8b26a-smoke-android-krita-touch-sidebar.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/7237bea0-smoke-android-krita-touch-sidebar-logcat.txt)
+- `selection-tool`: https://tmp.uh-oh.wtf/2026/01/18/6dcc53e8-smoke-android-krita-selection-tool.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/57225617-smoke-android-krita-selection-tool-logcat.txt)
+- `transform-tool`: https://tmp.uh-oh.wtf/2026/01/18/e2819bb7-smoke-android-krita-transform-tool.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/00881eb6-smoke-android-krita-transform-tool-logcat.txt)
+- `layers-panel`: https://tmp.uh-oh.wtf/2026/01/18/8f530d27-smoke-android-krita-layers-panel.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/5858234b-smoke-android-krita-layers-panel-logcat.txt)
+- `layer-options`: https://tmp.uh-oh.wtf/2026/01/18/ed4930d3-smoke-android-krita-layer-options.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/14747f5c-smoke-android-krita-layer-options-logcat.txt)
+- `color-panel`: https://tmp.uh-oh.wtf/2026/01/18/9ad0678e-smoke-android-krita-color-panel.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/278d0f64-smoke-android-krita-color-panel-logcat.txt)
+- `colordrop`: https://tmp.uh-oh.wtf/2026/01/18/6fd1011e-smoke-android-krita-colordrop.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/d4923dda-smoke-android-krita-colordrop-logcat.txt)
+- `quickshape`: https://tmp.uh-oh.wtf/2026/01/18/b9165516-smoke-android-krita-quickshape.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/a4ec2890-smoke-android-krita-quickshape-logcat.txt)
+- `actions-sheet`: https://tmp.uh-oh.wtf/2026/01/18/1ed1441a-smoke-android-krita-actions-sheet.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/208a0b42-smoke-android-krita-actions-sheet-logcat.txt)
+- `gesture-controls`: https://tmp.uh-oh.wtf/2026/01/18/6fd70e51-smoke-android-krita-gesture-controls.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/35009b87-smoke-android-krita-gesture-controls-logcat.txt)
+- `quickmenu`: https://tmp.uh-oh.wtf/2026/01/18/a444638b-smoke-android-krita-quickmenu.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/2fdbaf7c-smoke-android-krita-quickmenu-logcat.txt)
+- `quickmenu-setup`: https://tmp.uh-oh.wtf/2026/01/18/614430f9-smoke-android-krita-quickmenu-setup.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/136473c3-smoke-android-krita-quickmenu-setup-logcat.txt)
+- `copypaste`: https://tmp.uh-oh.wtf/2026/01/18/7d96340d-smoke-android-krita-copypaste.png (logcat: https://tmp.uh-oh.wtf/2026/01/18/5b4fa174-smoke-android-krita-copypaste-logcat.txt)
+
+Linux:
+
+- `top-bar`: https://tmp.uh-oh.wtf/2026/01/18/137bf112-smoke-linux-krita-top-bar.png (log: https://tmp.uh-oh.wtf/2026/01/18/6e7d03da-smoke-linux-krita-top-bar-log.txt)
+- `touch-sidebar`: https://tmp.uh-oh.wtf/2026/01/18/df48b3df-smoke-linux-krita-touch-sidebar.png (log: https://tmp.uh-oh.wtf/2026/01/18/a73ebc5c-smoke-linux-krita-touch-sidebar-log.txt)
+- `selection-tool`: https://tmp.uh-oh.wtf/2026/01/18/e7d2c310-smoke-linux-krita-selection-tool.png (log: https://tmp.uh-oh.wtf/2026/01/18/3a524f42-smoke-linux-krita-selection-tool-log.txt)
+- `transform-tool`: https://tmp.uh-oh.wtf/2026/01/18/2f876994-smoke-linux-krita-transform-tool.png (log: https://tmp.uh-oh.wtf/2026/01/18/58902ad6-smoke-linux-krita-transform-tool-log.txt)
+- `layers-panel`: https://tmp.uh-oh.wtf/2026/01/18/2e44f94b-smoke-linux-krita-layers-panel.png (log: https://tmp.uh-oh.wtf/2026/01/18/346d2170-smoke-linux-krita-layers-panel-log.txt)
+- `layer-options`: https://tmp.uh-oh.wtf/2026/01/18/6aa43f03-smoke-linux-krita-layer-options.png (log: https://tmp.uh-oh.wtf/2026/01/18/71352711-smoke-linux-krita-layer-options-log.txt)
+- `color-panel`: https://tmp.uh-oh.wtf/2026/01/18/92f6ef52-smoke-linux-krita-color-panel.png (log: https://tmp.uh-oh.wtf/2026/01/18/de9d5b32-smoke-linux-krita-color-panel-log.txt)
+- `colordrop`: https://tmp.uh-oh.wtf/2026/01/18/a7b21bf9-smoke-linux-krita-colordrop.png (log: https://tmp.uh-oh.wtf/2026/01/18/7d2c5226-smoke-linux-krita-colordrop-log.txt)
+- `quickshape`: https://tmp.uh-oh.wtf/2026/01/18/5df3370d-smoke-linux-krita-quickshape.png (log: https://tmp.uh-oh.wtf/2026/01/18/8ec2bf56-smoke-linux-krita-quickshape-log.txt)
+- `actions-sheet`: https://tmp.uh-oh.wtf/2026/01/18/a4e49d97-smoke-linux-krita-actions-sheet.png (log: https://tmp.uh-oh.wtf/2026/01/18/f1c0d7e6-smoke-linux-krita-actions-sheet-log.txt)
+- `gesture-controls`: https://tmp.uh-oh.wtf/2026/01/18/a518143f-smoke-linux-krita-gesture-controls.png (log: https://tmp.uh-oh.wtf/2026/01/18/c9555ea0-smoke-linux-krita-gesture-controls-log.txt)
+- `quickmenu`: https://tmp.uh-oh.wtf/2026/01/18/e63ce45d-smoke-linux-krita-quickmenu.png (log: https://tmp.uh-oh.wtf/2026/01/18/f936f6e3-smoke-linux-krita-quickmenu-log.txt)
+- `quickmenu-setup`: https://tmp.uh-oh.wtf/2026/01/18/bd123ce5-smoke-linux-krita-quickmenu-setup.png (log: https://tmp.uh-oh.wtf/2026/01/18/a51713d1-smoke-linux-krita-quickmenu-setup-log.txt)
+- `copypaste`: https://tmp.uh-oh.wtf/2026/01/18/e169754d-smoke-linux-krita-copypaste.png (log: https://tmp.uh-oh.wtf/2026/01/18/87431ea6-smoke-linux-krita-copypaste-log.txt)
 
 ### 4.4 Android smoke commands (Genymotion Cloud)
 
