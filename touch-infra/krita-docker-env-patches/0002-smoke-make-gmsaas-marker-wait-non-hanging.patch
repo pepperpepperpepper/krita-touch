@@ -1,0 +1,154 @@
+From ba208b5a156fd998d6189a3a2981bece49e8a9bc Mon Sep 17 00:00:00 2001
+From: yo momma <shutup@oops.wtf>
+Date: Sun, 18 Jan 2026 19:25:17 +0000
+Subject: [PATCH 2/2] smoke: make gmsaas marker wait non-hanging
+
+---
+ bin/gmsaas-smoke-android | 60 +++++++++++++++-------------------------
+ 1 file changed, 23 insertions(+), 37 deletions(-)
+
+diff --git a/bin/gmsaas-smoke-android b/bin/gmsaas-smoke-android
+index e52dc8e..e4543d6 100755
+--- a/bin/gmsaas-smoke-android
++++ b/bin/gmsaas-smoke-android
+@@ -25,6 +25,7 @@ Options:
+ 
+ Environment:
+   KRITA_GMSAAS_RECIPE_UUID   Recipe UUID override
++  KRITA_TIMEOUT_KILL_AFTER_SECS  If timeout triggers, send SIGKILL after this many seconds (default: 5)
+   GMSAAS_BIN                 Path to gmsaas binary (optional)
+ USAGE_EOF
+ )"
+@@ -39,6 +40,8 @@ MARKER_WAIT_ENABLED="1"
+ MAX_RUN_MINS="60"
+ START_RETRIES="3"
+ 
++TIMEOUT_KILL_AFTER_SECS="${KRITA_TIMEOUT_KILL_AFTER_SECS:-5}"
++
+ GMSAAS_ADB_START_TIMEOUT_SECS="90"
+ GMSAAS_INSTANCE_START_TIMEOUT_SECS="180"
+ GMSAAS_ADBCONNECT_TIMEOUT_SECS="60"
+@@ -140,7 +143,6 @@ mkdir -p "$OUT_DIR"
+ 
+ IID=""
+ SER=""
+-MARKER_WAIT_PID=""
+ 
+ now_utc() {
+     date -u +%Y-%m-%dT%H:%M:%SZ
+@@ -160,10 +162,6 @@ err() {
+ 
+ cleanup() {
+     set +e
+-    if [[ -n "${MARKER_WAIT_PID}" ]]; then
+-        kill "${MARKER_WAIT_PID}" >/dev/null 2>&1 || true
+-        MARKER_WAIT_PID=""
+-    fi
+     if [[ -n "$IID" ]]; then
+         run_with_timeout "$GMSAAS_INSTANCE_STOP_TIMEOUT_SECS" "$GMSAAS" instances stop "$IID" >/dev/null 2>&1 || true
+     fi
+@@ -175,7 +173,7 @@ run_with_timeout() {
+     local secs="$1"
+     shift
+     if command -v timeout >/dev/null 2>&1; then
+-        timeout "$secs" "$@"
++        timeout -k "${TIMEOUT_KILL_AFTER_SECS}s" "${secs}s" "$@"
+     else
+         "$@"
+     fi
+@@ -210,7 +208,7 @@ start_instance_with_retry() {
+             return 0
+         fi
+ 
+-        if [[ "$code" -eq 124 ]]; then
++        if [[ "$code" -eq 124 || "$code" -eq 137 ]]; then
+             err "Timed out starting Genymotion instance (timeout=${GMSAAS_INSTANCE_START_TIMEOUT_SECS}s)."
+         fi
+ 
+@@ -389,25 +387,27 @@ dismiss_viewing_fullscreen_tip() {
+     fi
+ }
+ 
+-wait_for_touch_smoke_done() {
++wait_for_touch_smoke_done_poll() {
+     local scenario="$1"
+     local timeout="$2"
+     local marker_file="$3"
+ 
+-    if ! command -v timeout >/dev/null 2>&1; then
+-        return 1
+-    fi
+-
+     local scenario_norm marker
+     scenario_norm="$(echo "$scenario" | tr '[:upper:]' '[:lower:]')"
+     marker="KRITA_TOUCH_SMOKE_DONE scenario=$scenario_norm status="
+ 
+-    # NOTE: don't use pipefail here. When grep finds the marker and exits,
+-    # adb logcat is expected to terminate via SIGPIPE; with pipefail enabled
+-    # that would incorrectly look like a failure.
+-    ( set +o pipefail; timeout "$timeout" adb -s "$SER" logcat -v brief 2>/dev/null | grep -m1 -F "$marker" >"$marker_file" ) &
+-    MARKER_WAIT_PID="$!"
+-    return 0
++    local deadline_s
++    deadline_s=$((SECONDS + timeout))
++
++    while (( SECONDS < deadline_s )); do
++        ensure_adb_serial || true
++        if run_with_timeout 10 adb -s "$SER" logcat -d -v brief -s krita:I 2>/dev/null | grep -m1 -F "$marker" >"$marker_file"; then
++            return 0
++        fi
++        sleep 1
++    done
++
++    return 1
+ }
+ 
+ log "Using recipe: $RECIPE_UUID"
+@@ -477,18 +477,7 @@ for SCENARIO in "${SCENARIOS[@]}"; do
+     adb -s "$SER" shell am force-stop "$PKG" >/dev/null 2>&1 || true
+     adb -s "$SER" logcat -c || true
+ 
+-    MARKER_WAIT_PID=""
+     MARKER_FILE="$(mktemp)"
+-    USE_MARKER_WAIT="0"
+-    if [[ -n "$SCENARIO" ]]; then
+-        if [[ "$MARKER_WAIT_ENABLED" == "1" ]]; then
+-            if ! wait_for_touch_smoke_done "$SCENARIO" "$WAIT_SECS" "$MARKER_FILE"; then
+-                echo "WARN: timeout(1) not found; falling back to sleep ${WAIT_SECS}s" >&2
+-            else
+-                USE_MARKER_WAIT="1"
+-            fi
+-        fi
+-    fi
+ 
+     if [[ -n "$SCENARIO" ]]; then
+         run_with_timeout "$ADB_AM_START_TIMEOUT_SECS" adb -s "$SER" shell am start -W -n "$PKG/$ACTIVITY" --es KRITA_TOUCH_SMOKE "$SCENARIO"
+@@ -497,20 +486,17 @@ for SCENARIO in "${SCENARIOS[@]}"; do
+     fi
+ 
+     if [[ -n "$SCENARIO" ]]; then
+-        if [[ "$USE_MARKER_WAIT" != "1" ]]; then
++        if [[ "$MARKER_WAIT_ENABLED" != "1" ]]; then
+             sleep "$WAIT_SECS"
+-        elif ! wait "$MARKER_WAIT_PID"; then
++        elif ! wait_for_touch_smoke_done_poll "$SCENARIO" "$WAIT_SECS" "$MARKER_FILE"; then
+             echo "ERROR: timed out waiting for KRITA_TOUCH_SMOKE_DONE for scenario: $SCENARIO (timeout=${WAIT_SECS}s)" >&2
+-            adb -s "$SER" logcat -d > "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
++            adb_logcat_dump_to_file "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
+             exit 1
+-        fi
+-        MARKER_WAIT_PID=""
+-
+-        if [[ "$USE_MARKER_WAIT" == "1" ]]; then
++        else
+             marker_line="$(tr -d '\r' <"$MARKER_FILE" || true)"
+             if [[ "$marker_line" != *"status=OK"* ]]; then
+                 echo "ERROR: touch smoke scenario did not report OK: $marker_line" >&2
+-                adb -s "$SER" logcat -d > "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
++                adb_logcat_dump_to_file "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
+                 exit 1
+             fi
+         fi
+-- 
+2.52.0
+

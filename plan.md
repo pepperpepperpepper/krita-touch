@@ -79,9 +79,10 @@ This plan lives in the Krita fork:
 ### Branch snapshots (as of 2026‑01‑18)
 
 - Docker wrapper repo (`~/dev/krita/krita-docker-setup/`):
-  - branch: `infra/smoke-tests`
+  - upstream: `https://invent.kde.org/dkazakov/krita-docker-env.git`
+  - local branch: `infra/smoke-tests`
   - local HEAD commit: `ba208b5` (`smoke: make gmsaas marker wait non-hanging`)
-  - push: `git -C ~/dev/krita/krita-docker-setup push -u origin infra/smoke-tests`
+  - patches tracked in this repo: `touch-infra/krita-docker-env-patches/*.patch` (apply with `git am`)
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
   - GitHub: `git@github.com:pepperpepperpepper/krita-touch.git`
   - branch: `touch/procreate-mvp`

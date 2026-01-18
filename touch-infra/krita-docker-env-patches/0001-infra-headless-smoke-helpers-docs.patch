@@ -1,0 +1,1625 @@
+From 0c1a4116329791156330f5e75b4785a3f4b17b08 Mon Sep 17 00:00:00 2001
+From: yo momma <shutup@oops.wtf>
+Date: Sun, 18 Jan 2026 08:17:59 +0000
+Subject: [PATCH 1/2] infra: headless smoke helpers + docs
+
+---
+ .dockerignore              |   5 +
+ Dockerfile                 |  13 +-
+ README.md                  |  24 ++
+ bin/bg-build-krita         |  99 +++++++
+ bin/bg-build-krita-android |  99 +++++++
+ bin/build-krita            |  21 +-
+ bin/build-krita-android    | 239 ++++++++++++++++
+ bin/build_image            |  15 +-
+ bin/gmsaas-smoke-android   | 561 +++++++++++++++++++++++++++++++++++++
+ bin/krita-xvfb             |  61 ++++
+ bin/krita-xvfb-screenshot  | 129 +++++++++
+ bin/krita-xvfb-smoke-touch |  91 ++++++
+ bin/run_container          |  28 +-
+ default-home/devenv.inc    |   4 +-
+ plan.md                    |   1 +
+ 15 files changed, 1370 insertions(+), 20 deletions(-)
+ create mode 100755 bin/bg-build-krita
+ create mode 100755 bin/bg-build-krita-android
+ create mode 100755 bin/build-krita-android
+ create mode 100755 bin/gmsaas-smoke-android
+ create mode 100755 bin/krita-xvfb
+ create mode 100755 bin/krita-xvfb-screenshot
+ create mode 100755 bin/krita-xvfb-smoke-touch
+ create mode 120000 plan.md
+
+diff --git a/.dockerignore b/.dockerignore
+index 5b915d6..513d9ee 100644
+--- a/.dockerignore
++++ b/.dockerignore
+@@ -1,2 +1,7 @@
+ **/krita/
+ .git
++
++# Speed up docker builds: only deps install tree is copied into the image.
++persistent/deps/*
++!persistent/deps/_install/
++!persistent/deps/_install/**
+diff --git a/Dockerfile b/Dockerfile
+index 0b312c8..75080b6 100644
+--- a/Dockerfile
++++ b/Dockerfile
+@@ -1,4 +1,4 @@
+-ARG BASE_IMAGE
++ARG BASE_IMAGE=invent-registry.kde.org/sysadmin/ci-images/krita-appimage-2204
+ FROM ${BASE_IMAGE} as base_image
+ MAINTAINER Dmitry Kazakov <dimula73@gmail.com>
+ 
+@@ -8,7 +8,16 @@ ARG RENDER_GID=110
+ 
+ USER root
+ 
+-RUN apt-get update && \
++RUN if ! test -f /etc/apt/trusted.gpg.d/kitware-archive.gpg; then \
++        if command -v wget >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; then \
++            wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/kitware-archive.gpg; \
++        else \
++            apt-get update && \
++            apt-get -y install ca-certificates wget gnupg && \
++            wget -qO- https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor -o /etc/apt/trusted.gpg.d/kitware-archive.gpg; \
++        fi; \
++    fi && \
++    apt-get update && \
+     apt-get -y install curl && \
+     apt-get -y install emacs-nox && \
+     apt-get -y install gitk git-gui && \
+diff --git a/README.md b/README.md
+index de44841..0566ec8 100644
+--- a/README.md
++++ b/README.md
+@@ -228,6 +228,20 @@ TODO: do we need some extra cleaups for docker's caches?
+ 
+ Either relogin to the container or just execute `source ~/.devenv.inc`
+ 
++### Running Krita headless (no X11/Wayland on host)
++
++To run Krita without a host display, use Xvfb inside the container:
++
++```bash
++./bin/krita-xvfb --version
++```
++
++To take a screenshot of Krita running under Xvfb (saved into `./persistent/`):
++
++```bash
++./bin/krita-xvfb-screenshot
++```
++
+ ### PulseAudio socket fails to start after restarting the host system
+ 
+ On KDE Neon the pulseaudio socket is sometimes created after the first usage of the
+@@ -287,3 +301,13 @@ do the following:
+ ```bash
+ echo 'DOCKER_OPTS="-g /home/devel5/docker"' >> /etc/default/docker
+ ```
++
++### Docker networking fails with "operation not supported"
++
++Some environments cannot create Docker's default bridge/veth networking (common in
++restricted containers/VMs). In that case use host networking for both build and run:
++
++```bash
++./bin/build_image --network=host krita-deps
++./bin/run_container --network=host krita-deps krita-auto-1
++```
+diff --git a/bin/bg-build-krita b/bin/bg-build-krita
+new file mode 100755
+index 0000000..ed2a9ef
+--- /dev/null
++++ b/bin/bg-build-krita
+@@ -0,0 +1,99 @@
++#!/bin/bash
++
++set -euo pipefail
++
++usage=$(
++  cat <<'EOF'
++Usage: bg-build-krita [OPTION]... [-- BUILD_KRITA_ARGS...]
++
++Runs ./bin/build-krita in a detached tmux session and writes a log file.
++
++Options:
++  --session=NAME     tmux session name (default: krita-build-linux)
++  --log=PATH         log file path (default: persistent/build-linux-<ts>.log)
++  --attach           attach to the tmux session after starting
++  --follow           tail -f the log after starting
++  -h, --help         show this help text
++
++Examples:
++  ./bin/bg-build-krita -- --no-tests -j"$(nproc)"
++  ./bin/bg-build-krita --follow -- --no-tests -j2
++EOF
++)
++
++DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++ROOT="$(cd "${DIR}/.." && pwd)"
++
++SESSION="krita-build-linux"
++LOG=""
++ATTACH=0
++FOLLOW=0
++
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --session=*)
++      SESSION="${1#*=}"
++      shift
++      ;;
++    --log=*)
++      LOG="${1#*=}"
++      shift
++      ;;
++    --attach)
++      ATTACH=1
++      shift
++      ;;
++    --follow)
++      FOLLOW=1
++      shift
++      ;;
++    -h|--help)
++      echo "$usage"
++      exit 0
++      ;;
++    --)
++      shift
++      break
++      ;;
++    *)
++      echo "Unknown option: $1" >&2
++      echo "$usage" >&2
++      exit 2
++      ;;
++  esac
++done
++
++cd "$ROOT"
++
++ts="$(date +%Y%m%d-%H%M%S)"
++if [[ -z "$LOG" ]]; then
++  LOG="persistent/build-linux-${ts}.log"
++fi
++
++mkdir -p "$(dirname "$LOG")"
++
++if [[ "$LOG" == persistent/* ]]; then
++  ln -sf "$(basename "$LOG")" persistent/build-linux.log
++fi
++
++if tmux has-session -t "$SESSION" 2>/dev/null; then
++  echo "tmux session already exists: $SESSION" >&2
++  echo "Attach with: tmux attach -t $SESSION" >&2
++  exit 3
++fi
++
++cmd=(./bin/build-krita "$@")
++cmd_str="$(printf '%q ' "${cmd[@]}")"
++
++tmux new-session -d -s "$SESSION" "cd $(printf '%q' "$ROOT") && ${cmd_str} 2>&1 | tee $(printf '%q' "$LOG")"
++
++echo "Started: tmux attach -t $SESSION"
++echo "Log: $LOG"
++
++if [[ $ATTACH -eq 1 ]]; then
++  exec tmux attach -t "$SESSION"
++fi
++
++if [[ $FOLLOW -eq 1 ]]; then
++  exec tail -f "$LOG"
++fi
+diff --git a/bin/bg-build-krita-android b/bin/bg-build-krita-android
+new file mode 100755
+index 0000000..c611808
+--- /dev/null
++++ b/bin/bg-build-krita-android
+@@ -0,0 +1,99 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++usage=$(
++  cat <<'EOF'
++Usage: bg-build-krita-android [OPTION]... [-- BUILD_KRITA_ANDROID_ARGS...]
++
++Runs ./bin/build-krita-android in a detached tmux session and writes a log file.
++
++Options:
++  --session=NAME     tmux session name (default: krita-build-android)
++  --log=PATH         log file path (default: persistent/build-android-<ts>.log)
++  --attach           attach to the tmux session after starting
++  --follow           tail -f the log after starting
++  -h, --help         show this help text
++
++Examples:
++  ./bin/bg-build-krita-android -- --container krita-android-1 --abi arm64-v8a --package-type debug --jobs "$(nproc)"
++  ./bin/bg-build-krita-android --follow -- --container krita-android-1 --abi arm64-v8a --package-type debug --jobs 2
++EOF
++)
++
++DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++ROOT="$(cd "${DIR}/.." && pwd)"
++
++SESSION="krita-build-android"
++LOG=""
++ATTACH=0
++FOLLOW=0
++
++while [[ $# -gt 0 ]]; do
++  case "$1" in
++    --session=*)
++      SESSION="${1#*=}"
++      shift
++      ;;
++    --log=*)
++      LOG="${1#*=}"
++      shift
++      ;;
++    --attach)
++      ATTACH=1
++      shift
++      ;;
++    --follow)
++      FOLLOW=1
++      shift
++      ;;
++    -h|--help)
++      echo "$usage"
++      exit 0
++      ;;
++    --)
++      shift
++      break
++      ;;
++    *)
++      echo "Unknown option: $1" >&2
++      echo "$usage" >&2
++      exit 2
++      ;;
++  esac
++done
++
++cd "$ROOT"
++
++ts="$(date +%Y%m%d-%H%M%S)"
++if [[ -z "$LOG" ]]; then
++  LOG="persistent/build-android-${ts}.log"
++fi
++
++mkdir -p "$(dirname "$LOG")"
++
++if [[ "$LOG" == persistent/* ]]; then
++  ln -sf "$(basename "$LOG")" persistent/build-android.log
++fi
++
++if tmux has-session -t "$SESSION" 2>/dev/null; then
++  echo "tmux session already exists: $SESSION" >&2
++  echo "Attach with: tmux attach -t $SESSION" >&2
++  exit 3
++fi
++
++cmd=(./bin/build-krita-android "$@")
++cmd_str="$(printf '%q ' "${cmd[@]}")"
++
++tmux new-session -d -s "$SESSION" "cd $(printf '%q' "$ROOT") && ${cmd_str} 2>&1 | tee $(printf '%q' "$LOG")"
++
++echo "Started: tmux attach -t $SESSION"
++echo "Log: $LOG"
++
++if [[ $ATTACH -eq 1 ]]; then
++  exec tmux attach -t "$SESSION"
++fi
++
++if [[ $FOLLOW -eq 1 ]]; then
++  exec tail -f "$LOG"
++fi
++
+diff --git a/bin/build-krita b/bin/build-krita
+index c08d178..4cd0a37 100755
+--- a/bin/build-krita
++++ b/bin/build-krita
+@@ -85,6 +85,11 @@ fi
+ 
+ tryStartContainer $container_name
+ 
++DOCKER_EXEC_OPTS="-i"
++if [[ -t 0 ]]; then
++    DOCKER_EXEC_OPTS="-it"
++fi
++
+ if [ $BUILD_DEPS -eq 1 ]; then
+     if [ $QT_DEBUG -eq 1 ]; then
+         DEPS_CMAKE_ENV="QT_ENABLE_DEBUG_INFO=1"
+@@ -94,17 +99,17 @@ if [ $BUILD_DEPS -eq 1 ]; then
+         DEPS_CMAKE_ENV+="QT_ENABLE_ASAN=1"
+     fi
+ 
+-    ${DOCKER_BINARY} exec -ti ${container_name} \
+-        bash -i -c "cd /home/appimage/appimage-workspace/ && $DEPS_CMAKE_ENV ~/persistent/krita/packaging/linux/appimage/build-deps.sh ~/appimage-workspace ~/persistent/krita" || exit 1
++    ${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage/appimage-workspace/ && $DEPS_CMAKE_ENV ~/persistent/krita/packaging/linux/appimage/build-deps.sh ~/appimage-workspace ~/persistent/krita" || exit 1
+ fi
+ 
+-${DOCKER_BINARY} exec -ti ${container_name} \
+-        bash -i -c "cd /home/appimage/appimage-workspace/krita-build && if [[ ! -f CMakeCache.txt ]]; then ~/bin/run_cmake.sh ${KRITA_EXTRA_CMAKE_OPTIONS} ~/persistent/krita; fi" || exit 2
++${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage/appimage-workspace/krita-build && if [[ ! -f CMakeCache.txt ]]; then ~/bin/run_cmake.sh ${KRITA_EXTRA_CMAKE_OPTIONS} ~/persistent/krita; fi" || exit 2
+ 
+ if [ $RUN_KRITA -eq 0 ]; then
+-    ${DOCKER_BINARY} exec -ti ${container_name} \
+-        bash -i -c "cd /home/appimage/appimage-workspace/krita-build && cmake --build . -j$JOBS --target install" || exit 3
++    ${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage/appimage-workspace/krita-build && cmake --build . -j$JOBS && cmake --build . --target install" || exit 3
+ else
+-    ${DOCKER_BINARY} exec -ti ${container_name} \
+-        bash -i -c "cd /home/appimage/appimage-workspace/krita-build && cmake --build . -j$JOBS --target install && krita" || exit 3
++    ${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage/appimage-workspace/krita-build && cmake --build . -j$JOBS && cmake --build . --target install && if [[ -n \\$DISPLAY ]]; then krita; else xvfb-run -a -s '-screen 0 1280x720x24' krita; fi" || exit 3
+ fi
+diff --git a/bin/build-krita-android b/bin/build-krita-android
+new file mode 100755
+index 0000000..e87de13
+--- /dev/null
++++ b/bin/build-krita-android
+@@ -0,0 +1,239 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++usage="$(cat <<'USAGE_EOF'
++Usage: build-krita-android [OPTIONS]
++
++Build a Krita Android APK inside the Android Docker container, mirroring Krita CI.
++
++Options:
++  --container NAME       Container name (default: .container_name)
++  --abi ABI              Android ABI (default: arm64-v8a)
++  --package-type TYPE    debug | release | nightly (default: debug)
++  --workdir PATH         KDECI_WORKDIR_PATH inside container (default: /home/appimage/persistent/wd)
++  --jobs N               Parallel build jobs (default: nproc)
++  --only-build           Run CI build step only (no APK packaging)
++  --only-package         Run APK packaging only (assumes workdir has _build/)
++  -h, --help             Show help
++
++Notes:
++- APK output: $workdir/krita/_packaging/*.apk (host: ./persistent/wd/krita/_packaging/*.apk)
++- This script does NOT sign APKs.
++USAGE_EOF
++)"
++
++CONTAINER_NAME=""
++ABI="arm64-v8a"
++PACKAGE_TYPE="debug"
++WORKDIR="/home/appimage/persistent/wd"
++JOBS="$(nproc)"
++ONLY_BUILD=0
++ONLY_PACKAGE=0
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++        --container)
++            CONTAINER_NAME="$2"
++            shift 2
++            ;;
++        --container=*)
++            CONTAINER_NAME="${1#*=}"
++            shift
++            ;;
++        --abi)
++            ABI="$2"
++            shift 2
++            ;;
++        --abi=*)
++            ABI="${1#*=}"
++            shift
++            ;;
++        --package-type)
++            PACKAGE_TYPE="$2"
++            shift 2
++            ;;
++        --package-type=*)
++            PACKAGE_TYPE="${1#*=}"
++            shift
++            ;;
++        --workdir)
++            WORKDIR="$2"
++            shift 2
++            ;;
++        --workdir=*)
++            WORKDIR="${1#*=}"
++            shift
++            ;;
++        --jobs)
++            JOBS="$2"
++            shift 2
++            ;;
++        --jobs=*)
++            JOBS="${1#*=}"
++            shift
++            ;;
++        --only-build)
++            ONLY_BUILD=1
++            shift
++            ;;
++        --only-package)
++            ONLY_PACKAGE=1
++            shift
++            ;;
++        -h|--help)
++            echo "$usage"
++            exit 0
++            ;;
++        *)
++            echo "Unknown arg: $1" >&2
++            echo "$usage" >&2
++            exit 2
++            ;;
++    esac
++done
++
++if [[ "$ONLY_BUILD" == "1" && "$ONLY_PACKAGE" == "1" ]]; then
++    echo "ERROR: --only-build and --only-package are mutually exclusive" >&2
++    exit 2
++fi
++
++case "$ABI" in
++    arm64-v8a|armeabi-v7a|x86_64) ;;
++    *)
++        echo "ERROR: unsupported ABI: $ABI (expected arm64-v8a|armeabi-v7a|x86_64)" >&2
++        exit 2
++        ;;
++esac
++
++case "$PACKAGE_TYPE" in
++    debug|release|nightly) ;;
++    *)
++        echo "ERROR: unsupported --package-type: $PACKAGE_TYPE (expected debug|release|nightly)" >&2
++        exit 2
++        ;;
++esac
++
++DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++ROOT="$(cd "${DIR}/.." && pwd)"
++source "$DIR/find_default_container_file.inc"
++
++if [[ -z "$CONTAINER_NAME" ]]; then
++    CONTAINER_NAME="$(findContainerName)"
++fi
++if [[ -z "$CONTAINER_NAME" ]]; then
++    echo "ERROR: no container specified (use --container NAME or run ./bin/run_container)" >&2
++    exit 1
++fi
++
++LOCK_DIR="$ROOT/persistent/.lock-build-krita-android-${ABI}"
++mkdir -p "$ROOT/persistent"
++if ! mkdir "$LOCK_DIR" 2>/dev/null; then
++    echo "ERROR: Android build already running (lock exists): $LOCK_DIR" >&2
++    echo "If this is stale, remove it and retry: rmdir $LOCK_DIR" >&2
++    exit 3
++fi
++trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
++
++tryStartContainer "$CONTAINER_NAME"
++
++DOCKER_EXEC_OPTS="-i"
++if [[ -t 0 ]]; then
++    DOCKER_EXEC_OPTS="-it"
++fi
++
++KDECI_PACKAGE_PROJECT="teams/ci-artifacts/krita-android-$ABI"
++PERSISTENT_ROOT="/home/appimage/persistent"
++KDECI_CC_CACHE="$PERSISTENT_ROOT/deps/ccache/krita-android/$ABI"
++KDECI_CACHE_PATH="$PERSISTENT_ROOT/deps/cache"
++KDECI_REPO_METADATA_PATH="$PERSISTENT_ROOT/deps/krita-deps-management/repo-metadata"
++CMAKE_TOOLCHAIN_FILE="$PERSISTENT_ROOT/deps/krita-deps-management/tools/android-toolchain-krita.cmake"
++VENV_PATH="$WORKDIR/venv"
++
++read -r -d '' INNER_CMD <<'EOF' || true
++set -euo pipefail
++
++if [[ -f /var/lib/ci-files/setup-environment.sh ]]; then
++  . /var/lib/ci-files/setup-environment.sh
++else
++  echo "ERROR: /var/lib/ci-files/setup-environment.sh not found (are you using the Android CI image?)" >&2
++  exit 1
++fi
++
++export KDECI_ANDROID_ABI="$ABI"
++export KDECI_WORKDIR_PATH="$WORKDIR"
++export KDECI_GITLAB_SERVER="https://invent.kde.org/"
++export KDECI_PACKAGE_PROJECT="$KDECI_PACKAGE_PROJECT"
++export KDECI_CACHE_PATH="$KDECI_CACHE_PATH"
++export KDECI_CC_CACHE="$KDECI_CC_CACHE"
++export KDECI_REPO_METADATA_PATH="$KDECI_REPO_METADATA_PATH"
++export KDECI_COMPRESS_PACKAGES_ON_DOWNLOAD="False"
++export KDECI_SKIP_ECM_ANDROID_TOOLCHAIN="True"
++export CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE"
++export KDECI_BUILD_TYPE="Release"
++export KDECI_EXTRA_CMAKE_ARGS="-DHIDE_SAFE_ASSERTS=OFF -DBUILD_TESTING=ON"
++export KRITACI_ANDROID_PACKAGE_TYPE="$PACKAGE_TYPE"
++export KRITACI_PARALLEL_JOBS="$JOBS"
++
++mkdir -p "$KDECI_CACHE_PATH" "$KDECI_CC_CACHE" "$WORKDIR"
++
++if [[ ! -d "$VENV_PATH" ]]; then
++  python3 -m venv "$VENV_PATH" --upgrade-deps
++fi
++
++. "$VENV_PATH/bin/activate"
++python3 -m pip install -r /home/appimage/persistent/deps/krita-deps-management/requirements.txt
++unset VIRTUAL_ENV
++
++git config --global --add safe.directory /home/appimage/persistent/krita >/dev/null 2>&1 || true
++cd /home/appimage/persistent/krita
++
++KDECI_CONFIG_BAK=""
++restore_kde_ci_config() {
++  if [[ -n "$KDECI_CONFIG_BAK" && -f "$KDECI_CONFIG_BAK" ]]; then
++    mv -f "$KDECI_CONFIG_BAK" .kde-ci.yml
++  fi
++}
++trap restore_kde_ci_config EXIT
++
++if [[ -f .kde-ci.yml ]]; then
++  KDECI_CONFIG_BAK="$(mktemp)"
++  cp -f .kde-ci.yml "$KDECI_CONFIG_BAK"
++fi
++
++python3 -u /home/appimage/persistent/deps/krita-deps-management/tools/generate-deps-file.py \
++  -s /home/appimage/persistent/deps/krita-deps-management/latest/krita-deps.yml \
++  -o .kde-ci.yml
++
++BRANCH_NAME="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo local)"
++PLATFORM_NAME="Android/$ABI/Qt5/Shared"
++
++if [[ "$ONLY_PACKAGE" != "1" ]]; then
++  python3 -u /home/appimage/persistent/deps/krita-deps-management/ci-utilities/run-ci-build.py \
++    --project krita \
++    --branch "$BRANCH_NAME" \
++    --platform "$PLATFORM_NAME" \
++    --only-build \
++    --skip-publishing
++fi
++
++if [[ "$ONLY_BUILD" != "1" ]]; then
++  python3 -u build-tools/ci-scripts/build-android-package.py --package-type "$KRITACI_ANDROID_PACKAGE_TYPE"
++fi
++
++echo "OK: APKs under: $WORKDIR/krita/_packaging/"
++EOF
++
++"$DOCKER_BINARY" exec $DOCKER_EXEC_OPTS \
++  -e ABI="$ABI" \
++  -e WORKDIR="$WORKDIR" \
++  -e JOBS="$JOBS" \
++  -e ONLY_BUILD="$ONLY_BUILD" \
++  -e ONLY_PACKAGE="$ONLY_PACKAGE" \
++  -e PACKAGE_TYPE="$PACKAGE_TYPE" \
++  -e KDECI_PACKAGE_PROJECT="$KDECI_PACKAGE_PROJECT" \
++  -e KDECI_CC_CACHE="$KDECI_CC_CACHE" \
++  -e KDECI_CACHE_PATH="$KDECI_CACHE_PATH" \
++  -e KDECI_REPO_METADATA_PATH="$KDECI_REPO_METADATA_PATH" \
++  -e CMAKE_TOOLCHAIN_FILE="$CMAKE_TOOLCHAIN_FILE" \
++  -e VENV_PATH="$VENV_PATH" \
++  "$CONTAINER_NAME" bash -lc "$INNER_CMD"
+diff --git a/bin/build_image b/bin/build_image
+index 3815766..d3e9573 100755
+--- a/bin/build_image
++++ b/bin/build_image
+@@ -9,6 +9,7 @@ where:\n
+     -s,     --skip-deps          skip unpacking deps\n
+     -a,     --android            build an android image\n
+     -i,     --image              the name or URL of the base image to use\n
++    -n,     --network            docker build --network value (e.g. 'host')\n
+ \n
+ If no IMAGE_NAME is given, it is deduced from the\n 
+ current directory name    
+@@ -31,9 +32,10 @@ fi
+ 
+ DEPS_EXTRA_ARGS=
+ BASE_IMAGE="${BASE_APPIMAGE_IMAGE}"
++DOCKER_BUILD_NETWORK=
+ 
+ # Call getopt to validate the provided input. 
+-options=$(getopt -o ashi: --long skip-deps,help,android,image: -- "$@")
++options=$(getopt -o ashi:n: --long skip-deps,help,android,image:,network: -- "$@")
+ [ $? -eq 0 ] || { 
+     echo "Incorrect options provided"
+     exit 1
+@@ -51,6 +53,10 @@ while true; do
+         shift;
+         BASE_IMAGE=$1
+         ;;
++    -n | --network)
++        shift;
++        DOCKER_BUILD_NETWORK=$1
++        ;;
+     -h | --help)
+         echo -e $usage >&2
+         exit 1
+@@ -70,7 +76,12 @@ if [[ -z ${IMAGE_NAME} ]]; then
+     echo Auto-select image name: ${IMAGE_NAME}
+ fi
+ 
+-${DOCKER_BINARY} build -t $IMAGE_NAME . ${DEPS_EXTRA_ARGS} \
++DOCKER_BUILD_NETWORK_ARG=
++if [[ -n ${DOCKER_BUILD_NETWORK} ]]; then
++    DOCKER_BUILD_NETWORK_ARG="--network=${DOCKER_BUILD_NETWORK}"
++fi
++
++${DOCKER_BINARY} build ${DOCKER_BUILD_NETWORK_ARG} -t $IMAGE_NAME . ${DEPS_EXTRA_ARGS} \
+     --build-arg BASE_IMAGE=$BASE_IMAGE \
+     --build-arg APPIMAGE_UID=$(id -u) \
+     --build-arg APPIMAGE_GID=$(id -g) \
+diff --git a/bin/gmsaas-smoke-android b/bin/gmsaas-smoke-android
+new file mode 100755
+index 0000000..e52dc8e
+--- /dev/null
++++ b/bin/gmsaas-smoke-android
+@@ -0,0 +1,561 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++usage="$(cat <<'USAGE_EOF'
++Usage: gmsaas-smoke-android [OPTIONS]
++
++Run a headless Android smoke test on Genymotion Cloud:
++  - provision instance from a Recipe
++  - install an APK
++  - launch the app
++  - take a screenshot + capture logcat
++  - cleanup (stop instance + stop adb tunnel)
++
++Options:
++  --recipe UUID        Genymotion recipe UUID (default: KRITA_GMSAAS_RECIPE_UUID or krita_tablet_api35 UUID)
++  --apk FILE           APK to install (default: newest ./persistent/wd/krita/_packaging/*.apk)
++  --scenario NAME      Launch with intent extra KRITA_TOUCH_SMOKE=NAME (repeatable)
++  --activity NAME      Activity class name (default: org.krita.android.MainActivity)
++  --out-dir DIR        Output directory (default: ./persistent)
++  --wait SEC           If --scenario is set: max seconds to wait for KRITA_TOUCH_SMOKE_DONE (default: 80).
++                      If no scenario is set: seconds to sleep after launch before screenshot.
++  --no-marker-wait     Do not wait for KRITA_TOUCH_SMOKE_DONE; always sleep --wait seconds.
++  --max-run MIN        Genymotion max run duration in minutes (default: 60)
++  -h, --help           Show help
++
++Environment:
++  KRITA_GMSAAS_RECIPE_UUID   Recipe UUID override
++  GMSAAS_BIN                 Path to gmsaas binary (optional)
++USAGE_EOF
++)"
++
++RECIPE_UUID="${KRITA_GMSAAS_RECIPE_UUID:-6112dd0d-91c9-420d-a2ff-f71a691b9dd8}" # krita_tablet_api35
++APK_PATH=""
++SCENARIOS=()
++ACTIVITY="org.krita.android.MainActivity"
++OUT_DIR="./persistent"
++WAIT_SECS="80"
++MARKER_WAIT_ENABLED="1"
++MAX_RUN_MINS="60"
++START_RETRIES="3"
++
++GMSAAS_ADB_START_TIMEOUT_SECS="90"
++GMSAAS_INSTANCE_START_TIMEOUT_SECS="180"
++GMSAAS_ADBCONNECT_TIMEOUT_SECS="60"
++GMSAAS_INSTANCE_STOP_TIMEOUT_SECS="90"
++GMSAAS_ADB_STOP_TIMEOUT_SECS="30"
++
++ADB_RECONNECT_RETRIES="30"
++ADB_RECONNECT_SLEEP_SECS="4"
++
++ADB_WAIT_FOR_DEVICE_TIMEOUT_SECS="180"
++ADB_INSTALL_TIMEOUT_SECS="420"
++ADB_AM_START_TIMEOUT_SECS="120"
++ADB_SCREENSHOT_TIMEOUT_SECS="30"
++ADB_LOGCAT_DUMP_TIMEOUT_SECS="30"
++ADB_UIAUTOMATOR_TIMEOUT_SECS="20"
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++        --recipe)
++            RECIPE_UUID="$2"
++            shift 2
++            ;;
++        --apk)
++            APK_PATH="$2"
++            shift 2
++            ;;
++        --scenario)
++            SCENARIOS+=("$2")
++            shift 2
++            ;;
++        --activity)
++            ACTIVITY="$2"
++            shift 2
++            ;;
++        --out-dir)
++            OUT_DIR="$2"
++            shift 2
++            ;;
++        --wait)
++            WAIT_SECS="$2"
++            shift 2
++            ;;
++        --no-marker-wait)
++            MARKER_WAIT_ENABLED="0"
++            shift
++            ;;
++        --max-run)
++            MAX_RUN_MINS="$2"
++            shift 2
++            ;;
++        -h|--help)
++            echo "$usage"
++            exit 0
++            ;;
++        *)
++            echo "Unknown arg: $1" >&2
++            echo "$usage" >&2
++            exit 2
++            ;;
++    esac
++done
++
++GMSAAS="${GMSAAS_BIN:-}"
++if [[ -z "$GMSAAS" ]]; then
++    if command -v gmsaas >/dev/null 2>&1; then
++        GMSAAS="gmsaas"
++    elif [[ -x "$HOME/.local/pipx/venvs/gmsaas/bin/gmsaas" ]]; then
++        GMSAAS="$HOME/.local/pipx/venvs/gmsaas/bin/gmsaas"
++    elif [[ -x "$HOME/.venvs/gmsaas/bin/gmsaas" ]]; then
++        GMSAAS="$HOME/.venvs/gmsaas/bin/gmsaas"
++    else
++        echo "ERROR: gmsaas not found (set GMSAAS_BIN or install gmsaas)" >&2
++        exit 1
++    fi
++fi
++
++if ! command -v adb >/dev/null 2>&1; then
++    echo "ERROR: adb not found in PATH" >&2
++    exit 1
++fi
++
++if [[ -z "$APK_PATH" ]]; then
++    shopt -s nullglob
++    candidates=(./persistent/wd/krita/_packaging/*.apk)
++    shopt -u nullglob
++    if [[ ${#candidates[@]} -eq 0 ]]; then
++        echo "ERROR: no APK found under ./persistent/wd/krita/_packaging/*.apk (use --apk FILE)" >&2
++        exit 1
++    fi
++    APK_PATH="$(ls -t "${candidates[@]}" | head -1)"
++fi
++
++if [[ ! -f "$APK_PATH" ]]; then
++    echo "ERROR: APK not found: $APK_PATH" >&2
++    exit 1
++fi
++
++mkdir -p "$OUT_DIR"
++
++IID=""
++SER=""
++MARKER_WAIT_PID=""
++
++now_utc() {
++    date -u +%Y-%m-%dT%H:%M:%SZ
++}
++
++log() {
++    echo "[$(now_utc)] $*"
++}
++
++warn() {
++    echo "[$(now_utc)] WARN: $*" >&2
++}
++
++err() {
++    echo "[$(now_utc)] ERROR: $*" >&2
++}
++
++cleanup() {
++    set +e
++    if [[ -n "${MARKER_WAIT_PID}" ]]; then
++        kill "${MARKER_WAIT_PID}" >/dev/null 2>&1 || true
++        MARKER_WAIT_PID=""
++    fi
++    if [[ -n "$IID" ]]; then
++        run_with_timeout "$GMSAAS_INSTANCE_STOP_TIMEOUT_SECS" "$GMSAAS" instances stop "$IID" >/dev/null 2>&1 || true
++    fi
++    run_with_timeout "$GMSAAS_ADB_STOP_TIMEOUT_SECS" "$GMSAAS" adb stop >/dev/null 2>&1 || true
++}
++trap cleanup EXIT INT TERM HUP
++
++run_with_timeout() {
++    local secs="$1"
++    shift
++    if command -v timeout >/dev/null 2>&1; then
++        timeout "$secs" "$@"
++    else
++        "$@"
++    fi
++}
++
++gmsaas_adb_start() {
++    # Don't let a stuck tunnel/provisioning hang the whole CI job forever.
++    run_with_timeout "$GMSAAS_ADB_START_TIMEOUT_SECS" "$GMSAAS" adb start >/dev/null
++}
++
++start_instance_with_retry() {
++    local base_name="$1"
++
++    local attempt name out code parsed_uuid
++    for attempt in $(seq 1 "$START_RETRIES"); do
++        name="$base_name"
++        if [[ "$attempt" -gt 1 ]]; then
++            name="${base_name}-r${attempt}"
++        fi
++
++        set +e
++        out="$(run_with_timeout "$GMSAAS_INSTANCE_START_TIMEOUT_SECS" "$GMSAAS" instances start "$RECIPE_UUID" "$name" --max-run-duration "$MAX_RUN_MINS" --no-wait 2>&1)"
++        code=$?
++        set -e
++
++        if [[ "$code" -eq 0 ]]; then
++            IID="$(echo "$out" | tail -n1 | tr -d '\r')"
++            if [[ -z "$IID" ]]; then
++                echo "ERROR: Genymotion instance start returned empty UUID (output: $out)" >&2
++                return 10
++            fi
++            return 0
++        fi
++
++        if [[ "$code" -eq 124 ]]; then
++            err "Timed out starting Genymotion instance (timeout=${GMSAAS_INSTANCE_START_TIMEOUT_SECS}s)."
++        fi
++
++        # gmsaas can fail but still report the instance UUID in the error message:
++        # "Error: instance 'UUID' failed to start..."
++        parsed_uuid="$(echo "$out" | sed -nE "s/.*instance '([0-9a-fA-F-]+)'.*/\\1/p" | head -n1 | tr -d '\r')"
++        if [[ -n "$parsed_uuid" ]]; then
++            IID="$parsed_uuid"
++        fi
++
++        echo "$out" >&2
++
++        # Best-effort cleanup so we don't leak an ERROR instance (important for CI).
++        if [[ -n "$IID" ]]; then
++            run_with_timeout "$GMSAAS_INSTANCE_STOP_TIMEOUT_SECS" "$GMSAAS" instances stop "$IID" >/dev/null 2>&1 || true
++            IID=""
++        fi
++
++        if [[ "$attempt" -lt "$START_RETRIES" ]]; then
++            echo "WARN: Genymotion instance failed to start; retrying (${attempt}/${START_RETRIES})..." >&2
++            sleep 4
++        fi
++    done
++
++    echo "ERROR: failed to start Genymotion instance after ${START_RETRIES} attempts" >&2
++    return 10
++}
++
++adbconnect_with_retry() {
++    local attempt out code serial
++    for attempt in $(seq 1 "$ADB_RECONNECT_RETRIES"); do
++        set +e
++        out="$(run_with_timeout "$GMSAAS_ADBCONNECT_TIMEOUT_SECS" "$GMSAAS" instances adbconnect "$IID" 2>&1)"
++        code=$?
++        set -e
++        if [[ "$code" -eq 0 ]]; then
++            serial="$(echo "$out" | tail -n1 | tr -d '\r')"
++            if [[ -n "$serial" ]]; then
++                SER="$serial"
++                return 0
++            fi
++        fi
++        if [[ "$attempt" -eq 1 ]]; then
++            warn "Waiting for Genymotion instance to accept adbconnect..."
++        fi
++        sleep "$ADB_RECONNECT_SLEEP_SECS"
++    done
++    err "Failed to adbconnect to instance $IID after ${ADB_RECONNECT_RETRIES} attempts"
++    return 1
++}
++
++is_adb_missing_device_error() {
++    local path="$1"
++    grep -qiE "(device( '.*')? not found|no devices/emulators found|device offline)" "$path" 2>/dev/null
++}
++
++ensure_adb_serial() {
++    # Reconnect if the adb tunnel dropped and the serial vanished.
++    local tmp_err
++    tmp_err="$(mktemp)"
++    if adb -s "$SER" shell true 2>"$tmp_err" >/dev/null; then
++        rm -f "$tmp_err"
++        return 0
++    fi
++    if is_adb_missing_device_error "$tmp_err"; then
++        warn "adb lost device '$SER'; reconnecting via gmsaas..."
++        rm -f "$tmp_err"
++        gmsaas_adb_start >/dev/null 2>&1 || true
++        adbconnect_with_retry
++        run_with_timeout "$ADB_WAIT_FOR_DEVICE_TIMEOUT_SECS" adb -s "$SER" wait-for-device || true
++        return 0
++    fi
++    cat "$tmp_err" >&2 || true
++    rm -f "$tmp_err"
++    return 1
++}
++
++adb_screencap_to_file() {
++    local out_path="$1"
++    local attempt tmp_err rc
++    for attempt in 1 2; do
++        tmp_err="$(mktemp)"
++        if run_with_timeout "$ADB_SCREENSHOT_TIMEOUT_SECS" adb -s "$SER" exec-out screencap -p >"$out_path" 2>"$tmp_err"; then
++            rm -f "$tmp_err"
++            return 0
++        fi
++        rc=$?
++        if is_adb_missing_device_error "$tmp_err"; then
++            warn "screencap failed due to missing adb device; retrying (${attempt}/2)..."
++            rm -f "$tmp_err"
++            ensure_adb_serial || true
++            continue
++        fi
++        cat "$tmp_err" >&2 || true
++        rm -f "$tmp_err"
++        return "$rc"
++    done
++    return "$rc"
++}
++
++adb_logcat_dump_to_file() {
++    local out_path="$1"
++    local attempt tmp_err rc
++    for attempt in 1 2; do
++        tmp_err="$(mktemp)"
++        if run_with_timeout "$ADB_LOGCAT_DUMP_TIMEOUT_SECS" adb -s "$SER" logcat -d >"$out_path" 2>"$tmp_err"; then
++            rm -f "$tmp_err"
++            return 0
++        fi
++        rc=$?
++        if is_adb_missing_device_error "$tmp_err"; then
++            warn "logcat dump failed due to missing adb device; retrying (${attempt}/2)..."
++            rm -f "$tmp_err"
++            ensure_adb_serial || true
++            continue
++        fi
++        cat "$tmp_err" >&2 || true
++        rm -f "$tmp_err"
++        return "$rc"
++    done
++    return "$rc"
++}
++
++wake_and_unlock() {
++    # Genymotion Cloud instances often boot into the lock screen; if we don't
++    # unlock, screenshots will show the launcher/lockscreen instead of Krita.
++    #
++    # These commands are best-effort; some may fail depending on Android build.
++    adb -s "$SER" shell input keyevent 224 >/dev/null 2>&1 || true # KEYCODE_WAKEUP
++    adb -s "$SER" shell wm dismiss-keyguard >/dev/null 2>&1 || true
++
++    local size
++    size="$(adb -s "$SER" shell wm size 2>/dev/null | tr -d '\r' || true)"
++    if [[ "$size" =~ ([0-9]+)x([0-9]+) ]]; then
++        local w h x y1 y2
++        w="${BASH_REMATCH[1]}"
++        h="${BASH_REMATCH[2]}"
++        x=$((w / 2))
++        y1=$((h * 8 / 10))
++        y2=$((h * 2 / 10))
++        adb -s "$SER" shell input swipe "$x" "$y1" "$x" "$y2" 300 >/dev/null 2>&1 || true
++    else
++        adb -s "$SER" shell input swipe 500 1800 500 200 300 >/dev/null 2>&1 || true
++    fi
++
++    adb -s "$SER" shell input keyevent 82 >/dev/null 2>&1 || true # KEYCODE_MENU
++}
++
++dismiss_viewing_fullscreen_tip() {
++    # Android sometimes shows a first-run system tip overlay:
++    # "Viewing full screen" + "Got it". If we don't dismiss it, screenshots
++    # capture the overlay instead of Krita UI.
++    local xml line bounds
++    if ! run_with_timeout "$ADB_UIAUTOMATOR_TIMEOUT_SECS" adb -s "$SER" shell uiautomator dump /sdcard/uidump.xml >/dev/null 2>&1; then
++        return 0
++    fi
++
++    xml="$(run_with_timeout "$ADB_UIAUTOMATOR_TIMEOUT_SECS" adb -s "$SER" exec-out cat /sdcard/uidump.xml 2>/dev/null | tr -d '\r' || true)"
++    if [[ -z "$xml" ]]; then
++        return 0
++    fi
++
++    if echo "$xml" | grep -qi 'text="Viewing full screen"' && echo "$xml" | grep -qi 'text="Got it"'; then
++        line="$(echo "$xml" | tr -d '\n' | sed -n 's/.*\\(<node[^>]*text="Got it"[^>]*>\\).*/\\1/p')"
++        if [[ -z "$line" ]]; then
++            line="$(echo "$xml" | grep -im1 'text="Got it"' || true)"
++        fi
++        bounds="$(echo "$line" | sed -n 's/.*bounds=\"\\([^\"]*\\)\".*/\\1/p' || true)"
++        if [[ "$bounds" =~ \\[([0-9]+),([0-9]+)\\]\\[([0-9]+),([0-9]+)\\] ]]; then
++            local x y
++            x=$(( (BASH_REMATCH[1] + BASH_REMATCH[3]) / 2 ))
++            y=$(( (BASH_REMATCH[2] + BASH_REMATCH[4]) / 2 ))
++            adb -s "$SER" shell input tap "$x" "$y" >/dev/null 2>&1 || true
++            return 0
++        fi
++    fi
++}
++
++wait_for_touch_smoke_done() {
++    local scenario="$1"
++    local timeout="$2"
++    local marker_file="$3"
++
++    if ! command -v timeout >/dev/null 2>&1; then
++        return 1
++    fi
++
++    local scenario_norm marker
++    scenario_norm="$(echo "$scenario" | tr '[:upper:]' '[:lower:]')"
++    marker="KRITA_TOUCH_SMOKE_DONE scenario=$scenario_norm status="
++
++    # NOTE: don't use pipefail here. When grep finds the marker and exits,
++    # adb logcat is expected to terminate via SIGPIPE; with pipefail enabled
++    # that would incorrectly look like a failure.
++    ( set +o pipefail; timeout "$timeout" adb -s "$SER" logcat -v brief 2>/dev/null | grep -m1 -F "$marker" >"$marker_file" ) &
++    MARKER_WAIT_PID="$!"
++    return 0
++}
++
++log "Using recipe: $RECIPE_UUID"
++log "Using APK: $APK_PATH"
++log "Activity: $ACTIVITY"
++log "Output dir: $OUT_DIR"
++
++gmsaas_adb_start
++
++INSTANCE_NAME="krita-smoke-$(date -u +%Y%m%d-%H%M%S)"
++start_instance_with_retry "$INSTANCE_NAME"
++adbconnect_with_retry
++
++log "Instance UUID: $IID"
++log "ADB serial: $SER"
++
++run_with_timeout "$ADB_WAIT_FOR_DEVICE_TIMEOUT_SECS" adb -s "$SER" wait-for-device || true
++for i in {1..60}; do
++    v="$(adb -s "$SER" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
++    if [[ "$v" == "1" ]]; then
++        break
++    fi
++    sleep 2
++done
++
++adb -s "$SER" shell svc power stayon true >/dev/null 2>&1 || true
++wake_and_unlock
++
++adb -s "$SER" logcat -c || true
++
++run_with_timeout "$ADB_INSTALL_TIMEOUT_SECS" adb -s "$SER" install -r "$APK_PATH"
++
++PKG=""
++for i in {1..10}; do
++    PKG="$(adb -s "$SER" shell pm list packages org.krita | head -1 | cut -d: -f2 | tr -d '\r')"
++    if [[ -n "$PKG" ]]; then
++        break
++    fi
++    sleep 1
++done
++
++if [[ -z "$PKG" ]]; then
++    echo "ERROR: could not detect installed package (expected org.krita*) after install" >&2
++    adb -s "$SER" shell pm list packages | grep -i krita || true
++    exit 1
++fi
++
++if [[ ${#SCENARIOS[@]} -eq 0 ]]; then
++    SCENARIOS+=("")
++fi
++
++total="${#SCENARIOS[@]}"
++idx="0"
++for SCENARIO in "${SCENARIOS[@]}"; do
++    idx=$((idx + 1))
++    OUT_SUFFIX="krita"
++    if [[ -n "$SCENARIO" ]]; then
++        OUT_SUFFIX="krita-$(echo "$SCENARIO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
++        log "[${idx}/${total}] Launching package: $PKG (scenario: $SCENARIO)"
++    else
++        log "[${idx}/${total}] Launching package: $PKG"
++    fi
++
++    ensure_adb_serial || true
++    wake_and_unlock
++
++    adb -s "$SER" shell am force-stop "$PKG" >/dev/null 2>&1 || true
++    adb -s "$SER" logcat -c || true
++
++    MARKER_WAIT_PID=""
++    MARKER_FILE="$(mktemp)"
++    USE_MARKER_WAIT="0"
++    if [[ -n "$SCENARIO" ]]; then
++        if [[ "$MARKER_WAIT_ENABLED" == "1" ]]; then
++            if ! wait_for_touch_smoke_done "$SCENARIO" "$WAIT_SECS" "$MARKER_FILE"; then
++                echo "WARN: timeout(1) not found; falling back to sleep ${WAIT_SECS}s" >&2
++            else
++                USE_MARKER_WAIT="1"
++            fi
++        fi
++    fi
++
++    if [[ -n "$SCENARIO" ]]; then
++        run_with_timeout "$ADB_AM_START_TIMEOUT_SECS" adb -s "$SER" shell am start -W -n "$PKG/$ACTIVITY" --es KRITA_TOUCH_SMOKE "$SCENARIO"
++    else
++        run_with_timeout "$ADB_AM_START_TIMEOUT_SECS" adb -s "$SER" shell am start -W -n "$PKG/$ACTIVITY"
++    fi
++
++    if [[ -n "$SCENARIO" ]]; then
++        if [[ "$USE_MARKER_WAIT" != "1" ]]; then
++            sleep "$WAIT_SECS"
++        elif ! wait "$MARKER_WAIT_PID"; then
++            echo "ERROR: timed out waiting for KRITA_TOUCH_SMOKE_DONE for scenario: $SCENARIO (timeout=${WAIT_SECS}s)" >&2
++            adb -s "$SER" logcat -d > "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
++            exit 1
++        fi
++        MARKER_WAIT_PID=""
++
++        if [[ "$USE_MARKER_WAIT" == "1" ]]; then
++            marker_line="$(tr -d '\r' <"$MARKER_FILE" || true)"
++            if [[ "$marker_line" != *"status=OK"* ]]; then
++                echo "ERROR: touch smoke scenario did not report OK: $marker_line" >&2
++                adb -s "$SER" logcat -d > "$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt" || true
++                exit 1
++            fi
++        fi
++
++        # Small settle time for rendering.
++        sleep 1
++    else
++        sleep "$WAIT_SECS"
++    fi
++
++    rm -f "$MARKER_FILE" >/dev/null 2>&1 || true
++    dismiss_viewing_fullscreen_tip || true
++
++    OUT_PNG="$OUT_DIR/smoke-android-$OUT_SUFFIX.png"
++    OUT_LOG="$OUT_DIR/smoke-android-$OUT_SUFFIX-logcat.txt"
++
++    if ! adb_screencap_to_file "$OUT_PNG"; then
++        err "Failed to capture screenshot (timeout=${ADB_SCREENSHOT_TIMEOUT_SECS}s): $OUT_PNG"
++        rm -f "$OUT_PNG" >/dev/null 2>&1 || true
++        exit 1
++    fi
++
++    if ! adb_logcat_dump_to_file "$OUT_LOG"; then
++        err "Failed to capture logcat (timeout=${ADB_LOGCAT_DUMP_TIMEOUT_SECS}s): $OUT_LOG"
++        rm -f "$OUT_LOG" >/dev/null 2>&1 || true
++        exit 1
++    fi
++
++    if [[ ! -s "$OUT_PNG" ]]; then
++        echo "ERROR: screenshot is empty: $OUT_PNG" >&2
++        exit 1
++    fi
++
++    if grep -q "FATAL EXCEPTION" "$OUT_LOG" && grep -q "Process: $PKG" "$OUT_LOG"; then
++        echo "ERROR: detected app crash (FATAL EXCEPTION) for $PKG" >&2
++        grep -nE "FATAL EXCEPTION|Process: $PKG" "$OUT_LOG" | tail -50 >&2 || true
++        exit 1
++    fi
++
++    if grep -q "ANR in $PKG" "$OUT_LOG"; then
++        echo "ERROR: detected ANR for $PKG" >&2
++        grep -nE "ANR in $PKG" "$OUT_LOG" | tail -50 >&2 || true
++        exit 1
++    fi
++
++    log "Saved screenshot: $OUT_PNG"
++    log "Saved logcat: $OUT_LOG"
++done
+diff --git a/bin/krita-xvfb b/bin/krita-xvfb
+new file mode 100755
+index 0000000..70374f7
+--- /dev/null
++++ b/bin/krita-xvfb
+@@ -0,0 +1,61 @@
++#!/bin/bash
++
++usage=\
++"Usage: $(basename "$0") [OPTION]... [--] [KRITA_ARGS...]\n
++Run Krita under Xvfb inside the current container\n
++\n
++where:\n
++    -h,      --help              show this help text\n
++    -c NAME, --container=NAME    container name (defaults to .container_name)\n
++    -s RES,  --screen=RES        Xvfb screen, default: 1280x720x24\n
++"
++
++SCREEN="1280x720x24"
++CONTAINER_NAME=
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++    -h | --help)
++        echo -e "$usage" >&2
++        exit 0
++        ;;
++    -c | --container)
++        CONTAINER_NAME="$2"
++        shift 2
++        ;;
++    -s | --screen)
++        SCREEN="$2"
++        shift 2
++        ;;
++    --)
++        shift
++        break
++        ;;
++    *)
++        break
++        ;;
++    esac
++done
++
++DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++source ${DIR}/find_default_container_file.inc
++
++if [[ -z ${CONTAINER_NAME} ]]; then
++    CONTAINER_NAME=$(findContainerName)
++fi
++
++if [[ -z ${CONTAINER_NAME} ]]; then
++    echo "ERROR: container name was not provided and .container_name was not found" >&2
++    exit 1
++fi
++
++tryStartContainer "${CONTAINER_NAME}"
++
++DOCKER_EXEC_OPTS="-i"
++if [[ -t 0 ]]; then
++    DOCKER_EXEC_OPTS="-it"
++fi
++
++${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} "${CONTAINER_NAME}" bash -lc \
++    'source /home/appimage/devenv.inc && xvfb-run -a -s "-screen 0 '"${SCREEN}"'" "$KRITADIR/bin/krita" "$@"' \
++    bash "$@"
+diff --git a/bin/krita-xvfb-screenshot b/bin/krita-xvfb-screenshot
+new file mode 100755
+index 0000000..1c2be60
+--- /dev/null
++++ b/bin/krita-xvfb-screenshot
+@@ -0,0 +1,129 @@
++#!/bin/bash
++
++usage=\
++"Usage: $(basename "$0") [OPTION]... [--] [KRITA_ARGS...]\n
++Run Krita under Xvfb and save a screenshot into ./persistent/\n
++\n
++	where:\n
++	    -h,      --help              show this help text\n
++	    -c NAME, --container=NAME    container name (defaults to .container_name)\n
++	    -o FILE, --output=FILE       output filename (default: krita-xvfb.png)\n
++	    -l FILE, --log=FILE          log filename (default: <output>-log.txt)\n
++	    -s RES,  --screen=RES        Xvfb screen (default: 1280x720x24)\n
++	    -w SEC,  --wait=SEC          seconds to wait before screenshot (default: 20)\n
++"
++
++SCREEN="1280x720x24"
++WAIT_SECS="20"
++OUT_FILE="krita-xvfb.png"
++LOG_FILE=""
++CONTAINER_NAME=
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++    -h | --help)
++        echo -e "$usage" >&2
++        exit 0
++        ;;
++    -c | --container)
++        CONTAINER_NAME="$2"
++        shift 2
++        ;;
++    -o | --output)
++        OUT_FILE="$2"
++        shift 2
++        ;;
++	    --output=*)
++	        OUT_FILE="${1#*=}"
++	        shift
++	        ;;
++	    -l | --log)
++	        LOG_FILE="$2"
++	        shift 2
++	        ;;
++	    --log=*)
++	        LOG_FILE="${1#*=}"
++	        shift
++	        ;;
++	    -s | --screen)
++	        SCREEN="$2"
++	        shift 2
++        ;;
++    --screen=*)
++        SCREEN="${1#*=}"
++        shift
++        ;;
++    -w | --wait)
++        WAIT_SECS="$2"
++        shift 2
++        ;;
++    --wait=*)
++        WAIT_SECS="${1#*=}"
++        shift
++        ;;
++    --container=*)
++        CONTAINER_NAME="${1#*=}"
++        shift
++        ;;
++    --)
++        shift
++        break
++        ;;
++    *)
++        break
++        ;;
++    esac
++done
++
++DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++source ${DIR}/find_default_container_file.inc
++
++if [[ -z ${CONTAINER_NAME} ]]; then
++    CONTAINER_NAME=$(findContainerName)
++fi
++
++if [[ -z ${CONTAINER_NAME} ]]; then
++    echo "ERROR: container name was not provided and .container_name was not found" >&2
++    exit 1
++fi
++
++tryStartContainer "${CONTAINER_NAME}"
++
++DOCKER_EXEC_OPTS="-i"
++if [[ -t 0 ]]; then
++    DOCKER_EXEC_OPTS="-it"
++fi
++
++if [[ -z ${LOG_FILE} ]]; then
++    base="${OUT_FILE}"
++    if [[ "${base}" == *.* ]]; then
++        base="${base%.*}"
++    fi
++    LOG_FILE="${base}-log.txt"
++fi
++
++${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} "${CONTAINER_NAME}" bash -lc \
++    'source /home/appimage/devenv.inc && \
++     xvfb-run -a -s "-screen 0 '"${SCREEN}"'" bash -lc '\'' \
++         source /home/appimage/devenv.inc; \
++         export LIBGL_ALWAYS_SOFTWARE=1; \
++         OUT_PATH="/home/appimage/persistent/'"${OUT_FILE}"'"; \
++         LOG_PATH="/home/appimage/persistent/'"${LOG_FILE}"'"; \
++         rm -f "$OUT_PATH"; \
++         rm -f "$LOG_PATH"; \
++         "$KRITADIR/bin/krita" --nosplash --new-image RGBA,U8,512,512 "$@" >"$LOG_PATH" 2>&1 & \
++         pid=$!; \
++         start=$SECONDS; \
++         while (( SECONDS - start < '"${WAIT_SECS}"' )); do \
++             if grep -q "KRITA_TOUCH_SMOKE_DONE" "$LOG_PATH" 2>/dev/null; then \
++                 break; \
++             fi; \
++             sleep 0.2; \
++         done; \
++         scrot "$OUT_PATH"; \
++         kill $pid 2>/dev/null || true; \
++         wait $pid 2>/dev/null || true; \
++         echo "Saved screenshot to: $OUT_PATH"; \
++         echo "Saved log to: $LOG_PATH" \
++     '\'' bash "$@"' \
++    bash "$@"
+diff --git a/bin/krita-xvfb-smoke-touch b/bin/krita-xvfb-smoke-touch
+new file mode 100755
+index 0000000..84bc0fb
+--- /dev/null
++++ b/bin/krita-xvfb-smoke-touch
+@@ -0,0 +1,91 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++usage="$(cat <<'USAGE_EOF'
++Usage: krita-xvfb-smoke-touch [OPTIONS]
++
++Run a batch of headless Linux touch smoke scenarios under Xvfb, saving one
++screenshot per scenario into ./persistent/.
++
++Options:
++  --container NAME     Container name (default: .container_name)
++  --wait SEC           Seconds to wait before screenshot per scenario (default: 10)
++  --scenario NAME      Scenario to run (repeatable). Default: built-in list.
++  -h, --help           Show help
++
++Scenarios are passed as: krita --touch-smoke=<scenario>
++USAGE_EOF
++)"
++
++CONTAINER_NAME=""
++WAIT_SECS="10"
++SCENARIOS=()
++
++while [[ $# -gt 0 ]]; do
++    case "$1" in
++        --container)
++            CONTAINER_NAME="$2"
++            shift 2
++            ;;
++        --container=*)
++            CONTAINER_NAME="${1#*=}"
++            shift
++            ;;
++        --wait)
++            WAIT_SECS="$2"
++            shift 2
++            ;;
++        --wait=*)
++            WAIT_SECS="${1#*=}"
++            shift
++            ;;
++        --scenario)
++            SCENARIOS+=("$2")
++            shift 2
++            ;;
++        -h|--help)
++            echo "$usage"
++            exit 0
++            ;;
++        *)
++            echo "Unknown arg: $1" >&2
++            echo "$usage" >&2
++            exit 2
++            ;;
++    esac
++done
++
++DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
++
++if [[ ${#SCENARIOS[@]} -eq 0 ]]; then
++    SCENARIOS+=("top-bar")
++    SCENARIOS+=("touch-sidebar")
++    SCENARIOS+=("selection-tool")
++    SCENARIOS+=("transform-tool")
++    SCENARIOS+=("layers-panel")
++    SCENARIOS+=("layer-options")
++    SCENARIOS+=("color-panel")
++    SCENARIOS+=("colordrop")
++    SCENARIOS+=("quickshape")
++    SCENARIOS+=("actions-sheet")
++    SCENARIOS+=("gesture-controls")
++    SCENARIOS+=("quickmenu")
++    SCENARIOS+=("quickmenu-setup")
++    SCENARIOS+=("copypaste")
++fi
++
++for SCENARIO in "${SCENARIOS[@]}"; do
++    slug="$(echo "$SCENARIO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
++    out_file="smoke-linux-krita-${slug}.png"
++    log_file="smoke-linux-krita-${slug}-log.txt"
++    args=(--output="$out_file" --log="$log_file" --wait="$WAIT_SECS")
++    if [[ -n "$CONTAINER_NAME" ]]; then
++        args+=(--container="$CONTAINER_NAME")
++    fi
++
++    "$DIR/krita-xvfb-screenshot" "${args[@]}" -- --touch-smoke="$SCENARIO"
++    test -s "$DIR/../persistent/$out_file"
++    test -s "$DIR/../persistent/$log_file"
++done
++
++echo "OK: wrote ${#SCENARIOS[@]} screenshots under ./persistent/"
+diff --git a/bin/run_container b/bin/run_container
+index 2ea7d3d..49aeb79 100755
+--- a/bin/run_container
++++ b/bin/run_container
+@@ -6,20 +6,28 @@ Run container for the specified image\n
+ \n
+ where:\n
+     -h,      --help              show this help text\n
++    -n,      --network           docker run --network value (e.g. 'host')\n
+ \n
+ If no IMAGE_NAME or CONTAINER_NAME is given, they are\n
+ deduced from the current directory name
+ "
+ 
+ # Call getopt to validate the provided input. 
+-options=$(getopt -o h --long help -- "$@")
++options=$(getopt -o hn: --long help,network: -- "$@")
+ [ $? -eq 0 ] || { 
+     echo "Incorrect options provided"
+     exit 1
+ }
+ eval set -- "$options"
++
++DOCKER_RUN_NETWORK=
+ while true; do
+     case "$1" in
++    -n | --network)
++        DOCKER_RUN_NETWORK=$2
++        shift 2
++        continue
++        ;;
+     -h | --help)
+         echo -e $usage >&2
+         exit 1
+@@ -63,6 +71,11 @@ if [[ -e /dev/kvm ]]; then
+    KVM_OPTS+="--device /dev/kvm"
+ fi
+ 
++DRI_OPTS=
++if [[ -e /dev/dri ]]; then
++   DRI_OPTS+="--device /dev/dri"
++fi
++
+ WAYLAND_OPTS=
+ if [[ -e $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY ]]; then
+    WAYLAND_OPTS+="-e XDG_RUNTIME_DIR=/tmp/xdg-runtime/ -e WAYLAND_DISPLAY=$WAYLAND_DISPLAY -v $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY:/tmp/xdg-runtime/$WAYLAND_DISPLAY"
+@@ -87,6 +100,11 @@ if [[ -n $XAUTHORITY ]]; then
+         -e XAUTHORITY=/tmp/krita-docker-xauth"
+ fi
+ 
++NETWORK_OPTS=
++if [[ -n ${DOCKER_RUN_NETWORK} ]]; then
++    NETWORK_OPTS="--network=${DOCKER_RUN_NETWORK}"
++fi
++
+ ${DOCKER_BINARY} run -P -t -d \
+   $EXTRA_DOCKER_MOUNTS \
+   -v $(pwd)/persistent/:/home/appimage/persistent/:rw \
+@@ -97,15 +115,13 @@ ${DOCKER_BINARY} run -P -t -d \
+   --cap-add=SYS_PTRACE \
+   --security-opt seccomp=unconfined \
+   --security-opt label=type:container_runtime_t \
+-  --device /dev/dri \
++  $DRI_OPTS \
+   $X11_OPTS \
+   $PULSE_OPTS \
+   $NVIDIA_OPTS \
+   $KVM_OPTS \
++  $NETWORK_OPTS \
+   --name $CONTAINER_NAME \
+   $IMAGE_NAME || exit 1
+ 
+-if [ ! -f .container_name ]; then
+-    echo $CONTAINER_NAME > .container_name
+-fi
+-
++echo $CONTAINER_NAME > .container_name
+diff --git a/default-home/devenv.inc b/default-home/devenv.inc
+index 0158336..80a52f0 100644
+--- a/default-home/devenv.inc
++++ b/default-home/devenv.inc
+@@ -27,8 +27,8 @@ prepend PYTHONPATH $DEPSDIR/sip
+ 
+ prepend PATH ~/tools/bin
+ 
+-prepend EXTERNALS_DOWNLOAD_DIR=/home/appimage/persistent/downloads
+-mkdir -p /home/appimage/persistent/downloads
++export EXTERNALS_DOWNLOAD_DIR=/home/appimage/persistent/downloads
++mkdir -p $EXTERNALS_DOWNLOAD_DIR
+ 
+ # Disable leak checks in case ASAN is used.
+ # It takes a lot of time to finalize the leaks 
+diff --git a/plan.md b/plan.md
+new file mode 120000
+index 0000000..274ee44
+--- /dev/null
++++ b/plan.md
+@@ -0,0 +1 @@
++persistent/krita/plan.md
+\ No newline at end of file
+-- 
+2.52.0
+
