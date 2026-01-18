@@ -80,10 +80,11 @@ This plan lives in the Krita fork:
 
 - Docker wrapper repo (`~/dev/krita/krita-docker-setup/`):
   - branch: `infra/smoke-tests`
-  - local HEAD commit: `0c1a411` (`infra: headless smoke helpers + docs`)
+  - local HEAD commit: `ba208b5` (`smoke: make gmsaas marker wait non-hanging`)
   - push: `git -C ~/dev/krita/krita-docker-setup push -u origin infra/smoke-tests`
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
   - branch: `touch/procreate-mvp`
+  - local HEAD commit: `bb8e957946` (`touch: procreate-mvp baseline`)
 
 ### Present in working tree (WIP)
 
