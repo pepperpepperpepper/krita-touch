@@ -21,7 +21,7 @@ We drive the work via **small, shippable milestones**, each with:
 
 ## Table of Contents
 
-- 0) Current Snapshot (as of 2026‑01‑18)
+- 0) Current Snapshot (as of 2026‑01‑19)
 - 1) Goals / Non‑Goals / Principles
 - 2) Repo Layout + Branching
 - 3) Build & Test Workflow (Docker)
@@ -34,7 +34,7 @@ We drive the work via **small, shippable milestones**, each with:
 
 ---
 
-## 0) Current Snapshot (as of 2026‑01‑18)
+## 0) Current Snapshot (as of 2026‑01‑19)
 
 ### Host + constraints
 
@@ -145,6 +145,9 @@ These items exist locally and should be treated as our baseline direction:
   - `~/dev/krita/krita-docker-setup/bin/krita-xvfb-smoke-touch` (batch scenarios)
   - Important: it now correctly forwards `--touch-smoke=<scenario>` into Krita (previously args were lost inside nested `bash -lc`)
   - Validation (2026‑01‑17): `./bin/krita-xvfb-smoke-touch` produced non-empty PNGs for all default scenarios
+  - Validation (2026‑01‑19): AppImage smoke suite succeeded for all default scenarios:
+    - `./bin/krita-xvfb-smoke-touch --appimage persistent/krita-5.3.0-prealpha-9ea56e7bd4-x86_64.AppImage --wait 45`
+    - outputs: `persistent/smoke-linux-appimage-*.png` + `persistent/smoke-linux-appimage-*-log.txt`
 - Procreate-like touch sidebar (implemented by evolving Krita’s existing Touch Docker plugin):
   - `plugins/dockers/touchdocker/TouchDockerWidget.{ui,h,cpp}`
   - Large Undo/Redo + vertical Size/Opacity sliders + “Modify” button (mapped to Color Sampler tool)
@@ -548,6 +551,20 @@ cd ~/dev/krita/krita-docker-setup
 ./bin/krita-xvfb-smoke-touch --wait=8
 ```
 
+Run against a shipped AppImage:
+
+```bash
+cd ~/dev/krita/krita-docker-setup
+./bin/krita-xvfb-screenshot --appimage persistent/krita-5.3.0-prealpha-9ea56e7bd4-x86_64.AppImage --output=smoke-linux-appimage-top-bar.png --log=smoke-linux-appimage-top-bar-log.txt --wait=20 -- --touch-smoke=top-bar
+test -s persistent/smoke-linux-appimage-top-bar.png
+test -s persistent/smoke-linux-appimage-top-bar-log.txt
+```
+
+```bash
+cd ~/dev/krita/krita-docker-setup
+./bin/krita-xvfb-smoke-touch --appimage persistent/krita-5.3.0-prealpha-9ea56e7bd4-x86_64.AppImage --wait=45
+```
+
 ### 4.3 Upload screenshots (wtf-upload)
 
 `wtf-upload` is available in `$PATH` and uploads files to S3, printing a public `https://` URL per file.
@@ -558,6 +575,8 @@ Examples:
 cd ~/dev/krita/krita-docker-setup
 wtf-upload persistent/smoke-linux-krita-*.png
 wtf-upload persistent/smoke-linux-krita-*-log.txt
+wtf-upload persistent/smoke-linux-appimage-*.png
+wtf-upload persistent/smoke-linux-appimage-*-log.txt
 wtf-upload persistent/smoke-android-krita-*.png
 wtf-upload persistent/smoke-android-krita-*-logcat.txt
 ```
@@ -651,6 +670,23 @@ Linux:
 - `quickmenu`: https://tmp.uh-oh.wtf/2026/01/18/e63ce45d-smoke-linux-krita-quickmenu.png (log: https://tmp.uh-oh.wtf/2026/01/18/f936f6e3-smoke-linux-krita-quickmenu-log.txt)
 - `quickmenu-setup`: https://tmp.uh-oh.wtf/2026/01/18/bd123ce5-smoke-linux-krita-quickmenu-setup.png (log: https://tmp.uh-oh.wtf/2026/01/18/a51713d1-smoke-linux-krita-quickmenu-setup-log.txt)
 - `copypaste`: https://tmp.uh-oh.wtf/2026/01/18/e169754d-smoke-linux-krita-copypaste.png (log: https://tmp.uh-oh.wtf/2026/01/18/87431ea6-smoke-linux-krita-copypaste-log.txt)
+
+Linux AppImage (2026‑01‑19):
+
+- `top-bar`: https://tmp.uh-oh.wtf/2026/01/19/38207d63-smoke-linux-appimage-top-bar.png (log: https://tmp.uh-oh.wtf/2026/01/19/765e18b7-smoke-linux-appimage-top-bar-log.txt)
+- `touch-sidebar`: https://tmp.uh-oh.wtf/2026/01/19/9ea17176-smoke-linux-appimage-touch-sidebar.png (log: https://tmp.uh-oh.wtf/2026/01/19/0cd6cd9f-smoke-linux-appimage-touch-sidebar-log.txt)
+- `selection-tool`: https://tmp.uh-oh.wtf/2026/01/19/aca4492a-smoke-linux-appimage-selection-tool.png (log: https://tmp.uh-oh.wtf/2026/01/19/df9e8d60-smoke-linux-appimage-selection-tool-log.txt)
+- `transform-tool`: https://tmp.uh-oh.wtf/2026/01/19/5e73b1be-smoke-linux-appimage-transform-tool.png (log: https://tmp.uh-oh.wtf/2026/01/19/552fc46b-smoke-linux-appimage-transform-tool-log.txt)
+- `layers-panel`: https://tmp.uh-oh.wtf/2026/01/19/efa23c04-smoke-linux-appimage-layers-panel.png (log: https://tmp.uh-oh.wtf/2026/01/19/c77f0afc-smoke-linux-appimage-layers-panel-log.txt)
+- `layer-options`: https://tmp.uh-oh.wtf/2026/01/19/e9d69b77-smoke-linux-appimage-layer-options.png (log: https://tmp.uh-oh.wtf/2026/01/19/0428bb42-smoke-linux-appimage-layer-options-log.txt)
+- `color-panel`: https://tmp.uh-oh.wtf/2026/01/19/78683ddd-smoke-linux-appimage-color-panel.png (log: https://tmp.uh-oh.wtf/2026/01/19/79ee2abb-smoke-linux-appimage-color-panel-log.txt)
+- `colordrop`: https://tmp.uh-oh.wtf/2026/01/19/7fcd2293-smoke-linux-appimage-colordrop.png (log: https://tmp.uh-oh.wtf/2026/01/19/4d7d286d-smoke-linux-appimage-colordrop-log.txt)
+- `quickshape`: https://tmp.uh-oh.wtf/2026/01/19/79ca03ee-smoke-linux-appimage-quickshape.png (log: https://tmp.uh-oh.wtf/2026/01/19/7604d206-smoke-linux-appimage-quickshape-log.txt)
+- `actions-sheet`: https://tmp.uh-oh.wtf/2026/01/19/cfffe1ab-smoke-linux-appimage-actions-sheet.png (log: https://tmp.uh-oh.wtf/2026/01/19/fd10a082-smoke-linux-appimage-actions-sheet-log.txt)
+- `gesture-controls`: https://tmp.uh-oh.wtf/2026/01/19/bb420c73-smoke-linux-appimage-gesture-controls.png (log: https://tmp.uh-oh.wtf/2026/01/19/0487f42c-smoke-linux-appimage-gesture-controls-log.txt)
+- `quickmenu`: https://tmp.uh-oh.wtf/2026/01/19/395e8650-smoke-linux-appimage-quickmenu.png (log: https://tmp.uh-oh.wtf/2026/01/19/ae561d9b-smoke-linux-appimage-quickmenu-log.txt)
+- `quickmenu-setup`: https://tmp.uh-oh.wtf/2026/01/19/1ea238bd-smoke-linux-appimage-quickmenu-setup.png (log: https://tmp.uh-oh.wtf/2026/01/19/ed969dc3-smoke-linux-appimage-quickmenu-setup-log.txt)
+- `copypaste`: https://tmp.uh-oh.wtf/2026/01/19/7760cbbd-smoke-linux-appimage-copypaste.png (log: https://tmp.uh-oh.wtf/2026/01/19/8880df12-smoke-linux-appimage-copypaste-log.txt)
 
 ### 4.4 Android smoke commands (Genymotion Cloud)
 

@@ -264,10 +264,11 @@ for lib in $APPDIR/usr/lib/$PYTHON_VER/lib-dynload/*.so*; do
   patchelf --set-rpath '$ORIGIN/../..' $lib;
 done
 
-if [[ -n $KRITACI_ALLOW_NO_PYQT && ! -f $APPDIR/usr/lib/krita-python-libs/PyKrita/krita.so ]]; then
-  echo "WARNING: not found $APPDIR/usr/lib/krita-python-libs/PyKrita/krita.so, skipping..."
+PYKRITA_SO="$APPDIR/usr/lib/krita-python-libs/PyKrita/krita.so"
+if [[ -f "$PYKRITA_SO" ]]; then
+  patchelf --set-rpath '$ORIGIN/../..' "$PYKRITA_SO"
 else
-  patchelf --set-rpath '$ORIGIN/../..' $APPDIR/usr/lib/krita-python-libs/PyKrita/krita.so
+  echo "WARNING: not found $PYKRITA_SO, skipping..."
 fi
 
 if [ -f $APPDIR/usr/lib/$PYTHON_VER/site-packages/$PYQT_VER/sip.so ] ; then
@@ -339,7 +340,10 @@ if [ -n "$STRIP_APPIMAGE" ]; then
     rm -f $TEMPFILE
 fi
 
-EXTRA_PLUGINS_LIST="$PLUGINS,$APPDIR/usr/lib/krita-python-libs/PyKrita/krita.so"
+EXTRA_PLUGINS_LIST="$PLUGINS"
+if [[ -f "$PYKRITA_SO" ]]; then
+  EXTRA_PLUGINS_LIST="$EXTRA_PLUGINS_LIST,$PYKRITA_SO"
+fi
 
 if [ -f $DEPS_INSTALL_PREFIX/plugins/platforms/libqwayland-generic.so ]; then
   EXTRA_PLATFORM_PLUGINS="platforms/libqwayland-generic.so,wayland-shell-integration/libxdg-shell.so,wayland-graphics-integration-client/libqt-plugin-wayland-egl.so"
