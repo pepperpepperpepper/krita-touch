@@ -1,0 +1,238 @@
+From c7d7b5ad3b2475b0a782cb85f52c35eda57085fe Mon Sep 17 00:00:00 2001
+From: yo momma <shutup@oops.wtf>
+Date: Mon, 19 Jan 2026 17:42:32 +0000
+Subject: [PATCH 3/3] smoke: support running shipped AppImages
+
+---
+ bin/build_appimage         |  11 +++-
+ bin/krita-xvfb-screenshot  | 117 +++++++++++++++++++++++++++++--------
+ bin/krita-xvfb-smoke-touch |  21 ++++++-
+ 3 files changed, 120 insertions(+), 29 deletions(-)
+
+diff --git a/bin/build_appimage b/bin/build_appimage
+index 31b4144..c44b255 100755
+--- a/bin/build_appimage
++++ b/bin/build_appimage
+@@ -52,8 +52,15 @@ fi
+ 
+ tryStartContainer $container_name
+ 
++DOCKER_EXEC_OPTS="-i"
++if [[ -t 0 ]]; then
++    DOCKER_EXEC_OPTS="-it"
++fi
++
+ if [ $INCLUDE_DEBUG_SYMBOLS -eq 0 ]; then
+-    ${DOCKER_BINARY} exec -ti ${container_name} bash -i -c "cd /home/appimage && ~/bin/build_krita_appimage.sh -j$JOBS"
++    ${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage && ~/bin/build_krita_appimage.sh -j$JOBS"
+ else
+-    ${DOCKER_BINARY} exec -ti ${container_name} bash -i -c "cd /home/appimage && ~/bin/build_krita_appimage.sh -j$JOBS --debug"
++    ${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} ${container_name} \
++        bash -lc "source /home/appimage/devenv.inc && cd /home/appimage && ~/bin/build_krita_appimage.sh -j$JOBS --debug"
+ fi
+diff --git a/bin/krita-xvfb-screenshot b/bin/krita-xvfb-screenshot
+index 1c2be60..a10ddc5 100755
+--- a/bin/krita-xvfb-screenshot
++++ b/bin/krita-xvfb-screenshot
+@@ -7,6 +7,7 @@ Run Krita under Xvfb and save a screenshot into ./persistent/\n
+ 	where:\n
+ 	    -h,      --help              show this help text\n
+ 	    -c NAME, --container=NAME    container name (defaults to .container_name)\n
++	    -a FILE, --appimage=FILE     run a shipped AppImage instead of the in-tree build\n
+ 	    -o FILE, --output=FILE       output filename (default: krita-xvfb.png)\n
+ 	    -l FILE, --log=FILE          log filename (default: <output>-log.txt)\n
+ 	    -s RES,  --screen=RES        Xvfb screen (default: 1280x720x24)\n
+@@ -18,6 +19,7 @@ WAIT_SECS="20"
+ OUT_FILE="krita-xvfb.png"
+ LOG_FILE=""
+ CONTAINER_NAME=
++APPIMAGE_PATH=""
+ 
+ while [[ $# -gt 0 ]]; do
+     case "$1" in
+@@ -29,6 +31,14 @@ while [[ $# -gt 0 ]]; do
+         CONTAINER_NAME="$2"
+         shift 2
+         ;;
++    -a | --appimage)
++        APPIMAGE_PATH="$2"
++        shift 2
++        ;;
++    --appimage=*)
++        APPIMAGE_PATH="${1#*=}"
++        shift
++        ;;
+     -o | --output)
+         OUT_FILE="$2"
+         shift 2
+@@ -102,28 +112,85 @@ if [[ -z ${LOG_FILE} ]]; then
+     LOG_FILE="${base}-log.txt"
+ fi
+ 
+-${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} "${CONTAINER_NAME}" bash -lc \
+-    'source /home/appimage/devenv.inc && \
+-     xvfb-run -a -s "-screen 0 '"${SCREEN}"'" bash -lc '\'' \
+-         source /home/appimage/devenv.inc; \
+-         export LIBGL_ALWAYS_SOFTWARE=1; \
+-         OUT_PATH="/home/appimage/persistent/'"${OUT_FILE}"'"; \
+-         LOG_PATH="/home/appimage/persistent/'"${LOG_FILE}"'"; \
+-         rm -f "$OUT_PATH"; \
+-         rm -f "$LOG_PATH"; \
+-         "$KRITADIR/bin/krita" --nosplash --new-image RGBA,U8,512,512 "$@" >"$LOG_PATH" 2>&1 & \
+-         pid=$!; \
+-         start=$SECONDS; \
+-         while (( SECONDS - start < '"${WAIT_SECS}"' )); do \
+-             if grep -q "KRITA_TOUCH_SMOKE_DONE" "$LOG_PATH" 2>/dev/null; then \
+-                 break; \
+-             fi; \
+-             sleep 0.2; \
+-         done; \
+-         scrot "$OUT_PATH"; \
+-         kill $pid 2>/dev/null || true; \
+-         wait $pid 2>/dev/null || true; \
+-         echo "Saved screenshot to: $OUT_PATH"; \
+-         echo "Saved log to: $LOG_PATH" \
+-     '\'' bash "$@"' \
+-    bash "$@"
++APPIMAGE_CONTAINER_PATH=""
++if [[ -n "${APPIMAGE_PATH}" ]]; then
++    if [[ "${APPIMAGE_PATH}" == /home/appimage/* ]]; then
++        APPIMAGE_CONTAINER_PATH="${APPIMAGE_PATH}"
++    else
++        host_persistent_dir="$(realpath "${DIR}/../persistent")"
++        host_path="${APPIMAGE_PATH}"
++        if [[ "${host_path}" != /* ]]; then
++            host_path="$(realpath "${DIR}/../${host_path}")"
++        fi
++        if [[ "${host_path}" != ${host_persistent_dir}/* ]]; then
++            echo "ERROR: --appimage must be under ./persistent/ so it is visible in the container mount." >&2
++            echo "  got: ${APPIMAGE_PATH}" >&2
++            echo "  expected: ${host_persistent_dir}/..." >&2
++            exit 2
++        fi
++        rel="${host_path#${host_persistent_dir}/}"
++        APPIMAGE_CONTAINER_PATH="/home/appimage/persistent/${rel}"
++    fi
++fi
++
++${DOCKER_BINARY} exec ${DOCKER_EXEC_OPTS} "${CONTAINER_NAME}" bash -s -- \
++    "${SCREEN}" "${WAIT_SECS}" "${OUT_FILE}" "${LOG_FILE}" "${APPIMAGE_CONTAINER_PATH}" "$@" <<'EOF'
++set -eo pipefail
++
++SCREEN="$1"; shift
++WAIT_SECS="$1"; shift
++OUT_FILE="$1"; shift
++LOG_FILE="$1"; shift
++APPIMAGE_PATH="$1"; shift
++
++OUT_PATH="/home/appimage/persistent/${OUT_FILE}"
++LOG_PATH="/home/appimage/persistent/${LOG_FILE}"
++
++rm -f "$OUT_PATH" "$LOG_PATH"
++
++if [[ -n "${APPIMAGE_PATH}" ]]; then
++    if [[ ! -x "${APPIMAGE_PATH}" ]]; then
++        echo "ERROR: AppImage not found or not executable in container: ${APPIMAGE_PATH}" >&2
++        exit 1
++    fi
++fi
++
++xvfb-run -a -s "-screen 0 ${SCREEN}" bash -s -- \
++    "${WAIT_SECS}" "${OUT_PATH}" "${LOG_PATH}" "${APPIMAGE_PATH}" "$@" <<'INNER_EOF'
++set -eo pipefail
++
++WAIT_SECS="$1"; shift
++OUT_PATH="$1"; shift
++LOG_PATH="$1"; shift
++APPIMAGE_PATH="$1"; shift
++
++export LIBGL_ALWAYS_SOFTWARE=1
++
++if [[ -n "${APPIMAGE_PATH}" ]]; then
++    unset LD_LIBRARY_PATH APPDIR APPIMAGE
++    "${APPIMAGE_PATH}" --appimage-extract-and-run --nosplash --new-image RGBA,U8,512,512 "$@" >"$LOG_PATH" 2>&1 &
++else
++    set +e
++    source /home/appimage/devenv.inc
++    set -e
++    "${KRITADIR}/bin/krita" --nosplash --new-image RGBA,U8,512,512 "$@" >"$LOG_PATH" 2>&1 &
++fi
++
++pid=$!
++start=$SECONDS
++while (( SECONDS - start < WAIT_SECS )); do
++    if grep -q "KRITA_TOUCH_SMOKE_DONE" "$LOG_PATH" 2>/dev/null; then
++        break
++    fi
++    sleep 0.2
++done
++
++scrot "$OUT_PATH"
++
++kill "$pid" 2>/dev/null || true
++wait "$pid" 2>/dev/null || true
++
++echo "Saved screenshot to: $OUT_PATH"
++echo "Saved log to: $LOG_PATH"
++INNER_EOF
++EOF
+diff --git a/bin/krita-xvfb-smoke-touch b/bin/krita-xvfb-smoke-touch
+index 84bc0fb..065fab0 100755
+--- a/bin/krita-xvfb-smoke-touch
++++ b/bin/krita-xvfb-smoke-touch
+@@ -9,6 +9,7 @@ screenshot per scenario into ./persistent/.
+ 
+ Options:
+   --container NAME     Container name (default: .container_name)
++  --appimage FILE      Run a shipped AppImage instead of the in-tree build
+   --wait SEC           Seconds to wait before screenshot per scenario (default: 10)
+   --scenario NAME      Scenario to run (repeatable). Default: built-in list.
+   -h, --help           Show help
+@@ -18,6 +19,7 @@ USAGE_EOF
+ )"
+ 
+ CONTAINER_NAME=""
++APPIMAGE_PATH=""
+ WAIT_SECS="10"
+ SCENARIOS=()
+ 
+@@ -31,6 +33,14 @@ while [[ $# -gt 0 ]]; do
+             CONTAINER_NAME="${1#*=}"
+             shift
+             ;;
++        --appimage)
++            APPIMAGE_PATH="$2"
++            shift 2
++            ;;
++        --appimage=*)
++            APPIMAGE_PATH="${1#*=}"
++            shift
++            ;;
+         --wait)
+             WAIT_SECS="$2"
+             shift 2
+@@ -76,12 +86,19 @@ fi
+ 
+ for SCENARIO in "${SCENARIOS[@]}"; do
+     slug="$(echo "$SCENARIO" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+-    out_file="smoke-linux-krita-${slug}.png"
+-    log_file="smoke-linux-krita-${slug}-log.txt"
++    prefix="krita"
++    if [[ -n "${APPIMAGE_PATH}" ]]; then
++        prefix="appimage"
++    fi
++    out_file="smoke-linux-${prefix}-${slug}.png"
++    log_file="smoke-linux-${prefix}-${slug}-log.txt"
+     args=(--output="$out_file" --log="$log_file" --wait="$WAIT_SECS")
+     if [[ -n "$CONTAINER_NAME" ]]; then
+         args+=(--container="$CONTAINER_NAME")
+     fi
++    if [[ -n "${APPIMAGE_PATH}" ]]; then
++        args+=(--appimage="$APPIMAGE_PATH")
++    fi
+ 
+     "$DIR/krita-xvfb-screenshot" "${args[@]}" -- --touch-smoke="$SCENARIO"
+     test -s "$DIR/../persistent/$out_file"
+-- 
+2.52.0

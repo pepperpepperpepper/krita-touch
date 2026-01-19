@@ -1,7 +1,7 @@
 From ba208b5a156fd998d6189a3a2981bece49e8a9bc Mon Sep 17 00:00:00 2001
 From: yo momma <shutup@oops.wtf>
 Date: Sun, 18 Jan 2026 19:25:17 +0000
-Subject: [PATCH 2/2] smoke: make gmsaas marker wait non-hanging
+Subject: [PATCH 2/3] smoke: make gmsaas marker wait non-hanging
 
 ---
  bin/gmsaas-smoke-android | 60 +++++++++++++++-------------------------
@@ -151,4 +151,3 @@ index e52dc8e..e4543d6 100755
          fi
 -- 
 2.52.0
-

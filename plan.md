@@ -76,16 +76,17 @@ This plan lives in the Krita fork:
 - Source of truth: `~/dev/krita/krita-docker-setup/persistent/krita/plan.md`
 - Convenience symlink: `~/dev/krita/krita-docker-setup/plan.md` → `persistent/krita/plan.md`
 
-### Branch snapshots (as of 2026‑01‑18)
+### Branch snapshots (as of 2026‑01‑19)
 
 - Docker wrapper repo (`~/dev/krita/krita-docker-setup/`):
   - upstream: `https://invent.kde.org/dkazakov/krita-docker-env.git`
   - local branch: `infra/smoke-tests`
-  - local HEAD commit: `ba208b5` (`smoke: make gmsaas marker wait non-hanging`)
+  - local HEAD commit: `c7d7b5a` (adds AppImage support for Linux Xvfb smoke scripts)
   - patches tracked in this repo: `touch-infra/krita-docker-env-patches/*.patch` (apply with `git am`)
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
   - GitHub: `git@github.com:pepperpepperpepper/krita-touch.git`
   - branch: `touch/procreate-mvp`
+  - local HEAD commit: `9ad18c8603` (`executed copypaste`)
   - feature baseline commit: `bb8e957946` (`touch: procreate-mvp baseline`)
 
 ### Present in working tree (WIP)
