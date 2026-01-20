@@ -12,6 +12,7 @@
 #include <kis_distance_information.h>
 
 #include <QElapsedTimer>
+#include <QPointer>
 #include <QVector>
 
 #include "kis_types.h"
@@ -24,6 +25,9 @@
 
 class KoPointerEvent;
 class KoCanvasBase;
+class KoViewConverter;
+class QFrame;
+class QPainter;
 
 class KisPaintingInformationBuilder;
 class KisToolFreehandHelper;
@@ -40,7 +44,8 @@ public:
     ~KisToolFreehand() override;
     int flags() const override;
     void mouseMoveEvent(KoPointerEvent *event) override;
-    
+    void paint(QPainter &gc, const KoViewConverter &converter) override;
+	    
 
 public Q_SLOTS:
     void activate(const QSet<KoShape*> &shapes) override;
@@ -94,6 +99,30 @@ private:
 
     void resetTouchQuickShapeTracking();
 
+    struct TouchQuickShapeGeometry {
+        enum class Kind {
+            None,
+            Rect,
+            Ellipse,
+            Polygon,
+            Line,
+        };
+
+        Kind kind{Kind::None};
+        QRectF rect;
+        QVector<QPointF> polygon;
+        QPointF lineP0;
+        QPointF lineP1;
+    };
+
+    void showTouchQuickShapeEditPopup();
+    void startTouchQuickShapeEdit();
+    void commitTouchQuickShapeEdit();
+
+    void touchQuickShapeEditBegin(KoPointerEvent *event);
+    void touchQuickShapeEditContinue(KoPointerEvent *event);
+    void touchQuickShapeEditEnd(KoPointerEvent *event);
+
     /**
      * Adjusts a coordinates according to a KisPaintingAssistant,
      * if available.
@@ -136,6 +165,16 @@ private:
     QPointF m_touchQuickShapeLastRecordedPixelPos;
     QElapsedTimer m_touchQuickShapeSinceLastMove;
     bool m_touchQuickShapeTracking {false};
+
+    std::optional<TouchQuickShapeGeometry> m_touchQuickShapeLastShape;
+    std::optional<TouchQuickShapeGeometry> m_touchQuickShapeEditShape;
+    bool m_touchQuickShapeEditActive{false};
+    int m_touchQuickShapeEditHandle{-1};
+    bool m_touchQuickShapeEditDragAll{false};
+    bool m_touchQuickShapeEditMoved{false};
+    bool m_touchQuickShapeEditPendingCommit{false};
+    QPointF m_touchQuickShapeEditLastPixelPos;
+    QPointer<QFrame> m_touchQuickShapeEditPopup;
 };
 
 

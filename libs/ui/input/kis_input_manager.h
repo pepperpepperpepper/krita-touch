@@ -94,6 +94,17 @@ public:
      */
     QPointer<KisToolProxy> toolProxy() const;
 
+    /**
+     * Touch-only QuickShape helper: a one-finger tap during a pen stroke can be
+     * used by tools (e.g. Freehand QuickShape) to request a "perfect" variant
+     * of the snapped shape.
+     *
+     * The request is one-shot: calling takeTouchQuickShapePerfectRequest()
+     * returns the current value and clears it.
+     */
+    bool takeTouchQuickShapePerfectRequest();
+    void clearTouchQuickShapePerfectRequest();
+
 private Q_SLOTS:
     void slotAboutToChangeTool();
     void slotToolChanged();

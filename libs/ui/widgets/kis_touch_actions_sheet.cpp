@@ -74,11 +74,15 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
         "  background-color: rgba(30, 30, 30, 245);"
         "  border: 1px solid rgba(255, 255, 255, 40);"
         "  border-radius: 16px;"
+        "  color: rgb(240, 240, 240);"
+        "}"
+        "QLabel {"
+        "  color: rgb(240, 240, 240);"
         "}"
         "QListWidget {"
         "  background: transparent;"
         "  border: 0px;"
-        "  color: palette(window-text);"
+        "  color: rgb(240, 240, 240);"
         "}"
         "QListWidget::item {"
         "  padding: 10px 12px;"
@@ -88,7 +92,7 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
         "  background-color: rgba(255, 255, 255, 30);"
         "}"
         "QToolButton {"
-        "  color: palette(window-text);"
+        "  color: rgb(240, 240, 240);"
         "  background: rgba(255, 255, 255, 10);"
         "  border: 1px solid rgba(255, 255, 255, 25);"
         "  border-radius: 12px;"
@@ -256,6 +260,7 @@ void KisTouchActionsSheet::rebuildUi()
              {QStringLiteral("options_configure"), i18n("Settings")},
              {QStringLiteral("touch_mode_enabled"), i18n("Touch Mode")},
              {QStringLiteral("touch_right_handed"), i18n("Right-handed")},
+             {QStringLiteral("touch_theme_light"), i18n("Light Theme")},
          }},
         {i18n("Gestures"),
          QStringLiteral("input-touchpad"),

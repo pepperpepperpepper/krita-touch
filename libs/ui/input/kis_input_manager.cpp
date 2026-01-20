@@ -642,7 +642,9 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         event->setAccepted(true);
         retval = true;
         d->blockMouseEvents();
-        d->startBlockingTouch();
+        if (!KisConfig(true).touchModeEnabled()) {
+            d->startBlockingTouch();
+        }
         //Reset signal compressor to prevent processing events before press late
         d->resetCompressor();
 
@@ -721,6 +723,18 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
             d->lastPointCount = touchEvent->touchPoints().size();
             d->startingPos = touchEvent->touchPoints().at(0).pos();
             d->previousPos = d->startingPos;
+
+            // Procreate-style QuickShape: a one-finger tap during an active pen
+            // stroke requests a "perfect" variant of the snapped shape.
+            d->touchQuickShapePerfectTapCandidateActive = false;
+            if (KisConfig(true).touchModeEnabled() &&
+                KisConfig(true).touchQuickShapeEnabled() &&
+                d->matcher.hasRunningShortcut() &&
+                touchEvent->touchPoints().size() == 1) {
+                d->touchQuickShapePerfectTapCandidateActive = true;
+                d->touchQuickShapePerfectTapStartPos = d->startingPos;
+                d->touchQuickShapePerfectTapTimer.start();
+            }
             // we don't want to lose this event
 #if (QT_VERSION < QT_VERSION_CHECK(6, 0, 0))
             KoPointerEvent::copyQtPointerEvent(touchEvent, d->originatingTouchBeginEvent);
@@ -806,6 +820,23 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         d->debugEvent<QTouchEvent, false>(event);
         QTouchEvent *touchEvent = static_cast<QTouchEvent*>(event);
 
+        if (d->touchQuickShapePerfectTapCandidateActive) {
+            d->touchQuickShapePerfectTapCandidateActive = false;
+
+            constexpr qint64 kTapMaxMs = 250;
+            if (KisConfig(true).touchModeEnabled() && KisConfig(true).touchQuickShapeEnabled() &&
+                touchEvent->touchPoints().size() == 1 && d->touchQuickShapePerfectTapTimer.isValid() &&
+                d->touchQuickShapePerfectTapTimer.elapsed() <= kTapMaxMs) {
+
+                const QPointF endPos = touchEvent->touchPoints().at(0).pos();
+                const QPointF delta = endPos - d->touchQuickShapePerfectTapStartPos;
+                const qreal dist2 = delta.x() * delta.x() + delta.y() * delta.y();
+                if (dist2 <= KisShortcutMatcher::TOUCH_SLOP_SQUARED) {
+                    d->touchQuickShapePerfectRequested = true;
+                }
+            }
+        }
+
         retval = d->matcher.touchEndEvent(touchEvent);
         if (d->touchStrokeStarted) {
             retval = d->matcher.buttonReleased(Qt::LeftButton, touchEvent);
@@ -852,6 +883,8 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         } else {
             d->clearBufferedTouchEvents();
         }
+
+        d->touchQuickShapePerfectTapCandidateActive = false;
 
         if (d->popupWasActive) {
             event->setAccepted(true);
@@ -999,6 +1032,21 @@ KisCanvas2* KisInputManager::canvas() const
 QPointer<KisToolProxy> KisInputManager::toolProxy() const
 {
     return d->toolProxy;
+}
+
+bool KisInputManager::takeTouchQuickShapePerfectRequest()
+{
+    const bool requested = d->touchQuickShapePerfectRequested;
+    d->touchQuickShapePerfectRequested = false;
+    return requested;
+}
+
+void KisInputManager::clearTouchQuickShapePerfectRequest()
+{
+    d->touchQuickShapePerfectRequested = false;
+    d->touchQuickShapePerfectTapCandidateActive = false;
+    d->touchQuickShapePerfectTapStartPos = QPointF();
+    d->touchQuickShapePerfectTapTimer.invalidate();
 }
 
 void KisInputManager::slotAboutToChangeTool()

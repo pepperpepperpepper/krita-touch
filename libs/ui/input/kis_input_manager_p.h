@@ -9,6 +9,7 @@
 #include <QPointer>
 #include <QEvent>
 #include <QTouchEvent>
+#include <QElapsedTimer>
 #include <QScopedPointer>
 #include <QQueue>
 
@@ -75,6 +76,13 @@ public:
     QPointF startingPos;
     QPointF previousPos;
     QScopedPointer<QEvent> originatingTouchBeginEvent;
+
+    // Procreate-style helper: one-finger tap during a pen stroke requests a
+    // "perfect" QuickShape variant in the painting tool.
+    bool touchQuickShapePerfectRequested = false;
+    bool touchQuickShapePerfectTapCandidateActive = false;
+    QPointF touchQuickShapePerfectTapStartPos;
+    QElapsedTimer touchQuickShapePerfectTapTimer;
 
     bool useUnbalancedKeyPressEventWorkaround = false;
     bool shouldSynchronizeOnNextKeyPress = false;

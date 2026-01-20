@@ -435,6 +435,7 @@ public:
     KisAction *touchLayerOptionsSheetAction {nullptr};
     KToggleAction *touchModeAction {nullptr};
     KToggleAction *touchRightHandedAction {nullptr};
+    KToggleAction *touchLightThemeAction {nullptr};
     KToggleAction *touchRotateWithPinchAction {nullptr};
     KToggleAction *touchQuickPinchToFitAction {nullptr};
     KToggleAction *touchQuickShapeEnabledAction {nullptr};
@@ -3066,6 +3067,12 @@ void KisMainWindow::configChanged()
         d->touchRightHandedAction->setChecked(touchRightHanded);
     }
 
+    const QString touchThemeName = cfg.touchThemeName();
+    if (d->touchLightThemeAction) {
+        QSignalBlocker blocker(d->touchLightThemeAction);
+        d->touchLightThemeAction->setChecked(touchThemeName == QStringLiteral("Touch Procreate Light"));
+    }
+
     const bool rotateWithPinchEnabled = cfg.touchRotateWithPinchEnabled();
     if (d->touchRotateWithPinchAction) {
         QSignalBlocker blocker(d->touchRotateWithPinchAction);
@@ -3140,6 +3147,12 @@ void KisMainWindow::slotTouchRightHandedToggled(bool enabled)
 {
     KisConfig cfg(false);
     cfg.setTouchRightHanded(enabled);
+}
+
+void KisMainWindow::slotTouchThemeLightToggled(bool enabled)
+{
+    KisConfig cfg(false);
+    cfg.setTouchThemeName(enabled ? QStringLiteral("Touch Procreate Light") : QStringLiteral("Touch Procreate Dark"));
 }
 
 void KisMainWindow::slotTouchRotateWithPinchToggled(bool enabled)
@@ -3351,6 +3364,21 @@ void KisMainWindow::applyTouchMode(bool enabled)
             sb->setVisible(false);
         }
 
+#ifndef Q_OS_HAIKU
+        if (d->themeManager) {
+            const QString desiredTheme = KisConfig(true).touchThemeName();
+            const QString fallbackTheme = QStringLiteral("Touch Procreate Dark");
+            const QString themeName = desiredTheme.isEmpty() ? fallbackTheme : desiredTheme;
+            if (!themeName.isEmpty() && d->themeManager->currentThemeName() != themeName) {
+                d->themeManager->setCurrentTheme(themeName);
+            }
+        }
+#endif
+        const QString desiredTheme = KisConfig(true).touchThemeName();
+        const QString fallbackTheme = QStringLiteral("Touch Procreate Dark");
+        const QString themeName = desiredTheme.isEmpty() ? fallbackTheme : desiredTheme;
+        const bool themeIsLight = themeName == QLatin1String("Touch Procreate Light");
+
         if (!d->touchTopBar) {
             d->touchTopBar = new QToolBar(i18n("Touch Top Bar"), this);
             d->touchTopBar->setObjectName(QStringLiteral("touchTopBar"));
@@ -3359,20 +3387,6 @@ void KisMainWindow::applyTouchMode(bool enabled)
             d->touchTopBar->setContextMenuPolicy(Qt::PreventContextMenu);
             d->touchTopBar->setIconSize(QSize(40, 40));
             d->touchTopBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-            d->touchTopBar->setStyleSheet(QStringLiteral(
-                "QToolBar#touchTopBar {"
-                "  background-color: rgba(30, 30, 30, 245);"
-                "  border: 0px;"
-                "  spacing: 10px;"
-                "  padding: 6px;"
-                "}"
-                "QToolButton {"
-                "  border-radius: 12px;"
-                "  padding: 8px;"
-                "}"
-                "QToolButton:pressed {"
-                "  background-color: rgba(255, 255, 255, 22);"
-                "}"));
             addToolBar(Qt::TopToolBarArea, d->touchTopBar);
 
             auto addActionIfPresent = [&](const QString &actionId) {
@@ -3421,6 +3435,38 @@ void KisMainWindow::applyTouchMode(bool enabled)
                 }
             }
         }
+
+        // The top bar uses a custom style sheet instead of full widget theming so it is
+        // stable across platforms. Update it even when toggling Touch themes at runtime.
+        d->touchTopBar->setStyleSheet(themeIsLight
+            ? QStringLiteral(
+                  "QToolBar#touchTopBar {"
+                  "  background-color: rgba(245, 245, 245, 245);"
+                  "  border: 0px;"
+                  "  spacing: 10px;"
+                  "  padding: 6px;"
+                  "}"
+                  "QToolButton {"
+                  "  border-radius: 12px;"
+                  "  padding: 8px;"
+                  "}"
+                  "QToolButton:pressed {"
+                  "  background-color: rgba(0, 0, 0, 22);"
+                  "}")
+            : QStringLiteral(
+                  "QToolBar#touchTopBar {"
+                  "  background-color: rgba(30, 30, 30, 245);"
+                  "  border: 0px;"
+                  "  spacing: 10px;"
+                  "  padding: 6px;"
+                  "}"
+                  "QToolButton {"
+                  "  border-radius: 12px;"
+                  "  padding: 8px;"
+                  "}"
+                  "QToolButton:pressed {"
+                  "  background-color: rgba(255, 255, 255, 22);"
+                  "}"));
 
         d->touchTopBar->show();
 
@@ -3519,11 +3565,6 @@ void KisMainWindow::applyTouchMode(bool enabled)
         d->touchModeRightHanded = touchRightHanded;
         trySetInputProfile(QString::fromLatin1(kTouchInputProfileName));
 
-#ifndef Q_OS_HAIKU
-        if (d->themeManager && d->themeManager->currentThemeName() != QStringLiteral("Touch Procreate Dark")) {
-            d->themeManager->setCurrentTheme(QStringLiteral("Touch Procreate Dark"));
-        }
-#endif
         if (QMenuBar *mb = menuBar()) {
             mb->setVisible(false);
             mb->setEnabled(false);
@@ -3859,6 +3900,12 @@ void KisMainWindow::createActions()
     d->touchRightHandedAction->setChecked(KisConfig(true).touchRightHanded());
     actionCollection()->addAction("touch_right_handed", d->touchRightHandedAction);
     connect(d->touchRightHandedAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchRightHandedToggled(bool)));
+
+    d->touchLightThemeAction = new KToggleAction(i18nc("@action:inmenu", "Light Touch Theme"), this);
+    d->touchLightThemeAction->setIcon(QIcon::fromTheme(QStringLiteral("color-management")));
+    d->touchLightThemeAction->setChecked(KisConfig(true).touchThemeName() == QStringLiteral("Touch Procreate Light"));
+    actionCollection()->addAction("touch_theme_light", d->touchLightThemeAction);
+    connect(d->touchLightThemeAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchThemeLightToggled(bool)));
 
     d->touchRotateWithPinchAction = new KToggleAction(i18nc("@action:inmenu", "Rotate with Pinch"), this);
     d->touchRotateWithPinchAction->setIcon(QIcon::fromTheme(QStringLiteral("object-rotate-right")));

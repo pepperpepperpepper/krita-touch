@@ -370,6 +370,40 @@ bool paintLineForTouchSmoke(KisMainWindow *mainWindow, const QPointF &imgP0, con
     return true;
 }
 
+bool paintRectForTouchSmoke(KisMainWindow *mainWindow, const QRectF &imgRect, const QColor &color)
+{
+    if (!mainWindow || !mainWindow->viewManager()) {
+        return false;
+    }
+
+    KisViewManager *viewManager = mainWindow->viewManager();
+    KisImageWSP img = viewManager->image();
+    KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+    if (!img || !dev) {
+        qWarning() << "Touch smoke: missing image/device for paintRect";
+        return false;
+    }
+
+    const QRectF r = imgRect.normalized();
+    const QPointF tl(r.left(), r.top());
+    const QPointF tr(r.right(), r.top());
+    const QPointF br(r.right(), r.bottom());
+    const QPointF bl(r.left(), r.bottom());
+
+    KisPainter painter(dev);
+    painter.setCompositeOpId(COMPOSITE_OVER);
+    painter.setOpacityU8(OPACITY_OPAQUE_U8);
+    painter.setPaintColor(KoColor(color, dev->colorSpace()));
+    painter.drawLine(tl, tr, 48.0, true);
+    painter.drawLine(tr, br, 48.0, true);
+    painter.drawLine(br, bl, 48.0, true);
+    painter.drawLine(bl, tl, 48.0, true);
+    painter.end();
+
+    refreshImageForTouchSmoke(img);
+    return true;
+}
+
 bool fillCanvasForTouchSmoke(KisMainWindow *mainWindow, const QColor &color)
 {
     if (!mainWindow || !mainWindow->viewManager()) {
@@ -390,6 +424,80 @@ bool fillCanvasForTouchSmoke(KisMainWindow *mainWindow, const QColor &color)
     painter.end();
 
     refreshImageForTouchSmoke(img);
+    return true;
+}
+
+bool paintRectStrokeForTouchSmoke(KisMainWindow *mainWindow, const QRectF &imgRect, int edgeSteps, int holdMsAtEnd)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    KisView *view = mainWindow->activeView();
+    if (!view) {
+        qWarning() << "Touch smoke: no active view for painting";
+        return false;
+    }
+
+    KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        qWarning() << "Touch smoke: no image for painting";
+        return false;
+    }
+
+    KoToolManager::instance()->switchToolRequested(QStringLiteral("KritaShape/KisToolBrush"));
+    QApplication::processEvents();
+
+    QWidget *canvasWidget = view->canvasBase() ? view->canvasBase()->canvasWidget() : nullptr;
+    if (!canvasWidget) {
+        qWarning() << "Touch smoke: no canvas widget for painting";
+        return false;
+    }
+
+    const QRectF r = imgRect.normalized();
+    const QPointF tl(r.left(), r.top());
+    const QPointF tr(r.right(), r.top());
+    const QPointF br(r.right(), r.bottom());
+    const QPointF bl(r.left(), r.bottom());
+
+    auto imgToWidget = [view](const QPointF &imgP) {
+        return view->canvasBase()->coordinatesConverter()->imageToWidget(imgP);
+    };
+
+    const int steps = qMax(1, edgeSteps);
+
+    QPointF wLast = imgToWidget(tl);
+    QPointF gLast = canvasWidget->mapToGlobal(wLast.toPoint());
+
+    QMouseEvent press(QEvent::MouseButtonPress, wLast, gLast, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvasWidget, &press);
+
+    auto lerpEdge = [&](const QPointF &a, const QPointF &b) {
+        for (int i = 1; i <= steps; i++) {
+            const qreal t = qreal(i) / steps;
+            const QPointF imgP = a + t * (b - a);
+            const QPointF wP = imgToWidget(imgP);
+            const QPointF gP = canvasWidget->mapToGlobal(wP.toPoint());
+            QMouseEvent move(QEvent::MouseMove, wP, gP, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(canvasWidget, &move);
+            wLast = wP;
+            gLast = gP;
+        }
+    };
+
+    lerpEdge(tl, tr);
+    lerpEdge(tr, br);
+    lerpEdge(br, bl);
+    lerpEdge(bl, tl);
+
+    if (holdMsAtEnd > 0) {
+        QThread::msleep(holdMsAtEnd);
+    }
+
+    QMouseEvent release(QEvent::MouseButtonRelease, wLast, gLast, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(canvasWidget, &release);
+
+    image->waitForDone();
     return true;
 }
 
@@ -474,8 +582,17 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_DONE scenario=%1 status=%2").arg(normalizedScenario, status);
     };
 
-    KisConfig cfg(false);
+    // Don't persist smoke-only settings changes into the user's config file. We only
+    // need the updated values in-process for deterministic screenshots.
+    KisConfig cfg(true);
     cfg.setTouchModeEnabled(true);
+    cfg.setTouchQuickShapeEnabled(true);
+
+    const bool useLightTouchTheme = normalizedScenario == "top-bar-light" || normalizedScenario == "top_bar_light" ||
+        normalizedScenario == "topbar-light" || normalizedScenario == "topbar_light";
+    cfg.setTouchThemeName(useLightTouchTheme
+        ? QStringLiteral("Touch Procreate Light")
+        : QStringLiteral("Touch Procreate Dark"));
 
     mainWindow->show();
     mainWindow->raise();
@@ -502,6 +619,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     if (normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar") {
         // Just showing the main window is enough; Touch Mode is enabled above and will
         // create any touch chrome (like the top bar toolbar) via KisConfigNotifier.
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (useLightTouchTheme) {
         finalizeSmoke(true);
         return;
     }
@@ -627,15 +749,29 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "quickshape" || normalizedScenario == "quick-shape" || normalizedScenario == "quick_shape") {
-        // Keep the wobble small enough that QuickShape line detection still succeeds.
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
-        const QVector<QPoint> samplePoints = image
-            ? QVector<QPoint>{image->bounds().center(), QPoint(image->bounds().center().x() + 12, image->bounds().center().y())}
+        const QRect bounds = image ? image->bounds() : QRect();
+        const qreal w = bounds.isValid() ? qreal(bounds.width()) : 0.0;
+        const qreal h = bounds.isValid() ? qreal(bounds.height()) : 0.0;
+        const QRectF targetRect(bounds.left() + w * 0.25, bounds.top() + h * 0.25, w * 0.50, h * 0.50);
+
+        auto clampSample = [&bounds](const QPointF &p) {
+            return QPoint(qBound(bounds.left(), qRound(p.x()), bounds.right()),
+                          qBound(bounds.top(), qRound(p.y()), bounds.bottom()));
+        };
+
+        const QVector<QPoint> samplePoints = bounds.isValid()
+            ? QVector<QPoint>{
+                  clampSample(QPointF(targetRect.center().x(), targetRect.top())),
+                  clampSample(QPointF(targetRect.center().x(), targetRect.bottom())),
+                  clampSample(QPointF(targetRect.left(), targetRect.center().y())),
+                  clampSample(QPointF(targetRect.right(), targetRect.center().y())),
+              }
             : QVector<QPoint>{};
         const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
 
-        if (!paintStrokeForTouchSmoke(mainWindow, 6, 2.0, 450)) {
+        if (!paintRectStrokeForTouchSmoke(mainWindow, targetRect, 12, 450)) {
             qWarning() << "Touch smoke: could not paint via input events for quickshape";
         }
 
@@ -645,11 +781,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
         if (image && dev && !anySampleChangedForTouchSmoke(before, after, 3)) {
-            qWarning() << "Touch smoke: quickshape content was not painted; falling back to direct line paint";
-            const QRect bounds = image->bounds();
-            const QPointF imgP0(bounds.left() + bounds.width() * 0.25, bounds.center().y());
-            const QPointF imgP1(bounds.left() + bounds.width() * 0.75, bounds.center().y());
-            paintLineForTouchSmoke(mainWindow, imgP0, imgP1, QColor(0, 0, 0));
+            qWarning() << "Touch smoke: quickshape content was not painted; falling back to direct rect paint";
+            paintRectForTouchSmoke(mainWindow, targetRect, QColor(0, 0, 0));
         }
         finalizeSmoke(true);
         return;

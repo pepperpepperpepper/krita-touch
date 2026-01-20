@@ -21,7 +21,7 @@ We drive the work via **small, shippable milestones**, each with:
 
 ## Table of Contents
 
-- 0) Current Snapshot (as of 2026‑01‑19)
+- 0) Current Snapshot + Task Tracker (as of 2026‑01‑20)
 - 1) Goals / Non‑Goals / Principles
 - 2) Repo Layout + Branching
 - 3) Build & Test Workflow (Docker)
@@ -34,7 +34,38 @@ We drive the work via **small, shippable milestones**, each with:
 
 ---
 
-## 0) Current Snapshot (as of 2026‑01‑19)
+## 0) Current Snapshot + Task Tracker (as of 2026‑01‑20)
+
+### Task Tracker (update this as we go)
+
+Status legend:
+
+- `[ ]` not started
+- `[x]` done
+- Use “(in progress)” inline when needed.
+
+Current focus (prioritized): **QuickShape v2**
+
+- [x] **P0** — QuickShape v2: recognition + snapping for **circle/ellipse**
+- [x] **P0** — QuickShape v2: recognition + snapping for **rectangle**
+- [x] **P1** — QuickShape v2: recognition + snapping for **triangle**
+- [x] **P1** — QuickShape v2: recognition + snapping for **polygon**
+- [x] **P2** — QuickShape v2: “second-finger tap to perfect”
+- [x] **P3** — QuickShape v2: “Edit Shape” affordance (handles / mode)
+- [x] Smoke: extend `--touch-smoke=quickshape` (or add new scenarios) to cover at least one non-line snapped shape, deterministically.
+
+Work log (append-only; newest first):
+
+- **2026‑01‑20**:
+  - Smoke: `--touch-smoke=quickshape` draws a deterministic non-line shape (rectangle stroke + fallback direct rectangle paint).
+  - QuickShape v2: “Edit Shape” mode (contextual “Edit Shape” popup + draggable on-canvas handles; tap outside to commit).
+  - QuickShape v2: second-finger tap to “perfect” snapped shapes (circle, square, regular polygon, 45° line).
+  - QuickShape v2: draw-and-hold polygon snapping (corner-detected; up to 10 sides).
+  - QuickShape v2: draw-and-hold triangle snapping (3-point polygon).
+  - QuickShape v2: draw-and-hold rectangle snapping (axis-aligned).
+  - QuickShape v2: draw-and-hold ellipse/circle snapping (circle snaps to a true circle if aspect ratio is close).
+  - Linux smoke suite includes `top-bar-light` and validates `KRITA_TOUCH_SMOKE_DONE ... status=OK`.
+  - AppImage built and smoke suite verified against the produced AppImage.
 
 ### Host + constraints
 
@@ -76,7 +107,7 @@ This plan lives in the Krita fork:
 - Source of truth: `~/dev/krita/krita-docker-setup/persistent/krita/plan.md`
 - Convenience symlink: `~/dev/krita/krita-docker-setup/plan.md` → `persistent/krita/plan.md`
 
-### Branch snapshots (as of 2026‑01‑19)
+### Branch snapshots (as of 2026‑01‑20)
 
 - Docker wrapper repo (`~/dev/krita/krita-docker-setup/`):
   - upstream: `https://invent.kde.org/dkazakov/krita-docker-env.git`
@@ -86,7 +117,7 @@ This plan lives in the Krita fork:
 - Krita fork (`~/dev/krita/krita-docker-setup/persistent/krita/`):
   - GitHub: `git@github.com:pepperpepperpepper/krita-touch.git`
   - branch: `touch/procreate-mvp`
-  - local HEAD commit: `9ad18c8603` (`executed copypaste`)
+  - local HEAD commit: `61a560a7af` (`touch-infra: update krita-docker-env patchset`)
   - feature baseline commit: `bb8e957946` (`touch: procreate-mvp baseline`)
 
 ### Present in working tree (WIP)
@@ -106,8 +137,9 @@ These items exist locally and should be treated as our baseline direction:
   - applies workspace + shows Touch Docker
   - applies touch-first chrome:
     - hides desktop chrome (menu bar, status bar, non-touch toolbars)
-    - switches to color theme: **Touch Procreate Dark**
-      - theme file: `krita/data/themes/TouchProcreateDark.colors`
+    - switches to touch theme:
+      - default: **Touch Procreate Dark** (`krita/data/themes/TouchProcreateDark.colors`)
+      - optional: **Touch Procreate Light** (`krita/data/themes/TouchProcreateLight.colors`, toggle `touch_theme_light`, config `touchThemeName`)
       - install: `krita/data/themes/CMakeLists.txt`
 - Deterministic “touch smoke scenario” hook:
   - Desktop: `--touch-smoke=<scenario>` or env `KRITA_TOUCH_SMOKE=<scenario>`
@@ -492,6 +524,7 @@ Entry points:
 Scenario names (keep stable):
 
 - `top-bar` *(shows Touch Mode chrome/top bar)*
+- `top-bar-light` *(shows Touch Mode chrome/top bar in Touch Procreate Light theme)*
 - `selection-tool`
 - `transform-tool`
 - `touch-sidebar`
@@ -1319,8 +1352,12 @@ Manual acceptance checklist:
 
 Next (v2):
 
-- Add recognition + snapping for circle/ellipse/rectangle/triangle/polygon.
-- Implement “second-finger tap to perfect” and an Edit Shape affordance.
+- **P0** — Add recognition + snapping for **circle/ellipse**
+- **P0** — Add recognition + snapping for **rectangle**
+- **P1** — Add recognition + snapping for **triangle**
+- **P1** — Add recognition + snapping for **polygon**
+- **P2** — Implement “second-finger tap to perfect”
+- **P3** — Add an “Edit Shape” affordance (handles / mode)
 
 ### P1.1 Touch sidebar (size/opacity/undo/redo/modify)
 
@@ -1660,7 +1697,6 @@ Manual acceptance checklist:
 
 ## 9) Open Questions
 
-- We now ship **Touch Procreate Dark**. Do we also want a light theme variant?
 - What are the primary validation devices (exact Linux touchscreen + Android tablet models)?
 - Do we standardize gestures across Linux+Android, or have platform-tuned defaults?
 - How deep is ColorDrop parity (threshold fill + recolor), versus using Krita’s fill tool flows?

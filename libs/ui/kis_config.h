@@ -60,6 +60,9 @@ public:
     bool touchRightHanded(bool defaultValue = false) const;
     void setTouchRightHanded(bool value) const;
 
+    QString touchThemeName(bool defaultValue = false) const;
+    void setTouchThemeName(const QString &value) const;
+
     int touchSidebarOffset(bool defaultValue = false) const;
     void setTouchSidebarOffset(int value) const;
 

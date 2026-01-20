@@ -309,6 +309,7 @@ private Q_SLOTS:
     void slotUpdateReadWriteMode(bool readWrite);
     void slotTouchModeToggled(bool enabled);
     void slotTouchRightHandedToggled(bool enabled);
+    void slotTouchThemeLightToggled(bool enabled);
     void slotTouchRotateWithPinchToggled(bool enabled);
     void slotTouchQuickPinchToFitToggled(bool enabled);
     void slotTouchQuickShapeEnabledToggled(bool enabled);

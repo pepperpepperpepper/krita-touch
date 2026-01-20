@@ -194,6 +194,18 @@ void KisConfig::setTouchRightHanded(bool value) const
     KisConfigNotifier::instance()->notifyConfigChanged();
 }
 
+QString KisConfig::touchThemeName(bool defaultValue) const
+{
+    const QString platformDefault = QStringLiteral("Touch Procreate Dark");
+    return (defaultValue ? platformDefault : m_cfg.readEntry("touchThemeName", platformDefault));
+}
+
+void KisConfig::setTouchThemeName(const QString &value) const
+{
+    m_cfg.writeEntry("touchThemeName", value);
+    KisConfigNotifier::instance()->notifyConfigChanged();
+}
+
 int KisConfig::touchSidebarOffset(bool defaultValue) const
 {
     return (defaultValue ? 0 : m_cfg.readEntry("touchSidebarOffset", 0));
