@@ -119,14 +119,38 @@ void KisZoomAndRotateAction::begin(int shortcut, QEvent *event)
                     if (toolObj) {
                         const QPointF p0 = touchEvent->touchPoints().at(0).pos();
                         const QPointF p1 = touchEvent->touchPoints().at(1).pos();
+
+                        auto hitTestWidgetPoint = [&](const QPointF &widgetPoint, bool &hitOut) -> bool {
+                            hitOut = false;
+                            return QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
+                                                             Q_RETURN_ARG(bool, hitOut),
+                                                             Q_ARG(QPointF, widgetPoint));
+                        };
+
                         const QPointF centerWidget = (p0 + p1) * 0.5;
 
-                        bool hit = false;
-                        const bool canHitTest = QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
-                                                                         Q_RETURN_ARG(bool, hit),
-                                                                         Q_ARG(QPointF, centerWidget));
+                        bool hit0 = false;
+                        bool hit1 = false;
+                        bool hitCenter = false;
+                        const bool canHit0 = hitTestWidgetPoint(p0, hit0);
+                        const bool canHit1 = hitTestWidgetPoint(p1, hit1);
+                        const bool canHitCenter = hitTestWidgetPoint(centerWidget, hitCenter);
 
-                        if (canHitTest && hit) {
+                        int hits = 0;
+                        if (canHit0 && hit0) {
+                            ++hits;
+                        }
+                        if (canHit1 && hit1) {
+                            ++hits;
+                        }
+                        if (canHitCenter && hitCenter) {
+                            ++hits;
+                        }
+
+                        // Require at least two "inside bounds" confirmations so that pinch gestures
+                        // around the selection (both fingers outside, center inside) still navigate
+                        // the canvas rather than transforming content.
+                        if (hits >= 2) {
                             bool began = false;
                             const bool invokedBegin =
                                 QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
@@ -168,8 +192,19 @@ void KisZoomAndRotateAction::inputEvent(QEvent *event)
         if (tevent && tevent->touchPoints().size() > 1) {
 
             if (d->touchTransformActive && d->touchTransformTool) {
-                const QPointF p0 = tevent->touchPoints().at(0).pos();
-                const QPointF p1 = tevent->touchPoints().at(1).pos();
+                const QTouchEvent::TouchPoint tp0 = tevent->touchPoints().at(0);
+                const QTouchEvent::TouchPoint tp1 = tevent->touchPoints().at(1);
+
+                if (tp0.state() == Qt::TouchPointReleased || tp1.state() == Qt::TouchPointReleased) {
+                    return;
+                }
+
+                const QPointF p0 = tp0.pos();
+                const QPointF p1 = tp1.pos();
+
+                if ((p0 - p1).manhattanLength() < 10) {
+                    return;
+                }
 
                 QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
                                           Q_ARG(QPointF, p0),

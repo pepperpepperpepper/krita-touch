@@ -17,6 +17,8 @@
 #include <limits>
 
 #include <QPainter>
+#include <QPainterPath>
+#include <QPainterPathStroker>
 #include <QPen>
 #include <QObject>
 #include <QApplication>
@@ -208,16 +210,35 @@ bool KisToolTransform::touchTransformHitTest(const QPointF &widgetPoint) const
         return false;
     }
 
-    const QPointF imagePoint = m_canvas->coordinatesConverter()->widgetToImage(widgetPoint);
-
     const KisTransformUtils::MatricesPack m(m_currentArgs);
     const QTransform t = m.finalTransform();
 
-    QPolygonF polygon;
-    polygon << t.map(originalRect.topLeft()) << t.map(originalRect.topRight()) << t.map(originalRect.bottomRight())
-            << t.map(originalRect.bottomLeft());
+    QPolygonF polygonImage;
+    polygonImage << t.map(originalRect.topLeft()) << t.map(originalRect.topRight()) << t.map(originalRect.bottomRight())
+                 << t.map(originalRect.bottomLeft());
 
-    return polygon.containsPoint(imagePoint, Qt::WindingFill);
+    const QPolygonF polygonWidget = m_canvas->coordinatesConverter()->imageToWidget(polygonImage);
+    if (polygonWidget.isEmpty()) {
+        return false;
+    }
+
+    // Use widget-space hit-testing so we can add a small margin in pixels to make
+    // touch routing more reliable near the bounds edge.
+    QPainterPath polygonPath;
+    polygonPath.addPolygon(polygonWidget);
+
+    if (polygonPath.contains(widgetPoint)) {
+        return true;
+    }
+
+    constexpr qreal kTouchHitMarginPx = 16.0;
+    QPainterPathStroker stroker;
+    stroker.setWidth(kTouchHitMarginPx * 2.0);
+    stroker.setCapStyle(Qt::RoundCap);
+    stroker.setJoinStyle(Qt::RoundJoin);
+
+    const QPainterPath borderPath = stroker.createStroke(polygonPath);
+    return borderPath.contains(widgetPoint);
 }
 
 bool KisToolTransform::touchTransformGestureBegin(const QPointF &widgetP0, const QPointF &widgetP1)

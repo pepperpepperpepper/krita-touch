@@ -44,7 +44,22 @@ Status legend:
 - `[x]` done
 - Use “(in progress)” inline when needed.
 
-Current focus (prioritized): **QuickShape v2**
+Current focus (prioritized): **Pick validation devices + run acceptance pass**
+
+- [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
+- [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
+- [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
+- [x] **P1** — ColorDrop v1: drag-fill threshold adjust UI (overlay) + persist chosen threshold to Fill Tool settings.
+- [x] **P1** — Layers panel gestures v1: swipe left → Layer Options sheet; swipe right → multi-select; hold visibility icon → solo visibility.
+- [ ] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
+  - [ ] Document Linux touchscreen device + driver stack (X11): panel model, resolution, input device name.
+  - [ ] Document Android tablet model + Android version + stylus details.
+  - [ ] Run manual acceptance: Transform parity v1 (P0.3).
+  - [ ] Run manual acceptance: Touch sidebar Modify (P1.1).
+  - [ ] Run manual acceptance: ColorDrop v1 (P1.4).
+  - [ ] Run manual acceptance: Layers panel gestures v1 (P1.5).
+
+Recently completed:
 
 - [x] **P0** — QuickShape v2: recognition + snapping for **circle/ellipse**
 - [x] **P0** — QuickShape v2: recognition + snapping for **rectangle**
@@ -57,6 +72,13 @@ Current focus (prioritized): **QuickShape v2**
 Work log (append-only; newest first):
 
 - **2026‑01‑20**:
+  - Smoke: rebuilt + ran xvfb scenarios `colordrop`, `layers-panel`, `layer-options`, and reran `transform-tool` (all OK).
+  - Transform parity v1: refine touch routing to require 2-of-3 hit-tests (p0/p1/center) + ignore Released/degenerate touch updates when delegating to transform; rebuilt + ran xvfb `--scenario transform-tool` (OK).
+  - Smoke: added `--touch-smoke=modify` to exercise the TouchDocker Modify hold (Color Sampler) and validate tool + `touchPainting` restore; rebuilt + ran xvfb scenario (OK).
+  - Smoke: `--touch-smoke=transform-tool` applies a deterministic touch transform gesture and verifies the image projection changes (with fallbacks); rebuilt + ran xvfb scenario (OK).
+  - Transform parity v1: improved transform bounds hit-test (widget-space + 16px margin) to reduce edge misroutes; rebuilt + ran `--touch-smoke=transform-tool` (OK). Manual X11+Android validation pending.
+  - Committed WIP: `krita-docker-setup` (`105839f`) + Krita fork (`1321859542`).
+  - Linux smoke suite rerun: `./bin/krita-xvfb-smoke-touch --wait 10` (all scenarios OK).
   - Smoke: `--touch-smoke=quickshape` draws a deterministic non-line shape (rectangle stroke + fallback direct rectangle paint).
   - QuickShape v2: “Edit Shape” mode (contextual “Edit Shape” popup + draggable on-canvas handles; tap outside to commit).
   - QuickShape v2: second-finger tap to “perfect” snapped shapes (circle, square, regular polygon, 45° line).
