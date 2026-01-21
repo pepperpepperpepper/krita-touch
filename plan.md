@@ -34,7 +34,7 @@ We drive the work via **small, shippable milestones**, each with:
 
 ---
 
-## 0) Current Snapshot + Task Tracker (as of 2026‑01‑20)
+## 0) Current Snapshot + Task Tracker (as of 2026‑01‑21)
 
 ### Task Tracker (update this as we go)
 
@@ -44,8 +44,9 @@ Status legend:
 - `[x]` done
 - Use “(in progress)” inline when needed.
 
-Current focus (prioritized): **Pick validation devices + run acceptance pass**
+Current focus (prioritized): **Android tablet smoke + device validation**
 
+- [x] **Infra** — Android tablet smoke suite on Genymotion (Nexus 10): `./bin/krita-gmsaas-smoke-touch` runs the full touch batch end-to-end (incl. `modify` + `top-bar-light`).
 - [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
 - [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
 - [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
@@ -53,7 +54,7 @@ Current focus (prioritized): **Pick validation devices + run acceptance pass**
 - [x] **P1** — Layers panel gestures v1: swipe left → Layer Options sheet; swipe right → multi-select; hold visibility icon → solo visibility.
 - [ ] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
   - [ ] Document Linux touchscreen device + driver stack (X11): panel model, resolution, input device name.
-  - [ ] Document Android tablet model + Android version + stylus details.
+  - [x] Document Android tablet validation device (CI): Genymotion Cloud recipe `krita_tablet_nexus10_api35` (Android 15 / API 35 / 2560×1600 / dpi 320 / arm64). *(No stylus; emulator.)*
   - [ ] Run manual acceptance: Transform parity v1 (P0.3).
   - [ ] Run manual acceptance: Touch sidebar Modify (P1.1).
   - [ ] Run manual acceptance: ColorDrop v1 (P1.4).
@@ -71,7 +72,11 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑21**:
+  - Android: rebuilt arm64-v8a debug APK + ran full Genymotion touch batch (16 scenarios) on Nexus 10 recipe (all OK).
+  - Genymotion Cloud: switched canonical tablet recipe to `krita_tablet_nexus10_api35` (Nexus 10 2560×1600, Android 15 / API 35 / arm64); ran Android smoke `top-bar` (OK).
 - **2026‑01‑20**:
+  - Android smoke: added `./bin/krita-gmsaas-smoke-touch` (tablet recipe) + improved `./bin/gmsaas-smoke-android` robustness (wait for instance `ONLINE`, log instance UUID early); ran Genymotion scenario `top-bar` (OK).
   - Smoke: rebuilt + ran xvfb scenarios `colordrop`, `layers-panel`, `layer-options`, and reran `transform-tool` (all OK).
   - Transform parity v1: refine touch routing to require 2-of-3 hit-tests (p0/p1/center) + ignore Released/degenerate touch updates when delegating to transform; rebuilt + ran xvfb `--scenario transform-tool` (OK).
   - Smoke: added `--touch-smoke=modify` to exercise the TouchDocker Modify hold (Color Sampler) and validate tool + `touchPainting` restore; rebuilt + ran xvfb scenario (OK).
@@ -185,11 +190,15 @@ These items exist locally and should be treated as our baseline direction:
   - installed via `krita/data/workspaces/CMakeLists.txt`
 - Headless Android smoke helper (wrapper repo):
   - `~/dev/krita/krita-docker-setup/bin/gmsaas-smoke-android` (supports `--scenario`)
+  - `~/dev/krita/krita-docker-setup/bin/krita-gmsaas-smoke-touch` (touch-first batch runner; defaults to the canonical tablet recipe)
   - supports multiple `--scenario` in one instance + fails on `FATAL EXCEPTION`/`ANR in <pkg>` in logcat
   - Example artifact: `persistent/smoke-android-krita-selection-tool.png` + `persistent/smoke-android-krita-selection-tool-logcat.txt`
   - Validation (2026‑01‑17): batch scenarios succeeded on Genymotion Cloud for:
     - `top-bar`, `touch-sidebar`, `selection-tool`, `transform-tool`, `layers-panel`, `layer-options`, `color-panel`,
       `colordrop`, `actions-sheet`, `gesture-controls`, `quickmenu`, `quickmenu-setup`, `copypaste`
+  - Validation (2026‑01‑21): full touch batch succeeded on Genymotion Cloud (Nexus 10 / 2560×1600 / API 35) for:
+    - `top-bar`, `top-bar-light`, `touch-sidebar`, `modify`, `selection-tool`, `transform-tool`, `layers-panel`, `layer-options`, `color-panel`,
+      `colordrop`, `quickshape`, `actions-sheet`, `gesture-controls`, `quickmenu`, `quickmenu-setup`, `copypaste`
   - As of 2026‑01‑17: scenario runs wait for a logcat marker (instead of fixed sleeps):
     - `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
     - This reduces “splash screen / Android launcher” false screenshots.
@@ -750,21 +759,24 @@ We use Genymotion Cloud (SaaS) because we typically lack KVM on AWS.
 
 Canonical CI recipe:
 
-- Name: `krita_tablet_api35`
-- Recipe UUID: `6112dd0d-91c9-420d-a2ff-f71a691b9dd8`
+- Name: `krita_tablet_nexus10_api35`
+- Recipe UUID: `a524e263-97a2-427e-aa81-a739dc8dba2a`
 - OS image UUID: `a7025999-0630-471d-804f-81966968f080` (Android 15 / API 35 / arm64)
-- HW profile UUID: `c65db329-511a-4c2a-9761-c7259649e8c7` (Tablet 1536×2048 / arm64)
+- HW profile UUID: `c6e1222c-993e-4bf2-840f-4795792f2143` (Google Nexus 10 2560×1600 / arm64)
 
 Implication:
 
 - Prefer `arm64-v8a` APKs for Genymotion Cloud.
 
-Convenience script:
+Convenience scripts:
+
+- `./bin/krita-gmsaas-smoke-touch` (recommended batch runner for touch scenarios)
+- `./bin/gmsaas-smoke-android` (lower-level runner; use for debugging)
 
 ```bash
 cd ~/dev/krita/krita-docker-setup
 source ~/.api-keys   # exports GENYMOTION_API_KEY
-./bin/gmsaas-smoke-android --apk persistent/wd/krita/_packaging/*.apk
+./bin/krita-gmsaas-smoke-touch
 ```
 
 Notes:
@@ -804,7 +816,7 @@ Scenario screenshot:
 ```bash
 cd ~/dev/krita/krita-docker-setup
 source ~/.api-keys   # exports GENYMOTION_API_KEY
-./bin/gmsaas-smoke-android --scenario selection-tool --apk persistent/wd/krita/_packaging/*.apk
+./bin/krita-gmsaas-smoke-touch --scenario selection-tool
 ```
 
 Multiple scenarios in one provisioned instance (faster/cheaper CI):
@@ -812,7 +824,7 @@ Multiple scenarios in one provisioned instance (faster/cheaper CI):
 ```bash
 cd ~/dev/krita/krita-docker-setup
 source ~/.api-keys   # exports GENYMOTION_API_KEY
-./bin/gmsaas-smoke-android --apk persistent/wd/krita/_packaging/*.apk \
+./bin/krita-gmsaas-smoke-touch \
   --scenario selection-tool \
   --scenario quickmenu \
   --scenario copypaste \
