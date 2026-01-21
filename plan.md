@@ -21,7 +21,7 @@ We drive the work via **small, shippable milestones**, each with:
 
 ## Table of Contents
 
-- 0) Current Snapshot + Task Tracker (as of 2026‑01‑20)
+- 0) Current Snapshot + Task Tracker (as of 2026‑01‑21)
 - 1) Goals / Non‑Goals / Principles
 - 2) Repo Layout + Branching
 - 3) Build & Test Workflow (Docker)
@@ -47,6 +47,7 @@ Status legend:
 Current focus (prioritized): **Android tablet smoke + device validation**
 
 - [x] **Infra** — Android tablet smoke suite on Genymotion (Nexus 10): `./bin/krita-gmsaas-smoke-touch` runs the full touch batch end-to-end (incl. `modify` + `top-bar-light`).
+- [ ] **Infra** — Touch smoke test architecture v2 *(in progress)*: evolve `--touch-smoke` from “stable screenshots” into **assertive, cross-platform tests** (Linux Xvfb + Android/Genymotion) with reusable primitives + machine-readable results (not just pixels/PNG diffs).
 - [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
 - [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
 - [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
@@ -54,6 +55,7 @@ Current focus (prioritized): **Android tablet smoke + device validation**
 - [x] **P1** — Layers panel gestures v1: swipe left → Layer Options sheet; swipe right → multi-select; hold visibility icon → solo visibility.
 - [ ] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
   - [ ] Document Linux touchscreen device + driver stack (X11): panel model, resolution, input device name.
+    - Use `touch-infra/collect-validation-device-info.sh --linux-x11` and paste results into **Validation devices** below.
   - [x] Document Android tablet validation device (CI): Genymotion Cloud recipe `krita_tablet_nexus10_api35` (Android 15 / API 35 / 2560×1600 / dpi 320 / arm64). *(No stylus; emulator.)*
   - [ ] Run manual acceptance: Transform parity v1 (P0.3).
   - [ ] Run manual acceptance: Touch sidebar Modify (P1.1).
@@ -75,6 +77,10 @@ Work log (append-only; newest first):
 - **2026‑01‑21**:
   - Android: rebuilt arm64-v8a debug APK + ran full Genymotion touch batch (16 scenarios) on Nexus 10 recipe (all OK).
   - Genymotion Cloud: switched canonical tablet recipe to `krita_tablet_nexus10_api35` (Nexus 10 2560×1600, Android 15 / API 35 / arm64); ran Android smoke `top-bar` (OK).
+  - Smoke: `--touch-smoke` now emits a machine-readable per-step report line `KRITA_TOUCH_SMOKE_JSON ...` alongside `KRITA_TOUCH_SMOKE_DONE ...`.
+  - Smoke: `--touch-smoke=layers-panel` now asserts swipe-right multi-select **and** hold-visibility “solo” + restore.
+  - Smoke: `--touch-smoke=gesture-controls` now asserts rotate-with-pinch, clipboard, undo/redo, quickmenu, and fullscreen gating (enabled does the thing; disabled does not) and still opens the Gestures page for the screenshot.
+  - Repo status note (as of 2026‑01‑21): local WIP changes were uncommitted / not pushed.
 - **2026‑01‑20**:
   - Android smoke: added `./bin/krita-gmsaas-smoke-touch` (tablet recipe) + improved `./bin/gmsaas-smoke-android` robustness (wait for instance `ONLINE`, log instance UUID early); ran Genymotion scenario `top-bar` (OK).
   - Smoke: rebuilt + ran xvfb scenarios `colordrop`, `layers-panel`, `layer-options`, and reran `transform-tool` (all OK).
@@ -115,7 +121,46 @@ Work log (append-only; newest first):
     Notes:
 
     - If your `pipx` default points at an unwritable path (example: `/mnt/extra/pipx`), export `PIPX_HOME` / `PIPX_BIN_DIR` as above.
-  - Genymotion API token stored locally in `/home/arch/.api-keys` (**never commit**).
+- Genymotion API token stored locally in `/home/arch/.api-keys` (**never commit**).
+
+### Validation devices (primary)
+
+This section is the canonical record of the primary touch devices used for manual acceptance.
+
+#### Linux touchscreen (X11)
+
+- Panel model:
+- Resolution:
+- Input device name(s):
+- Driver stack (X11):
+- Notes:
+
+Collected output (paste from `touch-infra/collect-validation-device-info.sh --linux-x11`):
+
+```text
+<paste here>
+```
+
+#### Android tablet (CI / smoke)
+
+- Genymotion Cloud recipe: `krita_tablet_nexus10_api35` (Android 15 / API 35 / 2560×1600 / dpi 320 / arm64).
+- Notes: No stylus; emulator.
+
+### Manual acceptance log (Meta)
+
+Record each manual acceptance pass here so we can safely check off the Meta tasks above.
+
+Template:
+
+- Date:
+- Device:
+- Build (commit/AppImage/APK):
+- Results:
+  - P0.3 Transform parity v1: PASS | FAIL | N/A — notes
+  - P1.1 Touch sidebar Modify: PASS | FAIL | N/A — notes
+  - P1.4 ColorDrop v1: PASS | FAIL | N/A — notes
+  - P1.5 Layers panel gestures v1: PASS | FAIL | N/A — notes
+- Notes:
 
 ### Two repos (important)
 
@@ -556,19 +601,20 @@ Scenario names (keep stable):
 
 - `top-bar` *(shows Touch Mode chrome/top bar)*
 - `top-bar-light` *(shows Touch Mode chrome/top bar in Touch Procreate Light theme)*
-- `selection-tool`
+- `selection-tool` *(creates a polygon selection, exercises Save/Load + Fill, and validates pixels)*
 - `transform-tool`
 - `touch-sidebar`
-- `layers-panel`
-- `layer-options` *(opens the touch Layer Options sheet)*
+- `modify` *(exercises TouchDocker Modify (temporary Color Sampler) and validates restore behavior)*
+- `layers-panel` *(populates layers and validates swipe-right multi-select + hold-visibility solo/restore)*
+- `layer-options` *(validates swipe-left opens the touch Layer Options sheet)*
 - `color-panel` *(currently opens existing color selector docker as placeholder)*
 - `colordrop` *(performs a ColorDrop fill on the canvas)*
 - `quickshape` *(draws a stroke + triggers QuickShape snapping)*
 - `actions-sheet` *(opens the touch Actions sheet)*
-- `gesture-controls` *(opens the Actions sheet on the Gestures page)*
-- `quickmenu` *(opens the touch QuickMenu overlay)*
+- `gesture-controls` *(validates rotate-with-pinch gating and opens the Actions sheet on the Gestures page)*
+- `quickmenu` *(opens QuickMenu, triggers Select slot, validates tool switch)*
 - `quickmenu-setup` *(opens the touch QuickMenu Setup sheet)*
-- `copypaste` *(opens the touch Copy/Paste overlay)*
+- `copypaste` *(creates selection, copies to new layer, and shows the touch Copy/Paste overlay)*
 
 Notes:
 
@@ -841,6 +887,51 @@ Pass/fail (minimum):
 - app launches
 - screenshot is non-empty
 - no `FATAL EXCEPTION` attributed to the app in logcat during the run
+
+### 4.5 Touch smoke test architecture (needed)
+
+We currently use `--touch-smoke` for deterministic screenshots and *some* behavioral assertions, but it does **not** cover “almost all features” of Krita. The value is specifically in catching regressions in our **touch-first Procreate-MVP** surfaces, across **Linux Xvfb** and **Android/Genymotion**.
+
+The need:
+
+- Screenshot-only smoke is helpful, but it misses “looks OK, behaves wrong” regressions (gesture routing, selection semantics, tool state restoration, config gating).
+- Android input synthesis can be flaky; tests must be deterministic even when Qt synthetic events fail.
+- We need confidence that the same scenarios behave the same on Linux and on the Genymotion recipe.
+
+Architecture direction (v2):
+
+- **Reusable primitives** in C++ (not copy/paste per scenario):
+  - open/ensure doc; show/hide dockers by id; switch tool; trigger action by id
+  - set canvas resources (fg/bg color); create layers; query layer count; query selection rect
+  - paint/fill via input events **with fallbacks** to direct paint ops
+  - simulate touch-ish interactions where needed (tap, swipe, hold) using `QMouseEvent` with synthesized sources
+- **Assertions first**:
+  - validate tool state (active tool id), selection presence/shape, and at least a few pixel samples (inside/outside)
+  - validate “restore” behaviors (e.g. Modify returns to previous tool and restores `touchPainting`)
+  - validate config gating (“Gesture Controls” toggles actually change behavior)
+- **Better reporting**:
+  - keep the existing log marker `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
+  - emit a second machine-readable line: `KRITA_TOUCH_SMOKE_JSON { ... }` containing per-step pass/fail + details, so scripts can give useful CI diffs without image comparison.
+    - Example shape:
+      - `KRITA_TOUCH_SMOKE_JSON {"scenario":"layers-panel","status":"OK","duration_ms":1234,"steps":[{"name":"layers_panel.find_node_view","ok":true},{"name":"layers_panel.hold_visibility_solo","ok":true,"details":{"before_visible":7,"after_visible":1}}]}`
+
+Next test targets (cross-platform, assertive):
+
+- QuickMenu: now covered by `--touch-smoke=quickmenu` (triggers Select slot + asserts tool switch) and `--touch-smoke=gesture-controls` (gesture gating opens/closes the overlay). Next: validate slide/highlight routing in `KisTouchQuickMenuAction`.
+- Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + asserts layer count) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay). Next: add pixel diffs + destructive “clear layer” coverage in a safe blank doc.
+- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + fullscreen gating assertions). Next: validate clear-layer scrub gating and (where possible) the input-manager shortcut matching path (not just direct input-action calls).
+- Layers: now covered by `--touch-smoke=layers-panel` (swipe-right multi-select + hold-visibility solo/restore) and `--touch-smoke=layer-options` (swipe-left opens options).
+
+Next offer (recommended next implementation):
+
+- Extend `--touch-smoke=quickmenu` with **assertive, end-to-end** gesture-path tests via `KisTouchQuickMenuAction`:
+  - slide/highlight: finger moves highlight the expected slot
+  - release triggers the slot’s action (already covered via direct trigger; add the gesture-path)
+  - hold-on-slot triggers the configure sheet (`touch_quickmenu_configure`)
+- Extend `--touch-smoke=gesture-controls` to cover **Clear Layer** scrub gating safely:
+  - when enabled: a strong side-to-side scrub gesture triggers `clear` on the active layer (use a blank doc + assert pixels/layer content changes)
+  - when disabled: scrub does nothing
+  - *(Keep this deterministic + safe: don’t destroy user data; always run on the smoke doc.)*
 
 ---
 
@@ -1617,7 +1708,7 @@ Code checkpoints:
 
 Headless smoke:
 
-- Linux: `--touch-smoke=layers-panel` (shows the Layers docker)
+- Linux: `--touch-smoke=layers-panel` (shows Layers docker; validates swipe-right multi-select + hold-visibility solo/restore)
 - Linux: `--touch-smoke=layer-options` (shows Layers docker and opens the touch Layer Options sheet)
 
 Manual acceptance checklist:
@@ -1674,7 +1765,7 @@ Code checkpoints:
   - `plugins/dockers/touchdocker/TouchDockerWidget.cpp` (binds to `touch_actions_sheet`, fallback `command_bar_open`)
 - Smoke:
   - `--touch-smoke=actions-sheet` triggers `touch_actions_sheet` (fallback `command_bar_open`)
-  - `--touch-smoke=gesture-controls` opens the Actions sheet on the **Gestures** page
+  - `--touch-smoke=gesture-controls` validates rotate-with-pinch + clipboard + undo/redo + quickmenu + fullscreen gating and opens the Actions sheet on the **Gestures** page
 
 Manual acceptance checklist:
 

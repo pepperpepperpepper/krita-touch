@@ -41,11 +41,19 @@
 #include <QSysInfo>
 #include <QThread>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QWidget>
 #include <QDockWidget>
+#include <QTreeView>
+#include <QItemSelectionModel>
 #include <QMenu>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QTouchDevice>
+#include <QTouchEvent>
 #include <QThread>
 
 #include <klocalizedstring.h>
@@ -100,12 +108,17 @@
 #include "kis_document_aware_spin_box_unit_manager.h"
 #include "KisViewManager.h"
 #include <canvas/kis_canvas2.h>
+#include <canvas/kis_canvas_controller.h>
 #include <kis_canvas_resource_provider.h>
 #include <KisUsageLogger.h>
 #include "kis_popup_palette.h"
 #include <kis_paint_layer.h>
 #include <kis_fill_painter.h>
 #include <kis_painter.h>
+#include <input/kis_zoom_and_rotate_action.h>
+#include "input/KisTouchGestureAction.h"
+#include "input/KisTouchQuickMenuAction.h"
+#include "widgets/kis_touch_copypaste_overlay.h"
 
 #include <KritaVersionWrapper.h>
 #include <dialogs/KisSessionManagerDialog.h>
@@ -576,6 +589,44 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return;
     }
 
+    class TouchSmokeReport
+    {
+    public:
+        explicit TouchSmokeReport(const QString &scenario)
+            : m_scenario(scenario)
+        {
+            m_timer.start();
+        }
+
+        void step(const QString &name, bool ok, const QJsonObject &details = QJsonObject())
+        {
+            QJsonObject obj;
+            obj.insert(QStringLiteral("name"), name);
+            obj.insert(QStringLiteral("ok"), ok);
+            if (!details.isEmpty()) {
+                obj.insert(QStringLiteral("details"), details);
+            }
+            m_steps.append(obj);
+        }
+
+        QByteArray toJson(const QString &status) const
+        {
+            QJsonObject root;
+            root.insert(QStringLiteral("scenario"), m_scenario);
+            root.insert(QStringLiteral("status"), status);
+            root.insert(QStringLiteral("duration_ms"), qint64(m_timer.elapsed()));
+            root.insert(QStringLiteral("steps"), m_steps);
+            return QJsonDocument(root).toJson(QJsonDocument::Compact);
+        }
+
+    private:
+        QString m_scenario;
+        QElapsedTimer m_timer;
+        QJsonArray m_steps;
+    };
+
+    TouchSmokeReport report(normalizedScenario);
+
     auto finalizeSmoke = [&](bool ok) {
         // Give Qt a moment to settle widget creation + repaint so headless screenshots
         // capture the intended UI state (especially on Android).
@@ -585,6 +636,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         const QString status = ok ? QStringLiteral("OK") : QStringLiteral("ERROR");
         qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_DONE scenario=%1 status=%2").arg(normalizedScenario, status);
+        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_JSON %1").arg(QString::fromUtf8(report.toJson(status)));
     };
 
     // Don't persist smoke-only settings changes into the user's config file. We only
@@ -634,9 +686,208 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "selection-tool" || normalizedScenario == "selection_tool") {
-        KoToolManager::instance()->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
+        KisView *view = mainWindow->activeView();
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        const QRect bounds = image ? image->bounds() : QRect();
+
+        if (!view || !view->canvasBase() || !image || !bounds.isValid()) {
+            qWarning() << "Touch smoke: selection-tool missing view/image/bounds";
+            finalizeSmoke(false);
+            return;
+        }
+
+        QWidget *canvasWidget = view->canvasBase()->canvasWidget();
+        if (!canvasWidget) {
+            qWarning() << "Touch smoke: selection-tool missing canvas widget";
+            finalizeSmoke(false);
+            return;
+        }
+
+        KoToolManager *toolManager = KoToolManager::instance();
+        if (!toolManager) {
+            qWarning() << "Touch smoke: selection-tool missing tool manager";
+            finalizeSmoke(false);
+            return;
+        }
+
+        // Ensure deterministic canvas content before testing selection ops.
+        if (!fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0xff, 0xff))) {
+            qWarning() << "Touch smoke: selection-tool failed to fill canvas";
+        }
+
+        const QColor fillColor(0xff, 0x33, 0xaa);
+        KoCanvasResourceProvider *resourceManager =
+            mainWindow->viewManager() && mainWindow->viewManager()->canvasResourceProvider()
+                ? mainWindow->viewManager()->canvasResourceProvider()->resourceManager()
+                : nullptr;
+        if (resourceManager) {
+            resourceManager->setResource(KoCanvasResource::ForegroundColor,
+                                         KoColor(fillColor, image->colorSpace()));
+        } else {
+            qWarning() << "Touch smoke: selection-tool missing resource manager; fill color may be non-deterministic";
+        }
+
+        toolManager->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
+        QApplication::processEvents();
         showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
-        finalizeSmoke(true);
+
+        auto imgToWidget = [&](const QPointF &imgP) {
+            return view->canvasBase()->coordinatesConverter()->imageToWidget(imgP);
+        };
+
+        auto tapAtImagePos = [&](const QPointF &imgP) {
+            const QPointF widgetPos = imgToWidget(imgP);
+            const QPointF globalPos = canvasWidget->mapToGlobal(widgetPos.toPoint());
+
+            QMouseEvent press(QEvent::MouseButtonPress,
+                              widgetPos,
+                              globalPos,
+                              Qt::LeftButton,
+                              Qt::LeftButton,
+                              Qt::NoModifier);
+            QApplication::sendEvent(canvasWidget, &press);
+
+            QMouseEvent release(QEvent::MouseButtonRelease,
+                                widgetPos,
+                                globalPos,
+                                Qt::LeftButton,
+                                Qt::NoButton,
+                                Qt::NoModifier);
+            QApplication::sendEvent(canvasWidget, &release);
+        };
+
+        // Tap-to-polygon selection: 4 corners, then tap the first point again to close.
+        const QPointF tl(bounds.left() + bounds.width() * 0.25, bounds.top() + bounds.height() * 0.25);
+        const QPointF tr(bounds.left() + bounds.width() * 0.75, bounds.top() + bounds.height() * 0.25);
+        const QPointF br(bounds.left() + bounds.width() * 0.75, bounds.top() + bounds.height() * 0.75);
+        const QPointF bl(bounds.left() + bounds.width() * 0.25, bounds.top() + bounds.height() * 0.75);
+
+        tapAtImagePos(tl);
+        tapAtImagePos(tr);
+        tapAtImagePos(br);
+        tapAtImagePos(bl);
+        tapAtImagePos(tl);
+
+        auto selectedExactRect = [&]() -> QRect {
+            KisSelectionSP selection = view->selection();
+            if (!selection || !selection->pixelSelection()) {
+                return QRect();
+            }
+            return selection->pixelSelection()->selectedExactRect();
+        };
+
+        bool ok = true;
+
+        bool selectionMade = false;
+        for (int i = 0; i < 80; ++i) {
+            QApplication::processEvents();
+            image->waitForDone();
+            if (!selectedExactRect().isEmpty()) {
+                selectionMade = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+
+        if (!selectionMade) {
+            qWarning() << "Touch smoke: selection-tool did not create a selection";
+            finalizeSmoke(false);
+            return;
+        }
+
+        // Exercise Save/Load selection via the tool slots (single-slot, in-memory).
+        KoToolBase *toolBase = toolManager->toolById(view->canvasBase(), QStringLiteral("KisToolSelectTouch"));
+        QObject *toolObj = dynamic_cast<QObject *>(toolBase);
+        if (!toolObj) {
+            qWarning() << "Touch smoke: selection-tool could not access tool object";
+            ok = false;
+        } else {
+            QMetaObject::invokeMethod(toolObj, "slot_saveSelectionClicked", Qt::DirectConnection);
+        }
+
+        if (QAction *action = mainWindow->actionCollection()->action("deselect")) {
+            action->trigger();
+        } else {
+            qWarning() << "Touch smoke: selection-tool missing action: deselect";
+            ok = false;
+        }
+
+        bool selectionCleared = false;
+        for (int i = 0; i < 80; ++i) {
+            QApplication::processEvents();
+            if (selectedExactRect().isEmpty()) {
+                selectionCleared = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+        if (!selectionCleared) {
+            qWarning() << "Touch smoke: selection-tool deselect did not clear selection";
+            ok = false;
+        }
+
+        if (toolObj) {
+            QMetaObject::invokeMethod(toolObj, "slot_loadSelectionClicked", Qt::DirectConnection);
+        }
+
+        bool selectionRestored = false;
+        for (int i = 0; i < 80; ++i) {
+            QApplication::processEvents();
+            if (!selectedExactRect().isEmpty()) {
+                selectionRestored = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+        if (!selectionRestored) {
+            qWarning() << "Touch smoke: selection-tool load did not restore selection";
+            ok = false;
+        }
+
+        // Fill selection and validate pixels inside/outside change as expected.
+        KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
+        const QPoint inside(bounds.left() + qRound(bounds.width() * 0.50),
+                            bounds.top() + qRound(bounds.height() * 0.50));
+        const QPoint outside(bounds.left() + qRound(bounds.width() * 0.10),
+                             bounds.top() + qRound(bounds.height() * 0.10));
+        const QVector<QPoint> samplePoints{inside, outside};
+        const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+
+        if (QAction *action = mainWindow->actionCollection()->action("fill_selection_foreground_color")) {
+            action->trigger();
+            QApplication::processEvents();
+            image->waitForDone();
+            refreshImageForTouchSmoke(image);
+        } else {
+            qWarning() << "Touch smoke: selection-tool missing action: fill_selection_foreground_color";
+            ok = false;
+        }
+
+        const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+        if (!dev) {
+            qWarning() << "Touch smoke: selection-tool cannot validate fill; missing paint device";
+            ok = false;
+        } else if (after.size() == samplePoints.size()) {
+            const QColor expectedOutside(0xff, 0xff, 0xff);
+            const bool insideIsFillColor = colorsEqualForTouchSmoke(after[0], fillColor, 5);
+            const bool outsideIsWhite = colorsEqualForTouchSmoke(after[1], expectedOutside, 5);
+            const bool insideChanged = anySampleChangedForTouchSmoke({before[0]}, {after[0]}, 3);
+
+            if (!insideChanged || !insideIsFillColor || !outsideIsWhite) {
+                qWarning() << "Touch smoke: selection-tool fill did not match expected colors"
+                           << "insideChanged=" << insideChanged
+                           << "insideOk=" << insideIsFillColor
+                           << "outsideOk=" << outsideIsWhite
+                           << "insideAfter=" << after[0]
+                           << "outsideAfter=" << after[1];
+                ok = false;
+            }
+        } else {
+            qWarning() << "Touch smoke: selection-tool sample size mismatch";
+            ok = false;
+        }
+
+        finalizeSmoke(ok);
         return;
     }
 
@@ -993,25 +1244,300 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     if (normalizedScenario == "layers-panel" || normalizedScenario == "layers_panel") {
         showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
         populateLayersForTouchSmoke(mainWindow, 6);
-        finalizeSmoke(true);
+        // Validate the Procreate-style swipe-right multi-select gesture on the layers list.
+        QDockWidget *dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
+        QTreeView *nodeView = nullptr;
+        if (dock) {
+            const QList<QTreeView *> views = dock->findChildren<QTreeView *>();
+            for (QTreeView *view : views) {
+                if (view && QString::fromLatin1(view->metaObject()->className()) == QStringLiteral("NodeView")) {
+                    nodeView = view;
+                    break;
+                }
+            }
+            if (!nodeView && !views.isEmpty()) {
+                nodeView = views.first();
+            }
+        }
+
+        QWidget *viewport = nodeView ? nodeView->viewport() : nullptr;
+        if (!nodeView || !viewport || !nodeView->model()) {
+            qWarning() << "Touch smoke: layers-panel could not find NodeView";
+            report.step(QStringLiteral("layers_panel.find_node_view"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("layers_panel.find_node_view"), true);
+
+        QItemSelectionModel *selectionModel = nodeView->selectionModel();
+        if (!selectionModel) {
+            qWarning() << "Touch smoke: layers-panel missing selection model";
+            report.step(QStringLiteral("layers_panel.find_selection_model"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("layers_panel.find_selection_model"), true);
+
+        selectionModel->clearSelection();
+        QApplication::processEvents();
+
+        const int minSwipePx = qMax(qApp->startDragDistance() * 2, 36);
+        if (viewport->width() < minSwipePx * 2) {
+            qWarning() << "Touch smoke: layers-panel viewport too narrow for swipe validation";
+            finalizeSmoke(false);
+            return;
+        }
+
+        const int startX = viewport->width() / 2;
+        const int endX = qMin(viewport->width() - 2, startX + minSwipePx + 10);
+
+        QModelIndex rawIndex;
+        QPoint startPos;
+        for (int y = 10; y < viewport->height(); y += 18) {
+            const QPoint p(startX, y);
+            QModelIndex idx = nodeView->indexAt(p);
+            if (idx.isValid() && idx.column() == 0) {
+                rawIndex = idx;
+                startPos = p;
+                break;
+            }
+        }
+
+        if (!rawIndex.isValid()) {
+            qWarning() << "Touch smoke: layers-panel could not find a valid row for swipe";
+            report.step(QStringLiteral("layers_panel.pick_row"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("layers_panel.pick_row"), true);
+
+        QModelIndex buddyIndex = nodeView->model()->buddy(rawIndex);
+        if (!buddyIndex.isValid()) {
+            buddyIndex = rawIndex;
+        }
+
+        auto sendTouchMouseEvent = [&](QEvent::Type type,
+                                       const QPoint &localPos,
+                                       Qt::MouseButton button,
+                                       Qt::MouseButtons buttons) {
+            const QPointF lp(localPos);
+            const QPointF sp(viewport->mapToGlobal(localPos));
+            QMouseEvent ev(type,
+                           lp,
+                           lp,
+                           sp,
+                           button,
+                           buttons,
+                           Qt::NoModifier,
+                           Qt::MouseEventSynthesizedByQt);
+            QApplication::sendEvent(viewport, &ev);
+        };
+
+        sendTouchMouseEvent(QEvent::MouseButtonPress, startPos, Qt::LeftButton, Qt::LeftButton);
+        sendTouchMouseEvent(QEvent::MouseMove, QPoint(endX, startPos.y() + 1), Qt::NoButton, Qt::LeftButton);
+        sendTouchMouseEvent(QEvent::MouseButtonRelease, QPoint(endX, startPos.y() + 1), Qt::LeftButton, Qt::NoButton);
+
+        QApplication::processEvents();
+
+        if (!selectionModel->isSelected(buddyIndex)) {
+            qWarning() << "Touch smoke: layers-panel swipe-right did not toggle selection";
+            report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), true);
+
+        bool ok = true;
+
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        KisGroupLayerSP rootLayer = image ? image->rootLayer() : KisGroupLayerSP();
+
+        auto visibleDirectChildCount = [&]() -> int {
+            if (!rootLayer) {
+                return 0;
+            }
+            int count = 0;
+            for (KisNodeSP node = rootLayer->firstChild(); node; node = node->nextSibling()) {
+                if (node->visible(false)) {
+                    ++count;
+                }
+            }
+            return count;
+        };
+
+        const int beforeVisible = visibleDirectChildCount();
+        if (!image || !rootLayer || beforeVisible < 2) {
+            qWarning() << "Touch smoke: layers-panel cannot validate solo visibility; visible children=" << beforeVisible;
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("visible_children"), beforeVisible);
+                report.step(QStringLiteral("layers_panel.solo_setup"), false, details);
+            }
+            ok = false;
+        } else {
+            // Procreate-like layer solo: press-and-hold visibility icon toggles solo.
+            const QModelIndex visibilityIndex = buddyIndex.sibling(buddyIndex.row(), 1 /* VISIBILITY_COL */);
+            const QRect visRect = nodeView->visualRect(visibilityIndex);
+            const QPoint visPos = visRect.isValid() ? visRect.center() : QPoint();
+
+            bool soloApplied = false;
+            int afterVisible = beforeVisible;
+            if (!visibilityIndex.isValid() || !visRect.isValid()) {
+                qWarning() << "Touch smoke: layers-panel could not compute visibility column rect";
+                ok = false;
+                report.step(QStringLiteral("layers_panel.hold_visibility_solo"), false);
+            } else {
+                sendTouchMouseEvent(QEvent::MouseButtonPress, visPos, Qt::LeftButton, Qt::LeftButton);
+                for (int i = 0; i < 80; ++i) {
+                    QApplication::processEvents();
+                    image->waitForDone();
+                    afterVisible = visibleDirectChildCount();
+                    if (afterVisible < beforeVisible) {
+                        soloApplied = true;
+                        break;
+                    }
+                    QThread::msleep(20);
+                }
+                sendTouchMouseEvent(QEvent::MouseButtonRelease, visPos, Qt::LeftButton, Qt::NoButton);
+
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("before_visible"), beforeVisible);
+                    details.insert(QStringLiteral("after_visible"), afterVisible);
+                    report.step(QStringLiteral("layers_panel.hold_visibility_solo"), soloApplied, details);
+                }
+
+                if (!soloApplied) {
+                    ok = false;
+                } else {
+                    // Hold again to restore.
+                    bool restored = false;
+                    int restoredVisible = afterVisible;
+                    sendTouchMouseEvent(QEvent::MouseButtonPress, visPos, Qt::LeftButton, Qt::LeftButton);
+                    for (int i = 0; i < 80; ++i) {
+                        QApplication::processEvents();
+                        image->waitForDone();
+                        restoredVisible = visibleDirectChildCount();
+                        if (restoredVisible == beforeVisible) {
+                            restored = true;
+                            break;
+                        }
+                        QThread::msleep(20);
+                    }
+                    sendTouchMouseEvent(QEvent::MouseButtonRelease, visPos, Qt::LeftButton, Qt::NoButton);
+
+                    {
+                        QJsonObject details;
+                        details.insert(QStringLiteral("expected_visible"), beforeVisible);
+                        details.insert(QStringLiteral("restored_visible"), restoredVisible);
+                        report.step(QStringLiteral("layers_panel.hold_visibility_restore"), restored, details);
+                    }
+
+                    if (!restored) {
+                        ok = false;
+                    }
+                }
+            }
+        }
+
+        finalizeSmoke(ok);
         return;
     }
 
     if (normalizedScenario == "layer-options" || normalizedScenario == "layer_options") {
         showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
         populateLayersForTouchSmoke(mainWindow, 6);
-        if (QAction *action = mainWindow->actionCollection()->action("touch_layer_options_sheet")) {
-            action->trigger();
-            finalizeSmoke(true);
+        // Validate the Procreate-style swipe-left gesture that opens the layer options sheet.
+        QDockWidget *dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
+        QTreeView *nodeView = nullptr;
+        if (dock) {
+            const QList<QTreeView *> views = dock->findChildren<QTreeView *>();
+            for (QTreeView *view : views) {
+                if (view && QString::fromLatin1(view->metaObject()->className()) == QStringLiteral("NodeView")) {
+                    nodeView = view;
+                    break;
+                }
+            }
+            if (!nodeView && !views.isEmpty()) {
+                nodeView = views.first();
+            }
+        }
+
+        QWidget *viewport = nodeView ? nodeView->viewport() : nullptr;
+        if (!nodeView || !viewport || !nodeView->model()) {
+            qWarning() << "Touch smoke: layer-options could not find NodeView";
+            finalizeSmoke(false);
             return;
         }
-        if (QAction *action = mainWindow->actionCollection()->action("layer_properties")) {
-            action->trigger();
-            finalizeSmoke(true);
+
+        const int minSwipePx = qMax(qApp->startDragDistance() * 2, 36);
+        if (viewport->width() < minSwipePx * 2) {
+            qWarning() << "Touch smoke: layer-options viewport too narrow for swipe validation";
+            finalizeSmoke(false);
             return;
         }
-        qWarning() << "Touch smoke: action not found: touch_layer_options_sheet (or layer_properties fallback)";
-        finalizeSmoke(false);
+
+        const int startX = viewport->width() / 2;
+        const int endX = qMax(2, startX - (minSwipePx + 10));
+
+        QModelIndex rawIndex;
+        QPoint startPos;
+        for (int y = 10; y < viewport->height(); y += 18) {
+            const QPoint p(startX, y);
+            QModelIndex idx = nodeView->indexAt(p);
+            if (idx.isValid() && idx.column() == 0) {
+                rawIndex = idx;
+                startPos = p;
+                break;
+            }
+        }
+
+        if (!rawIndex.isValid()) {
+            qWarning() << "Touch smoke: layer-options could not find a valid row for swipe";
+            finalizeSmoke(false);
+            return;
+        }
+
+        auto sendTouchMouseEvent = [&](QEvent::Type type,
+                                       const QPoint &localPos,
+                                       Qt::MouseButton button,
+                                       Qt::MouseButtons buttons) {
+            const QPointF lp(localPos);
+            const QPointF sp(viewport->mapToGlobal(localPos));
+            QMouseEvent ev(type,
+                           lp,
+                           lp,
+                           sp,
+                           button,
+                           buttons,
+                           Qt::NoModifier,
+                           Qt::MouseEventSynthesizedByQt);
+            QApplication::sendEvent(viewport, &ev);
+        };
+
+        sendTouchMouseEvent(QEvent::MouseButtonPress, startPos, Qt::LeftButton, Qt::LeftButton);
+        sendTouchMouseEvent(QEvent::MouseMove, QPoint(endX, startPos.y() + 1), Qt::NoButton, Qt::LeftButton);
+        sendTouchMouseEvent(QEvent::MouseButtonRelease, QPoint(endX, startPos.y() + 1), Qt::LeftButton, Qt::NoButton);
+
+        QApplication::processEvents();
+
+        QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+        if (!sheet || !sheet->isVisible()) {
+            qWarning() << "Touch smoke: layer-options swipe-left did not show options sheet; falling back to action trigger";
+            if (QAction *action = mainWindow->actionCollection()->action("touch_layer_options_sheet")) {
+                action->trigger();
+                QApplication::processEvents();
+                sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+            } else if (QAction *action = mainWindow->actionCollection()->action("layer_properties")) {
+                action->trigger();
+            } else {
+                qWarning() << "Touch smoke: action not found: touch_layer_options_sheet (or layer_properties fallback)";
+                finalizeSmoke(false);
+                return;
+            }
+        }
+
+        finalizeSmoke(true);
         return;
     }
 
@@ -1124,6 +1650,539 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
     if (normalizedScenario == "gesture-controls" || normalizedScenario == "gesture_controls" ||
         normalizedScenario == "gesture-controls-sheet" || normalizedScenario == "gesture_controls_sheet") {
+        bool ok = true;
+
+        KisView *view = mainWindow->activeView();
+        KisCanvasController *controller = view ? view->canvasController() : nullptr;
+        QWidget *canvasWidget = view && view->canvasBase() ? view->canvasBase()->canvasWidget() : nullptr;
+
+        if (!view || !controller || !canvasWidget) {
+            qWarning() << "Touch smoke: gesture-controls missing view/canvas/controller";
+            report.step(QStringLiteral("gesture_controls.setup"), false);
+            finalizeSmoke(false);
+            return;
+        }
+
+        report.step(QStringLiteral("gesture_controls.setup"), true);
+
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        const bool imageOk = bool(image);
+        report.step(QStringLiteral("gesture_controls.find_image"), imageOk);
+        if (!imageOk) {
+            ok = false;
+        }
+
+        auto waitForUiCondition = [&](int timeoutMs, auto condition) -> bool {
+            constexpr int stepMs = 20;
+            const int iterations = qMax(1, timeoutMs / stepMs);
+            for (int i = 0; i < iterations; ++i) {
+                QApplication::processEvents();
+                if (condition()) {
+                    return true;
+                }
+                QThread::msleep(stepMs);
+            }
+            QApplication::processEvents();
+            return condition();
+        };
+
+        auto waitForImageCondition = [&](int timeoutMs, auto condition) -> bool {
+            constexpr int stepMs = 20;
+            const int iterations = qMax(1, timeoutMs / stepMs);
+            for (int i = 0; i < iterations; ++i) {
+                QApplication::processEvents();
+                if (image) {
+                    image->waitForDone();
+                }
+                if (condition()) {
+                    return true;
+                }
+                QThread::msleep(stepMs);
+            }
+            QApplication::processEvents();
+            if (image) {
+                image->waitForDone();
+            }
+            return condition();
+        };
+
+        KoToolManager::instance()->switchToolRequested(QStringLiteral("KritaShape/KisToolBrush"));
+        QApplication::processEvents();
+
+        static QTouchDevice *touchDevice = nullptr;
+        if (!touchDevice) {
+            touchDevice = new QTouchDevice();
+            touchDevice->setType(QTouchDevice::TouchScreen);
+            touchDevice->setCapabilities(QTouchDevice::Position);
+            touchDevice->setMaximumTouchPoints(4);
+        }
+
+        auto sendOneFingerTouchTap = [&]() {
+            const QPointF center = QPointF(canvasWidget->rect().center());
+            const QPointF centerGlobal = QPointF(canvasWidget->mapToGlobal(center.toPoint()));
+
+            QTouchEvent::TouchPoint tp0(0);
+            tp0.setState(Qt::TouchPointPressed);
+            tp0.setPos(center);
+            tp0.setScreenPos(centerGlobal);
+
+            QList<QTouchEvent::TouchPoint> beginPoints{tp0};
+            QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+            QApplication::sendEvent(canvasWidget, &beginEvent);
+
+            tp0.setState(Qt::TouchPointReleased);
+            QList<QTouchEvent::TouchPoint> endPoints{tp0};
+            QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+            QApplication::sendEvent(canvasWidget, &endEvent);
+        };
+
+	        auto applyTwoFingerRotateGesture = [&]() -> qreal {
+	            const QPointF center = QPointF(canvasWidget->rect().center());
+	            constexpr qreal radius = 90.0;
+
+	            const QPointF p0Start = center + QPointF(-radius, 0.0);
+	            const QPointF p1Start = center + QPointF(radius, 0.0);
+	            const QPointF p0Update1 = center + QPointF(-radius * 0.70, -radius * 0.70);
+	            const QPointF p1Update1 = center + QPointF(radius * 0.70, radius * 0.70);
+	            const QPointF p0Update2 = center + QPointF(0.0, -radius);
+	            const QPointF p1Update2 = center + QPointF(0.0, radius);
+	            const QPointF p0StartGlobal = QPointF(canvasWidget->mapToGlobal(p0Start.toPoint()));
+	            const QPointF p1StartGlobal = QPointF(canvasWidget->mapToGlobal(p1Start.toPoint()));
+	            const QPointF p0Update1Global = QPointF(canvasWidget->mapToGlobal(p0Update1.toPoint()));
+	            const QPointF p1Update1Global = QPointF(canvasWidget->mapToGlobal(p1Update1.toPoint()));
+	            const QPointF p0Update2Global = QPointF(canvasWidget->mapToGlobal(p0Update2.toPoint()));
+	            const QPointF p1Update2Global = QPointF(canvasWidget->mapToGlobal(p1Update2.toPoint()));
+
+            QTouchEvent::TouchPoint tp0(0);
+            QTouchEvent::TouchPoint tp1(1);
+
+            tp0.setState(Qt::TouchPointPressed);
+            tp0.setPos(p0Start);
+            tp0.setScreenPos(p0StartGlobal);
+            tp1.setState(Qt::TouchPointPressed);
+            tp1.setPos(p1Start);
+            tp1.setScreenPos(p1StartGlobal);
+
+            QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1};
+	            QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+	            tp0.setState(Qt::TouchPointMoved);
+	            tp0.setPos(p0Update1);
+	            tp0.setScreenPos(p0Update1Global);
+	            tp1.setState(Qt::TouchPointMoved);
+	            tp1.setPos(p1Update1);
+	            tp1.setScreenPos(p1Update1Global);
+
+	            QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1};
+	            QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
+
+	            tp0.setPos(p0Update2);
+	            tp0.setScreenPos(p0Update2Global);
+	            tp1.setPos(p1Update2);
+	            tp1.setScreenPos(p1Update2Global);
+
+	            QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1};
+	            QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
+
+            tp0.setState(Qt::TouchPointReleased);
+            tp1.setState(Qt::TouchPointReleased);
+            QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1};
+            QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+
+            const qreal before = view->canvasBase()->rotationAngle();
+
+	            KisZoomAndRotateAction action;
+	            action.begin(KisZoomAndRotateAction::ContinuousRotateMode, &beginEvent);
+	            action.inputEvent(&updateEvent1);
+	            action.inputEvent(&updateEvent2);
+	            action.end(&endEvent);
+
+            QApplication::processEvents();
+            const qreal after = view->canvasBase()->rotationAngle();
+            return after - before;
+        };
+
+        // Ensure KisAbstractInputAction is wired to the active input manager.
+        sendOneFingerTouchTap();
+        QApplication::processEvents();
+
+        // Validate rotate-with-pinch gating actually changes behavior.
+        cfg.setTouchQuickPinchToFitEnabled(false);
+        controller->resetCanvasRotation();
+        QApplication::processEvents();
+
+        cfg.setTouchRotateWithPinchEnabled(true);
+        controller->resetCanvasRotation();
+        QApplication::processEvents();
+        const qreal deltaEnabled = applyTwoFingerRotateGesture();
+        const bool rotatedWhenEnabled = qAbs(deltaEnabled) > 3.0;
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("delta_degrees"), deltaEnabled);
+            report.step(QStringLiteral("gesture_controls.rotate_with_pinch_enabled_rotates"), rotatedWhenEnabled, details);
+        }
+        if (!rotatedWhenEnabled) {
+            ok = false;
+        }
+
+        cfg.setTouchRotateWithPinchEnabled(false);
+        controller->resetCanvasRotation();
+        QApplication::processEvents();
+        const qreal deltaDisabled = applyTwoFingerRotateGesture();
+        const bool didNotRotateWhenDisabled = qAbs(deltaDisabled) < 1.0;
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("delta_degrees"), deltaDisabled);
+            report.step(QStringLiteral("gesture_controls.rotate_with_pinch_disabled_no_rotate"), didNotRotateWhenDisabled, details);
+        }
+        if (!didNotRotateWhenDisabled) {
+            ok = false;
+        }
+
+        controller->resetCanvasRotation();
+        cfg.setTouchRotateWithPinchEnabled(true);
+        QApplication::processEvents();
+
+        // Validate clipboard gesture gating (3-finger swipe down → Copy/Paste overlay).
+        {
+            cfg.setTouchClearLayerGestureEnabled(false);
+
+            auto runClipboardGesture = [&](bool enabled, int showTimeoutMs) -> bool {
+                cfg.setTouchClipboardGestureEnabled(enabled);
+                QApplication::processEvents();
+
+                if (KisTouchCopyPasteOverlay *overlay =
+                        mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
+                    overlay->hide();
+                }
+
+                const QRect r = canvasWidget->rect();
+                const int startY = qMax(8, r.height() / 4);
+                const int endY = qMin(r.height() - 8, (r.height() * 3) / 4);
+                const int centerX = r.width() / 2;
+                const int spacing = qMin(60, r.width() / 6);
+
+                const QPointF p0Start(centerX - spacing, startY);
+                const QPointF p1Start(centerX, startY);
+                const QPointF p2Start(centerX + spacing, startY);
+                const QPointF p0End(centerX - spacing, endY);
+                const QPointF p1End(centerX, endY);
+                const QPointF p2End(centerX + spacing, endY);
+
+                const QPointF p0StartGlobal(canvasWidget->mapToGlobal(p0Start.toPoint()));
+                const QPointF p1StartGlobal(canvasWidget->mapToGlobal(p1Start.toPoint()));
+                const QPointF p2StartGlobal(canvasWidget->mapToGlobal(p2Start.toPoint()));
+                const QPointF p0EndGlobal(canvasWidget->mapToGlobal(p0End.toPoint()));
+                const QPointF p1EndGlobal(canvasWidget->mapToGlobal(p1End.toPoint()));
+                const QPointF p2EndGlobal(canvasWidget->mapToGlobal(p2End.toPoint()));
+
+                QTouchEvent::TouchPoint tp0(0);
+                QTouchEvent::TouchPoint tp1(1);
+                QTouchEvent::TouchPoint tp2(2);
+
+                tp0.setState(Qt::TouchPointPressed);
+                tp0.setPos(p0Start);
+                tp0.setScreenPos(p0StartGlobal);
+                tp1.setState(Qt::TouchPointPressed);
+                tp1.setPos(p1Start);
+                tp1.setScreenPos(p1StartGlobal);
+                tp2.setState(Qt::TouchPointPressed);
+                tp2.setPos(p2Start);
+                tp2.setScreenPos(p2StartGlobal);
+
+                QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1, tp2};
+                QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+                tp0.setState(Qt::TouchPointMoved);
+                tp0.setPos(p0End);
+                tp0.setScreenPos(p0EndGlobal);
+                tp1.setState(Qt::TouchPointMoved);
+                tp1.setPos(p1End);
+                tp1.setScreenPos(p1EndGlobal);
+                tp2.setState(Qt::TouchPointMoved);
+                tp2.setPos(p2End);
+                tp2.setScreenPos(p2EndGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints{tp0, tp1, tp2};
+                QTouchEvent updateEvent(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints);
+
+                tp0.setState(Qt::TouchPointReleased);
+                tp1.setState(Qt::TouchPointReleased);
+                tp2.setState(Qt::TouchPointReleased);
+                QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1, tp2};
+                QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+
+                KisTouchGestureAction gesture;
+                gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
+                gesture.inputEvent(&updateEvent);
+                gesture.end(&endEvent);
+
+                QApplication::processEvents();
+
+                return waitForUiCondition(showTimeoutMs, [&]() {
+                    KisTouchCopyPasteOverlay *overlay =
+                        mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"));
+                    return overlay && overlay->isVisible();
+                });
+            };
+
+            const bool shownWhenEnabled = runClipboardGesture(true, 900);
+            report.step(QStringLiteral("gesture_controls.clipboard_enabled_opens_overlay"), shownWhenEnabled);
+            if (!shownWhenEnabled) {
+                ok = false;
+            }
+
+            if (KisTouchCopyPasteOverlay *overlay =
+                    mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
+                overlay->hide();
+            }
+
+            const bool shownWhenDisabled = runClipboardGesture(false, 200);
+            const bool hiddenWhenDisabled = !shownWhenDisabled;
+            report.step(QStringLiteral("gesture_controls.clipboard_disabled_no_overlay"), hiddenWhenDisabled);
+            if (!hiddenWhenDisabled) {
+                ok = false;
+            }
+
+            if (KisTouchCopyPasteOverlay *overlay =
+                    mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
+                overlay->hide();
+            }
+
+            cfg.setTouchClipboardGestureEnabled(true);
+            cfg.setTouchClearLayerGestureEnabled(true);
+        }
+
+        // Validate undo/redo gesture gating by observing layer count changes.
+        if (image && image->rootLayer() && mainWindow->actionCollection()) {
+            auto layerCount = [&]() -> int {
+                KisGroupLayerSP root = image ? image->rootLayer() : KisGroupLayerSP();
+                return root ? int(root->childCount()) : 0;
+            };
+
+            QAction *addLayerAction = mainWindow->actionCollection()->action(QStringLiteral("add_new_paint_layer"));
+            if (!addLayerAction) {
+                qWarning() << "Touch smoke: gesture-controls missing action: add_new_paint_layer";
+                report.step(QStringLiteral("gesture_controls.undo_redo.setup"), false);
+                ok = false;
+            } else {
+                report.step(QStringLiteral("gesture_controls.undo_redo.setup"), true);
+
+                const int beforeCount = layerCount();
+                addLayerAction->trigger();
+                const bool layerAdded = waitForImageCondition(1500, [&]() { return layerCount() == beforeCount + 1; });
+                const int afterAddCount = layerCount();
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("before_layer_count"), beforeCount);
+                    details.insert(QStringLiteral("after_layer_count"), afterAddCount);
+                    report.step(QStringLiteral("gesture_controls.undo_redo.prepare_add_layer"), layerAdded, details);
+                }
+                if (!layerAdded) {
+                    ok = false;
+                } else {
+                    KisTouchGestureAction gesture;
+
+                    cfg.setTouchUndoRedoGesturesEnabled(true);
+                    gesture.begin(KisTouchGestureAction::UndoActionShortcut, nullptr);
+                    gesture.end(nullptr);
+
+                    const bool undone = waitForImageCondition(1500, [&]() { return layerCount() == beforeCount; });
+                    {
+                        QJsonObject details;
+                        details.insert(QStringLiteral("expected_layer_count"), beforeCount);
+                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        report.step(QStringLiteral("gesture_controls.undo_enabled_undoes_layer_add"), undone, details);
+                    }
+                    if (!undone) {
+                        ok = false;
+                    }
+
+                    cfg.setTouchUndoRedoGesturesEnabled(false);
+                    const int beforeBlockedRedo = layerCount();
+                    gesture.begin(KisTouchGestureAction::RedoActionShortcut, nullptr);
+                    gesture.end(nullptr);
+                    waitForImageCondition(200, [&]() { return false; });
+                    const bool redoBlocked = layerCount() == beforeBlockedRedo;
+                    {
+                        QJsonObject details;
+                        details.insert(QStringLiteral("expected_layer_count"), beforeBlockedRedo);
+                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        report.step(QStringLiteral("gesture_controls.undo_redo_disabled_blocks_redo"), redoBlocked, details);
+                    }
+                    if (!redoBlocked) {
+                        ok = false;
+                    }
+
+                    cfg.setTouchUndoRedoGesturesEnabled(true);
+                    gesture.begin(KisTouchGestureAction::RedoActionShortcut, nullptr);
+                    gesture.end(nullptr);
+
+                    const bool redone = waitForImageCondition(1500, [&]() { return layerCount() == afterAddCount; });
+                    {
+                        QJsonObject details;
+                        details.insert(QStringLiteral("expected_layer_count"), afterAddCount);
+                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        report.step(QStringLiteral("gesture_controls.redo_enabled_redoes_layer_add"), redone, details);
+                    }
+                    if (!redone) {
+                        ok = false;
+                    }
+
+                    cfg.setTouchUndoRedoGesturesEnabled(false);
+                    const int beforeBlockedUndo = layerCount();
+                    gesture.begin(KisTouchGestureAction::UndoActionShortcut, nullptr);
+                    gesture.end(nullptr);
+                    waitForImageCondition(200, [&]() { return false; });
+                    const bool undoBlocked = layerCount() == beforeBlockedUndo;
+                    {
+                        QJsonObject details;
+                        details.insert(QStringLiteral("expected_layer_count"), beforeBlockedUndo);
+                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        report.step(QStringLiteral("gesture_controls.undo_redo_disabled_blocks_undo"), undoBlocked, details);
+                    }
+                    if (!undoBlocked) {
+                        ok = false;
+                    }
+
+                    cfg.setTouchUndoRedoGesturesEnabled(true);
+                }
+            }
+        } else {
+            report.step(QStringLiteral("gesture_controls.undo_redo.setup"), false);
+            ok = false;
+        }
+
+        // Validate QuickMenu gesture gating (opens overlay only when enabled).
+        {
+            auto runQuickMenuGesture = [&](bool enabled, int showTimeoutMs) -> bool {
+                cfg.setTouchQuickMenuEnabled(enabled);
+                QApplication::processEvents();
+
+                if (KisTouchQuickMenuOverlay *overlay =
+                        mainWindow->findChild<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"))) {
+                    overlay->hide();
+                }
+
+                const QPointF center = QPointF(canvasWidget->rect().center());
+                const QPointF centerGlobal = QPointF(canvasWidget->mapToGlobal(center.toPoint()));
+
+                QTouchEvent::TouchPoint tp0(0);
+                tp0.setState(Qt::TouchPointPressed);
+                tp0.setPos(center);
+                tp0.setScreenPos(centerGlobal);
+
+                QList<QTouchEvent::TouchPoint> beginPoints{tp0};
+                QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+                tp0.setState(Qt::TouchPointReleased);
+                QList<QTouchEvent::TouchPoint> endPoints{tp0};
+                QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+
+                KisTouchQuickMenuAction action;
+                action.begin(0, &beginEvent);
+                QApplication::processEvents();
+
+                const bool shown = waitForUiCondition(showTimeoutMs, [&]() {
+                    KisTouchQuickMenuOverlay *overlay =
+                        mainWindow->findChild<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+                    return overlay && overlay->isVisible();
+                });
+
+                action.end(&endEvent);
+                QApplication::processEvents();
+
+                if (KisTouchQuickMenuOverlay *overlay =
+                        mainWindow->findChild<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"))) {
+                    overlay->hide();
+                }
+                return shown;
+            };
+
+            const bool quickMenuShown = runQuickMenuGesture(true, 900);
+            report.step(QStringLiteral("gesture_controls.quickmenu_enabled_opens_overlay"), quickMenuShown);
+            if (!quickMenuShown) {
+                ok = false;
+            }
+
+            const bool quickMenuShownWhenDisabled = runQuickMenuGesture(false, 200);
+            const bool quickMenuBlocked = !quickMenuShownWhenDisabled;
+            report.step(QStringLiteral("gesture_controls.quickmenu_disabled_no_overlay"), quickMenuBlocked);
+            if (!quickMenuBlocked) {
+                ok = false;
+            }
+
+            cfg.setTouchQuickMenuEnabled(true);
+        }
+
+        // Validate canvas-only/fullscreen gesture gating (4-finger tap routing).
+        if (mainWindow->actionCollection()) {
+            QAction *canvasOnlyAction = mainWindow->actionCollection()->action(QStringLiteral("view_show_canvas_only"));
+            if (!canvasOnlyAction) {
+                qWarning() << "Touch smoke: gesture-controls missing action: view_show_canvas_only";
+                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
+                ok = false;
+            } else {
+                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), true);
+
+                const bool initialChecked = canvasOnlyAction->isChecked();
+                KisTouchGestureAction gesture;
+
+                cfg.setTouchFullscreenGestureEnabled(true);
+                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
+                gesture.end(nullptr);
+
+                const bool toggled = waitForUiCondition(900, [&]() { return canvasOnlyAction->isChecked() != initialChecked; });
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("before_checked"), initialChecked);
+                    details.insert(QStringLiteral("after_checked"), canvasOnlyAction->isChecked());
+                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_toggles_canvas_only"), toggled, details);
+                }
+                if (!toggled) {
+                    ok = false;
+                }
+
+                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
+                gesture.end(nullptr);
+                const bool restored = waitForUiCondition(900, [&]() { return canvasOnlyAction->isChecked() == initialChecked; });
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("expected_checked"), initialChecked);
+                    details.insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
+                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_restores_canvas_only"), restored, details);
+                }
+                if (!restored) {
+                    ok = false;
+                }
+
+                cfg.setTouchFullscreenGestureEnabled(false);
+                const bool beforeBlocked = canvasOnlyAction->isChecked();
+                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
+                gesture.end(nullptr);
+                waitForUiCondition(200, [&]() { return false; });
+                const bool blocked = canvasOnlyAction->isChecked() == beforeBlocked;
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("expected_checked"), beforeBlocked);
+                    details.insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
+                    report.step(QStringLiteral("gesture_controls.fullscreen_disabled_no_toggle"), blocked, details);
+                }
+                if (!blocked) {
+                    ok = false;
+                }
+
+                if (canvasOnlyAction->isChecked() != initialChecked) {
+                    canvasOnlyAction->trigger();
+                    QApplication::processEvents();
+                }
+                cfg.setTouchFullscreenGestureEnabled(true);
+            }
+        } else {
+            report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
+            ok = false;
+        }
+
         QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
         if (!anchor) {
             anchor = mainWindow;
@@ -1143,13 +2202,21 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         // Categories are stable and ordered:
         // Add(0), Canvas(1), Share(2), Prefs(3), Gestures(4), Help(5)
         sheet->setCurrentCategoryRow(4);
-        finalizeSmoke(true);
+        finalizeSmoke(ok);
         return;
     }
 
     if (normalizedScenario == "quickmenu" || normalizedScenario == "quick-menu" || normalizedScenario == "quick_menu") {
         if (!mainWindow || !mainWindow->actionCollection()) {
             qWarning() << "Touch smoke: main window or action collection not available";
+            finalizeSmoke(false);
+            return;
+        }
+
+        KoToolManager *toolManager = KoToolManager::instance();
+        if (!toolManager) {
+            qWarning() << "Touch smoke: quickmenu missing tool manager";
+            finalizeSmoke(false);
             return;
         }
 
@@ -1168,9 +2235,66 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             overlay->setActionCollection(mainWindow->actionCollection());
         }
 
-        overlay->setHighlightedSlot(-1);
+        overlay->setSlotActionIds(QStringList{
+            QStringLiteral("edit_undo"),
+            QStringLiteral("edit_redo"),
+            QStringLiteral("KisToolSelectTouch"),
+            QStringLiteral("KisToolTransform"),
+            QStringLiteral("deselect"),
+            QStringLiteral("view_show_canvas_only"),
+        });
+
+        bool ok = true;
+
+        const QString brushToolId = QStringLiteral("KritaShape/KisToolBrush");
+        toolManager->switchToolRequested(brushToolId);
+        QApplication::processEvents();
+
+        bool brushActive = false;
+        for (int i = 0; i < 80; ++i) {
+            if (toolManager->activeToolId() == brushToolId) {
+                brushActive = true;
+                break;
+            }
+            QApplication::processEvents();
+            QThread::msleep(20);
+        }
+        if (!brushActive) {
+            qWarning() << "Touch smoke: quickmenu could not activate brush tool; current tool=" << toolManager->activeToolId();
+            ok = false;
+        }
+
+        // Validate that triggering a known slot actually executes the bound action (tool switch).
+        const int slotToTrigger = 2; // "Select" (KisToolSelectTouch)
+        const QString expectedToolId = QStringLiteral("KisToolSelectTouch");
+
+        overlay->setHighlightedSlot(slotToTrigger);
         overlay->openAtGlobalPos(globalPos);
-        finalizeSmoke(true);
+        QApplication::processEvents();
+
+        overlay->triggerSlotAndClose(slotToTrigger);
+        QApplication::processEvents();
+
+        bool toolSwitched = false;
+        for (int i = 0; i < 80; ++i) {
+            if (toolManager->activeToolId() == expectedToolId) {
+                toolSwitched = true;
+                break;
+            }
+            QApplication::processEvents();
+            QThread::msleep(20);
+        }
+        if (!toolSwitched) {
+            qWarning() << "Touch smoke: quickmenu did not switch tools via slot trigger; expected="
+                       << expectedToolId << "actual=" << toolManager->activeToolId();
+            ok = false;
+        }
+
+        // Restore the overlay for the scenario screenshot.
+        overlay->setHighlightedSlot(slotToTrigger);
+        overlay->openAtGlobalPos(globalPos);
+
+        finalizeSmoke(ok);
         return;
     }
 
@@ -1187,11 +2311,130 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "copypaste" || normalizedScenario == "copy-paste" || normalizedScenario == "copy_paste") {
-        if (QAction *action = mainWindow->actionCollection()->action("touch_copypaste_overlay")) {
-            action->trigger();
-            finalizeSmoke(true);
+        KisView *view = mainWindow->activeView();
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        const QRect bounds = image ? image->bounds() : QRect();
+
+        if (!view || !view->canvasBase() || !image || !bounds.isValid()) {
+            qWarning() << "Touch smoke: copypaste missing view/image/bounds";
+            finalizeSmoke(false);
             return;
         }
+
+        QWidget *canvasWidget = view->canvasBase()->canvasWidget();
+        if (!canvasWidget) {
+            qWarning() << "Touch smoke: copypaste missing canvas widget";
+            finalizeSmoke(false);
+            return;
+        }
+
+        KoToolManager *toolManager = KoToolManager::instance();
+        if (!toolManager) {
+            qWarning() << "Touch smoke: copypaste missing tool manager";
+            finalizeSmoke(false);
+            return;
+        }
+
+        bool ok = true;
+
+        toolManager->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
+        QApplication::processEvents();
+
+        auto imgToWidget = [&](const QPointF &imgP) {
+            return view->canvasBase()->coordinatesConverter()->imageToWidget(imgP);
+        };
+
+        auto tapAtImagePos = [&](const QPointF &imgP) {
+            const QPointF widgetPos = imgToWidget(imgP);
+            const QPointF globalPos = canvasWidget->mapToGlobal(widgetPos.toPoint());
+
+            QMouseEvent press(QEvent::MouseButtonPress,
+                              widgetPos,
+                              globalPos,
+                              Qt::LeftButton,
+                              Qt::LeftButton,
+                              Qt::NoModifier);
+            QApplication::sendEvent(canvasWidget, &press);
+
+            QMouseEvent release(QEvent::MouseButtonRelease,
+                                widgetPos,
+                                globalPos,
+                                Qt::LeftButton,
+                                Qt::NoButton,
+                                Qt::NoModifier);
+            QApplication::sendEvent(canvasWidget, &release);
+        };
+
+        auto selectedExactRect = [&]() -> QRect {
+            KisSelectionSP selection = view->selection();
+            if (!selection || !selection->pixelSelection()) {
+                return QRect();
+            }
+            return selection->pixelSelection()->selectedExactRect();
+        };
+
+        // Create a deterministic polygon selection for Copy/Paste operations.
+        const QPointF tl(bounds.left() + bounds.width() * 0.25, bounds.top() + bounds.height() * 0.25);
+        const QPointF tr(bounds.left() + bounds.width() * 0.75, bounds.top() + bounds.height() * 0.25);
+        const QPointF br(bounds.left() + bounds.width() * 0.75, bounds.top() + bounds.height() * 0.75);
+        const QPointF bl(bounds.left() + bounds.width() * 0.25, bounds.top() + bounds.height() * 0.75);
+
+        tapAtImagePos(tl);
+        tapAtImagePos(tr);
+        tapAtImagePos(br);
+        tapAtImagePos(bl);
+        tapAtImagePos(tl);
+
+        bool selectionMade = false;
+        for (int i = 0; i < 100; ++i) {
+            QApplication::processEvents();
+            image->waitForDone();
+            if (!selectedExactRect().isEmpty()) {
+                selectionMade = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+
+        if (!selectionMade) {
+            qWarning() << "Touch smoke: copypaste did not create a selection";
+            ok = false;
+        }
+
+        const int beforeLayerCount = image->rootLayer() ? int(image->rootLayer()->childCount()) : 0;
+        if (QAction *action = mainWindow->actionCollection()->action(QStringLiteral("copy_selection_to_new_layer"))) {
+            action->trigger();
+            QApplication::processEvents();
+            image->waitForDone();
+        } else {
+            qWarning() << "Touch smoke: copypaste missing action: copy_selection_to_new_layer";
+            ok = false;
+        }
+
+        bool layerAdded = false;
+        for (int i = 0; i < 120; ++i) {
+            QApplication::processEvents();
+            image->waitForDone();
+            const int now = image->rootLayer() ? int(image->rootLayer()->childCount()) : 0;
+            if (now > beforeLayerCount) {
+                layerAdded = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+        if (!layerAdded) {
+            qWarning() << "Touch smoke: copypaste did not create a new layer; before=" << beforeLayerCount
+                       << "after=" << (image->rootLayer() ? int(image->rootLayer()->childCount()) : 0);
+            ok = false;
+        }
+
+        // Show the overlay for the scenario screenshot.
+        if (QAction *action = mainWindow->actionCollection()->action("touch_copypaste_overlay")) {
+            action->trigger();
+            finalizeSmoke(ok);
+            return;
+        }
+
         qWarning() << "Touch smoke: action not found: touch_copypaste_overlay";
         finalizeSmoke(false);
         return;
