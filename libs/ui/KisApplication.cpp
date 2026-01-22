@@ -118,6 +118,7 @@
 #include <input/kis_zoom_and_rotate_action.h>
 #include "input/KisTouchGestureAction.h"
 #include "input/KisTouchQuickMenuAction.h"
+#include "input/kis_input_profile_manager.h"
 #include "widgets/kis_touch_copypaste_overlay.h"
 
 #include <KritaVersionWrapper.h>
@@ -1717,6 +1718,28 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             touchDevice->setMaximumTouchPoints(4);
         }
 
+        canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+        // Ensure deterministic touch shortcut mapping for smoke. Fresh configs
+        // default to "Krita Default", which may not have our touch-first bindings.
+        {
+            const QString profileName = QStringLiteral("Touch Gestures Only");
+            KisInputProfileManager *profileManager = KisInputProfileManager::instance();
+            KisInputProfile *profile = profileManager ? profileManager->profile(profileName) : nullptr;
+            const bool profileOk = bool(profile);
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("profile"), profileName);
+                report.step(QStringLiteral("gesture_controls.set_input_profile"), profileOk, details);
+            }
+            if (profileManager && profile) {
+                profileManager->setCurrentProfile(profile);
+                QApplication::processEvents();
+            } else {
+                ok = false;
+            }
+        }
+
         auto sendOneFingerTouchTap = [&]() {
             const QPointF center = QPointF(canvasWidget->rect().center());
             const QPointF centerGlobal = QPointF(canvasWidget->mapToGlobal(center.toPoint()));
@@ -1747,12 +1770,16 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const QPointF p1Update1 = center + QPointF(radius * invSqrt2, radius * invSqrt2);
             const QPointF p0Update2 = center + QPointF(0.0, -radius);
             const QPointF p1Update2 = center + QPointF(0.0, radius);
+            const QPointF p0Update3 = center + QPointF(radius * invSqrt2, -radius * invSqrt2);
+            const QPointF p1Update3 = center + QPointF(-radius * invSqrt2, radius * invSqrt2);
             const QPointF p0StartGlobal = QPointF(canvasWidget->mapToGlobal(p0Start.toPoint()));
             const QPointF p1StartGlobal = QPointF(canvasWidget->mapToGlobal(p1Start.toPoint()));
             const QPointF p0Update1Global = QPointF(canvasWidget->mapToGlobal(p0Update1.toPoint()));
             const QPointF p1Update1Global = QPointF(canvasWidget->mapToGlobal(p1Update1.toPoint()));
             const QPointF p0Update2Global = QPointF(canvasWidget->mapToGlobal(p0Update2.toPoint()));
             const QPointF p1Update2Global = QPointF(canvasWidget->mapToGlobal(p1Update2.toPoint()));
+            const QPointF p0Update3Global = QPointF(canvasWidget->mapToGlobal(p0Update3.toPoint()));
+            const QPointF p1Update3Global = QPointF(canvasWidget->mapToGlobal(p1Update3.toPoint()));
 
             QTouchEvent::TouchPoint tp0(0);
             QTouchEvent::TouchPoint tp1(1);
@@ -1760,9 +1787,17 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             tp0.setState(Qt::TouchPointPressed);
             tp0.setPos(p0Start);
             tp0.setScreenPos(p0StartGlobal);
+            tp0.setStartPos(p0Start);
+            tp0.setStartScreenPos(p0StartGlobal);
+            tp0.setLastPos(p0Start);
+            tp0.setLastScreenPos(p0StartGlobal);
             tp1.setState(Qt::TouchPointPressed);
             tp1.setPos(p1Start);
             tp1.setScreenPos(p1StartGlobal);
+            tp1.setStartPos(p1Start);
+            tp1.setStartScreenPos(p1StartGlobal);
+            tp1.setLastPos(p1Start);
+            tp1.setLastScreenPos(p1StartGlobal);
 
             QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1};
             QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
@@ -1770,23 +1805,59 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             tp0.setState(Qt::TouchPointMoved);
             tp0.setPos(p0Update1);
             tp0.setScreenPos(p0Update1Global);
+            tp0.setStartPos(p0Start);
+            tp0.setStartScreenPos(p0StartGlobal);
+            tp0.setLastPos(p0Start);
+            tp0.setLastScreenPos(p0StartGlobal);
             tp1.setState(Qt::TouchPointMoved);
             tp1.setPos(p1Update1);
             tp1.setScreenPos(p1Update1Global);
+            tp1.setStartPos(p1Start);
+            tp1.setStartScreenPos(p1StartGlobal);
+            tp1.setLastPos(p1Start);
+            tp1.setLastScreenPos(p1StartGlobal);
 
             QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1};
             QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
 
             tp0.setPos(p0Update2);
             tp0.setScreenPos(p0Update2Global);
+            tp0.setStartPos(p0Start);
+            tp0.setStartScreenPos(p0StartGlobal);
+            tp0.setLastPos(p0Update1);
+            tp0.setLastScreenPos(p0Update1Global);
             tp1.setPos(p1Update2);
             tp1.setScreenPos(p1Update2Global);
+            tp1.setStartPos(p1Start);
+            tp1.setStartScreenPos(p1StartGlobal);
+            tp1.setLastPos(p1Update1);
+            tp1.setLastScreenPos(p1Update1Global);
 
             QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1};
             QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
 
+            tp0.setPos(p0Update3);
+            tp0.setScreenPos(p0Update3Global);
+            tp0.setStartPos(p0Start);
+            tp0.setStartScreenPos(p0StartGlobal);
+            tp0.setLastPos(p0Update2);
+            tp0.setLastScreenPos(p0Update2Global);
+            tp1.setPos(p1Update3);
+            tp1.setScreenPos(p1Update3Global);
+            tp1.setStartPos(p1Start);
+            tp1.setStartScreenPos(p1StartGlobal);
+            tp1.setLastPos(p1Update2);
+            tp1.setLastScreenPos(p1Update2Global);
+
+            QList<QTouchEvent::TouchPoint> updatePoints3{tp0, tp1};
+            QTouchEvent updateEvent3(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints3);
+
             tp0.setState(Qt::TouchPointReleased);
+            tp0.setLastPos(p0Update3);
+            tp0.setLastScreenPos(p0Update3Global);
             tp1.setState(Qt::TouchPointReleased);
+            tp1.setLastPos(p1Update3);
+            tp1.setLastScreenPos(p1Update3Global);
             QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1};
             QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
 
@@ -1797,6 +1868,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QApplication::sendEvent(canvasWidget, &updateEvent1);
             QApplication::processEvents();
             QApplication::sendEvent(canvasWidget, &updateEvent2);
+            QApplication::processEvents();
+            QApplication::sendEvent(canvasWidget, &updateEvent3);
             QApplication::processEvents();
             QApplication::sendEvent(canvasWidget, &endEvent);
             QApplication::processEvents();
