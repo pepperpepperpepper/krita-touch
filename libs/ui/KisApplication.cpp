@@ -1923,15 +1923,22 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         {
             cfg.setTouchClearLayerGestureEnabled(false);
 
-            auto runClipboardGesture = [&](bool enabled, int showTimeoutMs) -> bool {
-                cfg.setTouchClipboardGestureEnabled(enabled);
-                QApplication::processEvents();
-
+            auto hideCopyPasteOverlay = [&]() {
                 if (KisTouchCopyPasteOverlay *overlay =
                         mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
                     overlay->hide();
                 }
+            };
 
+            auto waitForCopyPasteOverlayShown = [&](int timeoutMs) -> bool {
+                return waitForUiCondition(timeoutMs, [&]() {
+                    KisTouchCopyPasteOverlay *overlay =
+                        mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"));
+                    return overlay && overlay->isVisible();
+                });
+            };
+
+            auto withClipboardSwipeEvents = [&](auto callback) {
                 const QRect r = canvasWidget->rect();
                 const int startY = qMax(8, r.height() / 4);
                 const int endY = qMin(r.height() - 8, (r.height() * 3) / 4);
@@ -1945,9 +1952,16 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 const QPointF p1End(centerX, endY);
                 const QPointF p2End(centerX + spacing, endY);
 
+                const QPointF p0Mid = (p0Start + p0End) / 2.0;
+                const QPointF p1Mid = (p1Start + p1End) / 2.0;
+                const QPointF p2Mid = (p2Start + p2End) / 2.0;
+
                 const QPointF p0StartGlobal(canvasWidget->mapToGlobal(p0Start.toPoint()));
                 const QPointF p1StartGlobal(canvasWidget->mapToGlobal(p1Start.toPoint()));
                 const QPointF p2StartGlobal(canvasWidget->mapToGlobal(p2Start.toPoint()));
+                const QPointF p0MidGlobal(canvasWidget->mapToGlobal(p0Mid.toPoint()));
+                const QPointF p1MidGlobal(canvasWidget->mapToGlobal(p1Mid.toPoint()));
+                const QPointF p2MidGlobal(canvasWidget->mapToGlobal(p2Mid.toPoint()));
                 const QPointF p0EndGlobal(canvasWidget->mapToGlobal(p0End.toPoint()));
                 const QPointF p1EndGlobal(canvasWidget->mapToGlobal(p1End.toPoint()));
                 const QPointF p2EndGlobal(canvasWidget->mapToGlobal(p2End.toPoint()));
@@ -1959,71 +1973,182 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 tp0.setState(Qt::TouchPointPressed);
                 tp0.setPos(p0Start);
                 tp0.setScreenPos(p0StartGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Start);
+                tp0.setLastScreenPos(p0StartGlobal);
+
                 tp1.setState(Qt::TouchPointPressed);
                 tp1.setPos(p1Start);
                 tp1.setScreenPos(p1StartGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Start);
+                tp1.setLastScreenPos(p1StartGlobal);
+
                 tp2.setState(Qt::TouchPointPressed);
                 tp2.setPos(p2Start);
                 tp2.setScreenPos(p2StartGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Start);
+                tp2.setLastScreenPos(p2StartGlobal);
 
                 QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1, tp2};
                 QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
 
                 tp0.setState(Qt::TouchPointMoved);
+                tp0.setPos(p0Mid);
+                tp0.setScreenPos(p0MidGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Start);
+                tp0.setLastScreenPos(p0StartGlobal);
+
+                tp1.setState(Qt::TouchPointMoved);
+                tp1.setPos(p1Mid);
+                tp1.setScreenPos(p1MidGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Start);
+                tp1.setLastScreenPos(p1StartGlobal);
+
+                tp2.setState(Qt::TouchPointMoved);
+                tp2.setPos(p2Mid);
+                tp2.setScreenPos(p2MidGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Start);
+                tp2.setLastScreenPos(p2StartGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1, tp2};
+                QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
+
                 tp0.setPos(p0End);
                 tp0.setScreenPos(p0EndGlobal);
-                tp1.setState(Qt::TouchPointMoved);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Mid);
+                tp0.setLastScreenPos(p0MidGlobal);
+
                 tp1.setPos(p1End);
                 tp1.setScreenPos(p1EndGlobal);
-                tp2.setState(Qt::TouchPointMoved);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Mid);
+                tp1.setLastScreenPos(p1MidGlobal);
+
                 tp2.setPos(p2End);
                 tp2.setScreenPos(p2EndGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Mid);
+                tp2.setLastScreenPos(p2MidGlobal);
 
-                QList<QTouchEvent::TouchPoint> updatePoints{tp0, tp1, tp2};
-                QTouchEvent updateEvent(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints);
+                QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1, tp2};
+                QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
 
                 tp0.setState(Qt::TouchPointReleased);
+                tp0.setPos(p0End);
+                tp0.setScreenPos(p0EndGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0End);
+                tp0.setLastScreenPos(p0EndGlobal);
+
                 tp1.setState(Qt::TouchPointReleased);
+                tp1.setPos(p1End);
+                tp1.setScreenPos(p1EndGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1End);
+                tp1.setLastScreenPos(p1EndGlobal);
+
                 tp2.setState(Qt::TouchPointReleased);
+                tp2.setPos(p2End);
+                tp2.setScreenPos(p2EndGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2End);
+                tp2.setLastScreenPos(p2EndGlobal);
+
                 QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1, tp2};
                 QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
 
-                KisTouchGestureAction gesture;
-                gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
-                gesture.inputEvent(&updateEvent);
-                gesture.end(&endEvent);
-
-                QApplication::processEvents();
-
-                return waitForUiCondition(showTimeoutMs, [&]() {
-                    KisTouchCopyPasteOverlay *overlay =
-                        mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"));
-                    return overlay && overlay->isVisible();
-                });
+                callback(beginEvent, updateEvent1, updateEvent2, endEvent);
             };
 
-            const bool shownWhenEnabled = runClipboardGesture(true, 900);
-            report.step(QStringLiteral("gesture_controls.clipboard_enabled_opens_overlay"), shownWhenEnabled);
+            auto runClipboardSwipeViaInputManager = [&](int showTimeoutMs) -> bool {
+                withClipboardSwipeEvents([&](QTouchEvent &beginEvent, QTouchEvent &updateEvent1, QTouchEvent &updateEvent2, QTouchEvent &endEvent) {
+                    QApplication::sendEvent(canvasWidget, &beginEvent);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent1);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent2);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &endEvent);
+                    QApplication::processEvents();
+                });
+
+                return waitForCopyPasteOverlayShown(showTimeoutMs);
+            };
+
+            auto runClipboardSwipeViaDirectAction = [&](int showTimeoutMs) -> bool {
+                withClipboardSwipeEvents([&](QTouchEvent &beginEvent, QTouchEvent &updateEvent1, QTouchEvent &updateEvent2, QTouchEvent &endEvent) {
+                    KisTouchGestureAction gesture;
+                    gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
+                    gesture.inputEvent(&updateEvent1);
+                    gesture.inputEvent(&updateEvent2);
+                    gesture.end(&endEvent);
+                });
+
+                QApplication::processEvents();
+                return waitForCopyPasteOverlayShown(showTimeoutMs);
+            };
+
+            auto runClipboardGesture = [&](bool enabled, int showTimeoutMs, QJsonObject *details) -> bool {
+                cfg.setTouchClipboardGestureEnabled(enabled);
+                QApplication::processEvents();
+
+                hideCopyPasteOverlay();
+
+                const bool shownViaInputManager = runClipboardSwipeViaInputManager(showTimeoutMs);
+
+                bool shownViaDirectAction = false;
+                if (!shownViaInputManager) {
+                    hideCopyPasteOverlay();
+                    shownViaDirectAction = runClipboardSwipeViaDirectAction(showTimeoutMs);
+                }
+
+                const bool shown = shownViaInputManager || shownViaDirectAction;
+
+                if (details) {
+                    details->insert(QStringLiteral("enabled"), enabled);
+                    details->insert(QStringLiteral("input_manager_shown"), shownViaInputManager);
+                    details->insert(QStringLiteral("direct_action_shown"), shownViaDirectAction);
+                }
+
+                return shown;
+            };
+
+            QJsonObject enabledDetails;
+            const bool shownWhenEnabled = runClipboardGesture(true, 900, &enabledDetails);
+            report.step(QStringLiteral("gesture_controls.clipboard_enabled_opens_overlay"), shownWhenEnabled, enabledDetails);
             if (!shownWhenEnabled) {
                 ok = false;
             }
 
-            if (KisTouchCopyPasteOverlay *overlay =
-                    mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
-                overlay->hide();
-            }
+            hideCopyPasteOverlay();
 
-            const bool shownWhenDisabled = runClipboardGesture(false, 200);
+            QJsonObject disabledDetails;
+            const bool shownWhenDisabled = runClipboardGesture(false, 200, &disabledDetails);
             const bool hiddenWhenDisabled = !shownWhenDisabled;
-            report.step(QStringLiteral("gesture_controls.clipboard_disabled_no_overlay"), hiddenWhenDisabled);
+            report.step(QStringLiteral("gesture_controls.clipboard_disabled_no_overlay"), hiddenWhenDisabled, disabledDetails);
             if (!hiddenWhenDisabled) {
                 ok = false;
             }
 
-            if (KisTouchCopyPasteOverlay *overlay =
-                    mainWindow->findChild<KisTouchCopyPasteOverlay *>(QStringLiteral("kisTouchCopyPasteOverlay"))) {
-                overlay->hide();
-            }
+            hideCopyPasteOverlay();
 
             cfg.setTouchClipboardGestureEnabled(true);
             cfg.setTouchClearLayerGestureEnabled(true);
