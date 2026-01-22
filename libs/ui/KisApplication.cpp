@@ -1736,22 +1736,23 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QApplication::sendEvent(canvasWidget, &endEvent);
         };
 
-	        auto applyTwoFingerRotateGesture = [&]() -> qreal {
-	            const QPointF center = QPointF(canvasWidget->rect().center());
-	            constexpr qreal radius = 90.0;
+        auto applyTwoFingerRotateGesture = [&]() -> qreal {
+            const QPointF center = QPointF(canvasWidget->rect().center());
+            constexpr qreal radius = 90.0;
+            constexpr qreal invSqrt2 = 0.7071067811865476;
 
-	            const QPointF p0Start = center + QPointF(-radius, 0.0);
-	            const QPointF p1Start = center + QPointF(radius, 0.0);
-	            const QPointF p0Update1 = center + QPointF(-radius * 0.70, -radius * 0.70);
-	            const QPointF p1Update1 = center + QPointF(radius * 0.70, radius * 0.70);
-	            const QPointF p0Update2 = center + QPointF(0.0, -radius);
-	            const QPointF p1Update2 = center + QPointF(0.0, radius);
-	            const QPointF p0StartGlobal = QPointF(canvasWidget->mapToGlobal(p0Start.toPoint()));
-	            const QPointF p1StartGlobal = QPointF(canvasWidget->mapToGlobal(p1Start.toPoint()));
-	            const QPointF p0Update1Global = QPointF(canvasWidget->mapToGlobal(p0Update1.toPoint()));
-	            const QPointF p1Update1Global = QPointF(canvasWidget->mapToGlobal(p1Update1.toPoint()));
-	            const QPointF p0Update2Global = QPointF(canvasWidget->mapToGlobal(p0Update2.toPoint()));
-	            const QPointF p1Update2Global = QPointF(canvasWidget->mapToGlobal(p1Update2.toPoint()));
+            const QPointF p0Start = center + QPointF(-radius, 0.0);
+            const QPointF p1Start = center + QPointF(radius, 0.0);
+            const QPointF p0Update1 = center + QPointF(-radius * invSqrt2, -radius * invSqrt2);
+            const QPointF p1Update1 = center + QPointF(radius * invSqrt2, radius * invSqrt2);
+            const QPointF p0Update2 = center + QPointF(0.0, -radius);
+            const QPointF p1Update2 = center + QPointF(0.0, radius);
+            const QPointF p0StartGlobal = QPointF(canvasWidget->mapToGlobal(p0Start.toPoint()));
+            const QPointF p1StartGlobal = QPointF(canvasWidget->mapToGlobal(p1Start.toPoint()));
+            const QPointF p0Update1Global = QPointF(canvasWidget->mapToGlobal(p0Update1.toPoint()));
+            const QPointF p1Update1Global = QPointF(canvasWidget->mapToGlobal(p1Update1.toPoint()));
+            const QPointF p0Update2Global = QPointF(canvasWidget->mapToGlobal(p0Update2.toPoint()));
+            const QPointF p1Update2Global = QPointF(canvasWidget->mapToGlobal(p1Update2.toPoint()));
 
             QTouchEvent::TouchPoint tp0(0);
             QTouchEvent::TouchPoint tp1(1);
@@ -1764,25 +1765,25 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             tp1.setScreenPos(p1StartGlobal);
 
             QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1};
-	            QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+            QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
 
-	            tp0.setState(Qt::TouchPointMoved);
-	            tp0.setPos(p0Update1);
-	            tp0.setScreenPos(p0Update1Global);
-	            tp1.setState(Qt::TouchPointMoved);
-	            tp1.setPos(p1Update1);
-	            tp1.setScreenPos(p1Update1Global);
+            tp0.setState(Qt::TouchPointMoved);
+            tp0.setPos(p0Update1);
+            tp0.setScreenPos(p0Update1Global);
+            tp1.setState(Qt::TouchPointMoved);
+            tp1.setPos(p1Update1);
+            tp1.setScreenPos(p1Update1Global);
 
-	            QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1};
-	            QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
+            QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1};
+            QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
 
-	            tp0.setPos(p0Update2);
-	            tp0.setScreenPos(p0Update2Global);
-	            tp1.setPos(p1Update2);
-	            tp1.setScreenPos(p1Update2Global);
+            tp0.setPos(p0Update2);
+            tp0.setScreenPos(p0Update2Global);
+            tp1.setPos(p1Update2);
+            tp1.setScreenPos(p1Update2Global);
 
-	            QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1};
-	            QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
+            QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1};
+            QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
 
             tp0.setState(Qt::TouchPointReleased);
             tp1.setState(Qt::TouchPointReleased);
@@ -1791,13 +1792,15 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
             const qreal before = view->canvasBase()->rotationAngle();
 
-	            KisZoomAndRotateAction action;
-	            action.begin(KisZoomAndRotateAction::ContinuousRotateMode, &beginEvent);
-	            action.inputEvent(&updateEvent1);
-	            action.inputEvent(&updateEvent2);
-	            action.end(&endEvent);
-
+            QApplication::sendEvent(canvasWidget, &beginEvent);
             QApplication::processEvents();
+            QApplication::sendEvent(canvasWidget, &updateEvent1);
+            QApplication::processEvents();
+            QApplication::sendEvent(canvasWidget, &updateEvent2);
+            QApplication::processEvents();
+            QApplication::sendEvent(canvasWidget, &endEvent);
+            QApplication::processEvents();
+
             const qreal after = view->canvasBase()->rotationAngle();
             return after - before;
         };
