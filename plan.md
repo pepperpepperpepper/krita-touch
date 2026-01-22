@@ -75,6 +75,7 @@ Recently completed:
 Work log (append-only; newest first):
 
 - **2026‑01‑22**:
+  - Smoke: `--touch-smoke=gesture-controls` rotate-with-pinch gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching).
   - Smoke: `--touch-smoke=quickmenu` now covers the gesture-path end-to-end: slide/highlight routing, release triggers slot action, and hold-on-slot opens QuickMenu Setup (config sheet).
   - Smoke: `--touch-smoke=gesture-controls` now covers Clear Layer scrub gating (enabled clears; disabled does nothing) on the smoke document.
   - Smoke: `--touch-smoke=copypaste` now asserts pixel-level Copy & Paste behavior (seeded red content appears in the new layer; outside-selection stays transparent; source layer unchanged).
@@ -927,12 +928,12 @@ Next test targets (cross-platform, assertive):
 - QuickMenu: now covered by `--touch-smoke=quickmenu` (gesture-path slide/highlight, release triggers slot action, hold opens config sheet) and `--touch-smoke=gesture-controls` (QuickMenu enable/disable gating).
 - Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + asserts layer count) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay). Next: add more pixel-level assertions (e.g. pasted content differs).
 - Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + pixel assertions for copied content + outside-selection transparency) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay).
-- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + clear-layer scrub + fullscreen gating assertions). Next: validate the input-manager shortcut matching path (not just direct input-action calls).
+- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + clear-layer scrub + fullscreen gating assertions), **including an input-manager-path check** by driving rotate-with-pinch via synthetic touch events delivered to the canvas (exercises `KisInputManager` shortcut matching; not just direct input-action calls). Next: convert at least one 3-finger gesture gating check (clipboard overlay) to also run via the input-manager path (with a safe direct-action fallback if Qt synthetic touch is flaky).
 - Layers: now covered by `--touch-smoke=layers-panel` (swipe-right multi-select + hold-visibility solo/restore) and `--touch-smoke=layer-options` (swipe-left opens options).
 
 Next offer (recommended next implementation):
 
-- Add an “input-manager path” check for at least one multi-touch gesture (drive the gesture by sending touch events to the canvas so `KisInputManager` shortcut matching is exercised, not just direct input-action calls).
+- Expand “input-manager path” coverage to a **3-finger** gesture: drive the clipboard overlay (3-finger swipe down) via synthetic touch events delivered to the canvas so `KisInputManager` shortcut matching is exercised (keep the existing direct-action invocation as a fallback for platforms where multi-touch injection is flaky).
 
 ---
 
