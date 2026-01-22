@@ -74,6 +74,11 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑22**:
+  - Smoke: `--touch-smoke=quickmenu` now covers the gesture-path end-to-end: slide/highlight routing, release triggers slot action, and hold-on-slot opens QuickMenu Setup (config sheet).
+  - Smoke: `--touch-smoke=gesture-controls` now covers Clear Layer scrub gating (enabled clears; disabled does nothing) on the smoke document.
+  - Validation: Linux Xvfb `quickmenu` + `gesture-controls` scenarios both OK.
+  - Committed: touch-smoke test expansion (`673d39dbf1`).
 - **2026‑01‑21**:
   - Android: rebuilt arm64-v8a debug APK + ran full Genymotion touch batch (16 scenarios) on Nexus 10 recipe (all OK).
   - Genymotion Cloud: switched canonical tablet recipe to `krita_tablet_nexus10_api35` (Nexus 10 2560×1600, Android 15 / API 35 / arm64); ran Android smoke `top-bar` (OK).
@@ -917,21 +922,15 @@ Architecture direction (v2):
 
 Next test targets (cross-platform, assertive):
 
-- QuickMenu: now covered by `--touch-smoke=quickmenu` (triggers Select slot + asserts tool switch) and `--touch-smoke=gesture-controls` (gesture gating opens/closes the overlay). Next: validate slide/highlight routing in `KisTouchQuickMenuAction`.
-- Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + asserts layer count) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay). Next: add pixel diffs + destructive “clear layer” coverage in a safe blank doc.
-- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + fullscreen gating assertions). Next: validate clear-layer scrub gating and (where possible) the input-manager shortcut matching path (not just direct input-action calls).
+- QuickMenu: now covered by `--touch-smoke=quickmenu` (gesture-path slide/highlight, release triggers slot action, hold opens config sheet) and `--touch-smoke=gesture-controls` (QuickMenu enable/disable gating).
+- Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + asserts layer count) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay). Next: add more pixel-level assertions (e.g. pasted content differs).
+- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + clear-layer scrub + fullscreen gating assertions). Next: validate the input-manager shortcut matching path (not just direct input-action calls).
 - Layers: now covered by `--touch-smoke=layers-panel` (swipe-right multi-select + hold-visibility solo/restore) and `--touch-smoke=layer-options` (swipe-left opens options).
 
 Next offer (recommended next implementation):
 
-- Extend `--touch-smoke=quickmenu` with **assertive, end-to-end** gesture-path tests via `KisTouchQuickMenuAction`:
-  - slide/highlight: finger moves highlight the expected slot
-  - release triggers the slot’s action (already covered via direct trigger; add the gesture-path)
-  - hold-on-slot triggers the configure sheet (`touch_quickmenu_configure`)
-- Extend `--touch-smoke=gesture-controls` to cover **Clear Layer** scrub gating safely:
-  - when enabled: a strong side-to-side scrub gesture triggers `clear` on the active layer (use a blank doc + assert pixels/layer content changes)
-  - when disabled: scrub does nothing
-  - *(Keep this deterministic + safe: don’t destroy user data; always run on the smoke doc.)*
+- Strengthen `--touch-smoke=copypaste` with more pixel-level assertions (verify the pasted/new layer actually contains the expected colored content at sample points).
+- Add an “input-manager path” check for at least one multi-touch gesture (drive the gesture by sending touch events to the canvas so `KisInputManager` shortcut matching is exercised, not just direct input-action calls).
 
 ---
 
