@@ -1953,6 +1953,171 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             cfg.setTouchClearLayerGestureEnabled(true);
         }
 
+        // Validate clear-layer scrub gating (3-finger side-to-side scrub → clear active layer).
+        if (image && image->bounds().isValid() && mainWindow->actionCollection()) {
+            bool stepOk = true;
+            report.step(QStringLiteral("gesture_controls.clear_layer.setup"), true);
+
+            // Avoid accidentally triggering the clipboard overlay when testing clear-layer scrubbing.
+            cfg.setTouchClipboardGestureEnabled(false);
+            QApplication::processEvents();
+
+            // Ensure we're clearing an editable, top-most layer.
+            if (QAction *addLayerAction = mainWindow->actionCollection()->action(QStringLiteral("add_new_paint_layer"))) {
+                addLayerAction->trigger();
+                waitForImageCondition(200, [&]() { return false; });
+            }
+
+            const QRect bounds = image->bounds();
+            const QVector<QPoint> samplePoints{bounds.center()};
+
+            auto sampleCenter = [&]() -> QColor {
+                const QVector<QColor> colors = sampleDeviceColorsForTouchSmoke(paintDeviceForTouchSmoke(mainWindow), samplePoints);
+                return colors.isEmpty() ? QColor() : colors.first();
+            };
+
+            auto runClearLayerScrub = [&]() {
+                const QRect r = canvasWidget->rect();
+                const int centerX = r.width() / 2;
+                const int centerY = r.height() / 2;
+                const int spacing = qMin(60, r.width() / 6);
+
+                const QPointF p0Start(centerX - spacing, centerY);
+                const QPointF p1Start(centerX, centerY);
+                const QPointF p2Start(centerX + spacing, centerY);
+
+                const QPointF p0Mid = p0Start + QPointF(100, 0);
+                const QPointF p1Mid = p1Start + QPointF(100, 0);
+                const QPointF p2Mid = p2Start + QPointF(100, 0);
+
+                const QPointF p0StartGlobal(canvasWidget->mapToGlobal(p0Start.toPoint()));
+                const QPointF p1StartGlobal(canvasWidget->mapToGlobal(p1Start.toPoint()));
+                const QPointF p2StartGlobal(canvasWidget->mapToGlobal(p2Start.toPoint()));
+                const QPointF p0MidGlobal(canvasWidget->mapToGlobal(p0Mid.toPoint()));
+                const QPointF p1MidGlobal(canvasWidget->mapToGlobal(p1Mid.toPoint()));
+                const QPointF p2MidGlobal(canvasWidget->mapToGlobal(p2Mid.toPoint()));
+
+                QTouchEvent::TouchPoint tp0(0);
+                QTouchEvent::TouchPoint tp1(1);
+                QTouchEvent::TouchPoint tp2(2);
+
+                tp0.setState(Qt::TouchPointPressed);
+                tp0.setPos(p0Start);
+                tp0.setScreenPos(p0StartGlobal);
+                tp1.setState(Qt::TouchPointPressed);
+                tp1.setPos(p1Start);
+                tp1.setScreenPos(p1StartGlobal);
+                tp2.setState(Qt::TouchPointPressed);
+                tp2.setPos(p2Start);
+                tp2.setScreenPos(p2StartGlobal);
+
+                QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1, tp2};
+                QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+                tp0.setState(Qt::TouchPointMoved);
+                tp0.setPos(p0Mid);
+                tp0.setScreenPos(p0MidGlobal);
+                tp1.setState(Qt::TouchPointMoved);
+                tp1.setPos(p1Mid);
+                tp1.setScreenPos(p1MidGlobal);
+                tp2.setState(Qt::TouchPointMoved);
+                tp2.setPos(p2Mid);
+                tp2.setScreenPos(p2MidGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1, tp2};
+                QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
+
+                tp0.setPos(p0Start);
+                tp0.setScreenPos(p0StartGlobal);
+                tp1.setPos(p1Start);
+                tp1.setScreenPos(p1StartGlobal);
+                tp2.setPos(p2Start);
+                tp2.setScreenPos(p2StartGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1, tp2};
+                QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
+
+                tp0.setState(Qt::TouchPointReleased);
+                tp1.setState(Qt::TouchPointReleased);
+                tp2.setState(Qt::TouchPointReleased);
+                QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1, tp2};
+                QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+
+                KisTouchGestureAction gesture;
+                gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
+                gesture.inputEvent(&updateEvent1);
+                gesture.inputEvent(&updateEvent2);
+                gesture.end(&endEvent);
+            };
+
+            // Paint a deterministic non-transparent pixel so we can validate clearing.
+            {
+                const bool painted = fillCanvasForTouchSmoke(mainWindow, QColor(255, 0, 0, 255));
+                report.step(QStringLiteral("gesture_controls.clear_layer.prepare_paint"), painted);
+                if (!painted) {
+                    ok = false;
+                    stepOk = false;
+                }
+            }
+
+            if (stepOk) {
+                const QColor before = sampleCenter();
+                QJsonObject details;
+                details.insert(QStringLiteral("before_alpha"), before.alpha());
+                report.step(QStringLiteral("gesture_controls.clear_layer.sample_before"), before.isValid(), details);
+
+                cfg.setTouchClearLayerGestureEnabled(true);
+                QApplication::processEvents();
+                runClearLayerScrub();
+
+                const bool cleared = waitForImageCondition(1500, [&]() { return sampleCenter().alpha() <= 10; });
+                const QColor after = sampleCenter();
+                {
+                    QJsonObject d;
+                    d.insert(QStringLiteral("before_alpha"), before.alpha());
+                    d.insert(QStringLiteral("after_alpha"), after.alpha());
+                    report.step(QStringLiteral("gesture_controls.clear_layer_enabled_clears_layer"), cleared, d);
+                }
+                if (!cleared) {
+                    ok = false;
+                }
+
+                // Repaint and ensure the gesture does nothing when disabled.
+                const bool repainted = fillCanvasForTouchSmoke(mainWindow, QColor(255, 0, 0, 255));
+                report.step(QStringLiteral("gesture_controls.clear_layer.repaint_for_disabled_test"), repainted);
+                if (!repainted) {
+                    ok = false;
+                } else {
+                    const QColor beforeBlocked = sampleCenter();
+                    cfg.setTouchClearLayerGestureEnabled(false);
+                    QApplication::processEvents();
+                    runClearLayerScrub();
+                    waitForImageCondition(200, [&]() { return false; });
+
+                    const QColor afterBlocked = sampleCenter();
+                    const bool blocked = colorsEqualForTouchSmoke(beforeBlocked, afterBlocked, 3);
+                    {
+                        QJsonObject d;
+                        d.insert(QStringLiteral("before_alpha"), beforeBlocked.alpha());
+                        d.insert(QStringLiteral("after_alpha"), afterBlocked.alpha());
+                        report.step(QStringLiteral("gesture_controls.clear_layer_disabled_no_clear"), blocked, d);
+                    }
+                    if (!blocked) {
+                        ok = false;
+                    }
+
+                    cfg.setTouchClearLayerGestureEnabled(true);
+                    QApplication::processEvents();
+                }
+            }
+
+            cfg.setTouchClipboardGestureEnabled(true);
+            QApplication::processEvents();
+        } else {
+            report.step(QStringLiteral("gesture_controls.clear_layer.setup"), false);
+            ok = false;
+        }
+
         // Validate undo/redo gesture gating by observing layer count changes.
         if (image && image->rootLayer() && mainWindow->actionCollection()) {
             auto layerCount = [&]() -> int {
@@ -2220,6 +2385,20 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return;
         }
 
+        auto waitForUiCondition = [&](int timeoutMs, auto condition) -> bool {
+            constexpr int stepMs = 20;
+            const int iterations = qMax(1, timeoutMs / stepMs);
+            for (int i = 0; i < iterations; ++i) {
+                QApplication::processEvents();
+                if (condition()) {
+                    return true;
+                }
+                QThread::msleep(stepMs);
+            }
+            QApplication::processEvents();
+            return condition();
+        };
+
         QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
         if (!anchor) {
             anchor = mainWindow;
@@ -2227,22 +2406,33 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         const QPoint globalPos = anchor->mapToGlobal(anchor->rect().center());
 
-        KisTouchQuickMenuOverlay *overlay =
-            mainWindow->findChild<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
-        if (!overlay) {
-            overlay = new KisTouchQuickMenuOverlay(mainWindow->actionCollection(), mainWindow);
-        } else {
-            overlay->setActionCollection(mainWindow->actionCollection());
-        }
-
-        overlay->setSlotActionIds(QStringList{
+        const QStringList deterministicSlotActionIds = QStringList{
             QStringLiteral("edit_undo"),
             QStringLiteral("edit_redo"),
             QStringLiteral("KisToolSelectTouch"),
             QStringLiteral("KisToolTransform"),
             QStringLiteral("deselect"),
             QStringLiteral("view_show_canvas_only"),
-        });
+        };
+
+        cfg.setTouchQuickMenuEnabled(true);
+        cfg.setTouchQuickMenuActionIds(deterministicSlotActionIds);
+        QApplication::processEvents();
+
+        auto quickMenuOverlay = [&]() -> KisTouchQuickMenuOverlay * {
+            const QList<KisTouchQuickMenuOverlay *> overlays =
+                mainWindow->findChildren<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+            for (KisTouchQuickMenuOverlay *overlay : overlays) {
+                if (overlay && overlay->isVisible()) {
+                    return overlay;
+                }
+            }
+            return overlays.isEmpty() ? nullptr : overlays.constLast();
+        };
+
+        auto quickMenuConfigSheet = [&]() -> QWidget * {
+            return mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchQuickMenuConfigSheet"));
+        };
 
         bool ok = true;
 
@@ -2264,34 +2454,249 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             ok = false;
         }
 
-        // Validate that triggering a known slot actually executes the bound action (tool switch).
-        const int slotToTrigger = 2; // "Select" (KisToolSelectTouch)
-        const QString expectedToolId = QStringLiteral("KisToolSelectTouch");
+        static QTouchDevice *touchDevice = nullptr;
+        if (!touchDevice) {
+            touchDevice = new QTouchDevice();
+            touchDevice->setType(QTouchDevice::TouchScreen);
+            touchDevice->setCapabilities(QTouchDevice::Position);
+            touchDevice->setMaximumTouchPoints(1);
+        }
 
-        overlay->setHighlightedSlot(slotToTrigger);
-        overlay->openAtGlobalPos(globalPos);
-        QApplication::processEvents();
+        KisTouchQuickMenuAction gestureAction;
 
-        overlay->triggerSlotAndClose(slotToTrigger);
-        QApplication::processEvents();
-
-        bool toolSwitched = false;
-        for (int i = 0; i < 80; ++i) {
-            if (toolManager->activeToolId() == expectedToolId) {
-                toolSwitched = true;
-                break;
+        // Validate slide/highlight routing in KisTouchQuickMenuAction (gesture-path).
+        {
+            // Ensure a clean slate.
+            const QList<KisTouchQuickMenuOverlay *> overlays =
+                mainWindow->findChildren<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+            for (KisTouchQuickMenuOverlay *overlay : overlays) {
+                if (overlay) {
+                    overlay->hide();
+                }
             }
+
+            const QPointF originLocal = QPointF(anchor->rect().center());
+
+            auto makePoint = [&](Qt::TouchPointState state, const QPointF &localPos) -> QTouchEvent::TouchPoint {
+                QTouchEvent::TouchPoint tp0(0);
+                tp0.setState(state);
+                tp0.setPos(localPos);
+                tp0.setScreenPos(QPointF(anchor->mapToGlobal(localPos.toPoint())));
+                return tp0;
+            };
+
+            QTouchEvent beginEvent(QEvent::TouchBegin,
+                                   touchDevice,
+                                   Qt::NoModifier,
+                                   Qt::TouchPointPressed,
+                                   QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointPressed, originLocal)});
+
+            gestureAction.begin(0, &beginEvent);
             QApplication::processEvents();
-            QThread::msleep(20);
-        }
-        if (!toolSwitched) {
-            qWarning() << "Touch smoke: quickmenu did not switch tools via slot trigger; expected="
-                       << expectedToolId << "actual=" << toolManager->activeToolId();
-            ok = false;
+
+            const bool overlayShown = waitForUiCondition(900, [&]() {
+                KisTouchQuickMenuOverlay *overlay = quickMenuOverlay();
+                return overlay && overlay->isVisible();
+            });
+            report.step(QStringLiteral("quickmenu.gesture_begin_shows_overlay"), overlayShown);
+            if (!overlayShown) {
+                ok = false;
+            }
+
+            auto checkHighlight = [&](const QString &stepName, const QPointF &localPos, int expectedSlot) {
+                QTouchEvent updateEvent(QEvent::TouchUpdate,
+                                        touchDevice,
+                                        Qt::NoModifier,
+                                        Qt::TouchPointMoved,
+                                        QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointMoved, localPos)});
+                gestureAction.inputEvent(&updateEvent);
+                QApplication::processEvents();
+
+                const int actual = quickMenuOverlay() ? quickMenuOverlay()->highlightedSlot() : -999;
+                QJsonObject details;
+                details.insert(QStringLiteral("expected_slot"), expectedSlot);
+                details.insert(QStringLiteral("actual_slot"), actual);
+                report.step(stepName, actual == expectedSlot, details);
+                if (actual != expectedSlot) {
+                    ok = false;
+                }
+            };
+
+            // Slot centers in KisTouchQuickMenuAction::slotForDelta():
+            // 0 up, 1 up-right, 2 down-right, 3 down, 4 down-left, 5 up-left.
+            checkHighlight(QStringLiteral("quickmenu.gesture_slide_highlights_slot0"),
+                           originLocal + QPointF(0, -120),
+                           0);
+            checkHighlight(QStringLiteral("quickmenu.gesture_slide_highlights_slot2"),
+                           originLocal + QPointF(104, 60),
+                           2);
+            checkHighlight(QStringLiteral("quickmenu.gesture_slide_highlights_slot4"),
+                           originLocal + QPointF(-104, 60),
+                           4);
+            checkHighlight(QStringLiteral("quickmenu.gesture_slide_back_to_center_clears_highlight"),
+                           originLocal,
+                           -1);
+
+            QTouchEvent endEvent(QEvent::TouchEnd,
+                                 touchDevice,
+                                 Qt::NoModifier,
+                                 Qt::TouchPointReleased,
+                                 QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointReleased, originLocal)});
+            gestureAction.end(&endEvent);
+            QApplication::processEvents();
         }
 
-        // Restore the overlay for the scenario screenshot.
-        overlay->setHighlightedSlot(slotToTrigger);
+        // Validate release triggers the slot action (tool switch) via the gesture-path.
+        {
+            const QList<KisTouchQuickMenuOverlay *> overlays =
+                mainWindow->findChildren<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+            for (KisTouchQuickMenuOverlay *overlay : overlays) {
+                if (overlay) {
+                    overlay->hide();
+                }
+            }
+
+            const QPointF originLocal = QPointF(anchor->rect().center());
+            const QPointF selectSlotLocal = originLocal + QPointF(104, 60); // slot 2 (Select tool)
+
+            auto makePoint = [&](Qt::TouchPointState state, const QPointF &localPos) -> QTouchEvent::TouchPoint {
+                QTouchEvent::TouchPoint tp0(0);
+                tp0.setState(state);
+                tp0.setPos(localPos);
+                tp0.setScreenPos(QPointF(anchor->mapToGlobal(localPos.toPoint())));
+                return tp0;
+            };
+
+            QTouchEvent beginEvent(QEvent::TouchBegin,
+                                   touchDevice,
+                                   Qt::NoModifier,
+                                   Qt::TouchPointPressed,
+                                   QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointPressed, originLocal)});
+            gestureAction.begin(0, &beginEvent);
+            QApplication::processEvents();
+
+            QTouchEvent updateEvent(QEvent::TouchUpdate,
+                                    touchDevice,
+                                    Qt::NoModifier,
+                                    Qt::TouchPointMoved,
+                                    QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointMoved, selectSlotLocal)});
+            gestureAction.inputEvent(&updateEvent);
+            QApplication::processEvents();
+
+            const int highlighted = quickMenuOverlay() ? quickMenuOverlay()->highlightedSlot() : -999;
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("expected_slot"), 2);
+                details.insert(QStringLiteral("actual_slot"), highlighted);
+                report.step(QStringLiteral("quickmenu.gesture_select_highlights_slot2"), highlighted == 2, details);
+            }
+            if (highlighted != 2) {
+                ok = false;
+            }
+
+            QTouchEvent endEvent(QEvent::TouchEnd,
+                                 touchDevice,
+                                 Qt::NoModifier,
+                                 Qt::TouchPointReleased,
+                                 QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointReleased, selectSlotLocal)});
+            gestureAction.end(&endEvent);
+            QApplication::processEvents();
+
+            const QString expectedToolId = QStringLiteral("KisToolSelectTouch");
+            bool toolSwitched = false;
+            for (int i = 0; i < 80; ++i) {
+                if (toolManager->activeToolId() == expectedToolId) {
+                    toolSwitched = true;
+                    break;
+                }
+                QApplication::processEvents();
+                QThread::msleep(20);
+            }
+
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("expected_tool"), expectedToolId);
+                details.insert(QStringLiteral("actual_tool"), toolManager->activeToolId());
+                report.step(QStringLiteral("quickmenu.gesture_release_triggers_tool_switch"), toolSwitched, details);
+            }
+            if (!toolSwitched) {
+                ok = false;
+            }
+        }
+
+        // Validate hold-on-slot triggers QuickMenu configuration sheet (touch_quickmenu_configure).
+        {
+            if (QWidget *sheet = quickMenuConfigSheet()) {
+                sheet->hide();
+            }
+            const QList<KisTouchQuickMenuOverlay *> overlays =
+                mainWindow->findChildren<KisTouchQuickMenuOverlay *>(QStringLiteral("kisTouchQuickMenuOverlay"));
+            for (KisTouchQuickMenuOverlay *overlay : overlays) {
+                if (overlay) {
+                    overlay->hide();
+                }
+            }
+
+            const QPointF originLocal = QPointF(anchor->rect().center());
+            const QPointF slotLocal = originLocal + QPointF(104, 60); // slot 2 (any slot is fine)
+
+            auto makePoint = [&](Qt::TouchPointState state, const QPointF &localPos) -> QTouchEvent::TouchPoint {
+                QTouchEvent::TouchPoint tp0(0);
+                tp0.setState(state);
+                tp0.setPos(localPos);
+                tp0.setScreenPos(QPointF(anchor->mapToGlobal(localPos.toPoint())));
+                return tp0;
+            };
+
+            QTouchEvent beginEvent(QEvent::TouchBegin,
+                                   touchDevice,
+                                   Qt::NoModifier,
+                                   Qt::TouchPointPressed,
+                                   QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointPressed, originLocal)});
+            gestureAction.begin(0, &beginEvent);
+            QApplication::processEvents();
+
+            QTouchEvent updateEvent(QEvent::TouchUpdate,
+                                    touchDevice,
+                                    Qt::NoModifier,
+                                    Qt::TouchPointMoved,
+                                    QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointMoved, slotLocal)});
+            gestureAction.inputEvent(&updateEvent);
+            QApplication::processEvents();
+
+            const bool sheetShown = waitForUiCondition(1100, [&]() {
+                QWidget *sheet = quickMenuConfigSheet();
+                return sheet && sheet->isVisible();
+            });
+            report.step(QStringLiteral("quickmenu.gesture_hold_opens_config_sheet"), sheetShown);
+            if (!sheetShown) {
+                ok = false;
+            }
+
+            if (QWidget *sheet = quickMenuConfigSheet()) {
+                sheet->hide();
+            }
+
+            QTouchEvent endEvent(QEvent::TouchEnd,
+                                 touchDevice,
+                                 Qt::NoModifier,
+                                 Qt::TouchPointReleased,
+                                 QList<QTouchEvent::TouchPoint>{makePoint(Qt::TouchPointReleased, slotLocal)});
+            gestureAction.end(&endEvent);
+            QApplication::processEvents();
+        }
+
+        // Restore the overlay for the scenario screenshot (deterministic center + deterministic slot mapping).
+        KisTouchQuickMenuOverlay *overlay = quickMenuOverlay();
+        if (!overlay) {
+            overlay = new KisTouchQuickMenuOverlay(mainWindow->actionCollection(), mainWindow);
+        } else {
+            overlay->setActionCollection(mainWindow->actionCollection());
+        }
+
+        const int slotToShow = 2; // "Select" (KisToolSelectTouch)
+        overlay->setSlotActionIds(deterministicSlotActionIds);
+        overlay->setHighlightedSlot(slotToShow);
         overlay->openAtGlobalPos(globalPos);
 
         finalizeSmoke(ok);
