@@ -2742,6 +2742,73 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         bool ok = true;
 
+        // Seed deterministic content so Copy/Paste operations can validate pixels. This makes the
+        // smoke scenario assertive (not just "layer count changed").
+        const QColor bgColor(0xff, 0xff, 0xff);
+        const QColor paintColor(0xff, 0x00, 0x00);
+        const QRectF paintRect(bounds.left() + bounds.width() * 0.40,
+                               bounds.top() + bounds.height() * 0.40,
+                               bounds.width() * 0.20,
+                               bounds.height() * 0.20);
+
+        const QPoint insideSample(bounds.left() + qRound(bounds.width() * 0.50),
+                                  bounds.top() + qRound(bounds.height() * 0.50));
+        const QPoint outsideSample(bounds.left() + qRound(bounds.width() * 0.10),
+                                   bounds.top() + qRound(bounds.height() * 0.10));
+        const QVector<QPoint> samplePoints{insideSample, outsideSample};
+
+        const bool filled = fillCanvasForTouchSmoke(mainWindow, bgColor);
+        report.step(QStringLiteral("copypaste.fill_canvas_white"), filled);
+        if (!filled) {
+            ok = false;
+        }
+
+        KisPaintDeviceSP srcDev = paintDeviceForTouchSmoke(mainWindow);
+        bool painted = false;
+        if (srcDev) {
+            KisFillPainter painter(srcDev);
+            painter.setCompositeOpId(COMPOSITE_OVER);
+            painter.fillRect(paintRect.toAlignedRect(), KoColor(paintColor, srcDev->colorSpace()), OPACITY_OPAQUE_U8);
+            painter.end();
+            refreshImageForTouchSmoke(image);
+            painted = true;
+        }
+        report.step(QStringLiteral("copypaste.paint_rect_red"), painted);
+        if (!painted) {
+            ok = false;
+        }
+
+        auto colorToJson = [](const QColor &c) -> QJsonObject {
+            QJsonObject obj;
+            if (!c.isValid()) {
+                obj.insert(QStringLiteral("valid"), false);
+                return obj;
+            }
+            obj.insert(QStringLiteral("valid"), true);
+            obj.insert(QStringLiteral("r"), c.red());
+            obj.insert(QStringLiteral("g"), c.green());
+            obj.insert(QStringLiteral("b"), c.blue());
+            obj.insert(QStringLiteral("a"), c.alpha());
+            return obj;
+        };
+
+        const QVector<QColor> srcColors = sampleDeviceColorsForTouchSmoke(srcDev, samplePoints);
+        bool srcSamplesOk = false;
+        if (srcDev && srcColors.size() == samplePoints.size()) {
+            const bool insideIsRed = colorsEqualForTouchSmoke(srcColors[0], paintColor, 5);
+            const bool outsideIsBg = colorsEqualForTouchSmoke(srcColors[1], bgColor, 5);
+            srcSamplesOk = insideIsRed && outsideIsBg;
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("inside"), colorToJson(srcColors.size() > 0 ? srcColors[0] : QColor()));
+            details.insert(QStringLiteral("outside"), colorToJson(srcColors.size() > 1 ? srcColors[1] : QColor()));
+            report.step(QStringLiteral("copypaste.source_layer_seed_samples"), srcSamplesOk, details);
+        }
+        if (!srcSamplesOk) {
+            ok = false;
+        }
+
         toolManager->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
         QApplication::processEvents();
 
@@ -2778,6 +2845,13 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return selection->pixelSelection()->selectedExactRect();
         };
 
+        QVector<KisNode *> beforeNodes;
+        if (KisGroupLayerSP root = image->rootLayer()) {
+            for (KisNodeSP node = root->firstChild(); node; node = node->nextSibling()) {
+                beforeNodes.push_back(node.data());
+            }
+        }
+
         // Create a deterministic polygon selection for Copy/Paste operations.
         const QPointF tl(bounds.left() + bounds.width() * 0.25, bounds.top() + bounds.height() * 0.25);
         const QPointF tr(bounds.left() + bounds.width() * 0.75, bounds.top() + bounds.height() * 0.25);
@@ -2805,31 +2879,96 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             qWarning() << "Touch smoke: copypaste did not create a selection";
             ok = false;
         }
+        report.step(QStringLiteral("copypaste.create_selection_polygon"), selectionMade);
 
-        const int beforeLayerCount = image->rootLayer() ? int(image->rootLayer()->childCount()) : 0;
+        const int beforeRootChildCount = image->rootLayer() ? int(image->rootLayer()->childCount()) : 0;
         if (QAction *action = mainWindow->actionCollection()->action(QStringLiteral("copy_selection_to_new_layer"))) {
             action->trigger();
             QApplication::processEvents();
             image->waitForDone();
+            report.step(QStringLiteral("copypaste.copy_selection_to_new_layer"), true);
         } else {
             qWarning() << "Touch smoke: copypaste missing action: copy_selection_to_new_layer";
+            report.step(QStringLiteral("copypaste.copy_selection_to_new_layer"), false);
             ok = false;
         }
 
-        bool layerAdded = false;
+        auto findNewLayer = [&]() -> KisPaintLayer * {
+            if (KisGroupLayerSP root = image->rootLayer()) {
+                for (KisNodeSP node = root->firstChild(); node; node = node->nextSibling()) {
+                    if (beforeNodes.contains(node.data())) {
+                        continue;
+                    }
+                    if (KisPaintLayer *layer = qobject_cast<KisPaintLayer *>(node.data())) {
+                        return layer;
+                    }
+                }
+            }
+            return nullptr;
+        };
+
+        KisPaintLayer *newLayer = nullptr;
         for (int i = 0; i < 120; ++i) {
             QApplication::processEvents();
             image->waitForDone();
-            const int now = image->rootLayer() ? int(image->rootLayer()->childCount()) : 0;
-            if (now > beforeLayerCount) {
-                layerAdded = true;
+            newLayer = findNewLayer();
+            if (newLayer) {
                 break;
             }
             QThread::msleep(20);
         }
-        if (!layerAdded) {
-            qWarning() << "Touch smoke: copypaste did not create a new layer; before=" << beforeLayerCount
-                       << "after=" << (image->rootLayer() ? int(image->rootLayer()->childCount()) : 0);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("before_root_child_count"), beforeRootChildCount);
+            details.insert(QStringLiteral("after_root_child_count"),
+                           image->rootLayer() ? int(image->rootLayer()->childCount()) : 0);
+            report.step(QStringLiteral("copypaste.root_child_count"), true, details);
+        }
+
+        const bool newLayerOk = newLayer && newLayer->paintDevice();
+        report.step(QStringLiteral("copypaste.find_new_layer"), newLayerOk);
+        if (!newLayerOk) {
+            ok = false;
+        }
+
+        // Validate pixels in the new layer: inside the selection we expect the seeded red content,
+        // and outside the selection we expect transparency.
+        if (newLayerOk) {
+            KisPaintDeviceSP newDev = newLayer->paintDevice();
+            const QVector<QColor> newColors = sampleDeviceColorsForTouchSmoke(newDev, samplePoints);
+            bool newInsideOk = false;
+            bool newOutsideTransparent = false;
+            if (newDev && newColors.size() == samplePoints.size()) {
+                newInsideOk = colorsEqualForTouchSmoke(newColors[0], paintColor, 5);
+                newOutsideTransparent = newColors[1].isValid() && newColors[1].alpha() <= 10;
+            }
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("inside"), colorToJson(newColors.size() > 0 ? newColors[0] : QColor()));
+                details.insert(QStringLiteral("outside"), colorToJson(newColors.size() > 1 ? newColors[1] : QColor()));
+                report.step(QStringLiteral("copypaste.new_layer_inside_is_red"), newInsideOk, details);
+                report.step(QStringLiteral("copypaste.new_layer_outside_is_transparent"), newOutsideTransparent, details);
+            }
+            if (!newInsideOk || !newOutsideTransparent) {
+                ok = false;
+            }
+        }
+
+        // Copy should not modify the source layer.
+        const QVector<QColor> srcAfterCopy = sampleDeviceColorsForTouchSmoke(srcDev, samplePoints);
+        bool srcUnchanged = false;
+        if (srcDev && srcAfterCopy.size() == samplePoints.size()) {
+            const bool insideIsRed = colorsEqualForTouchSmoke(srcAfterCopy[0], paintColor, 5);
+            const bool outsideIsBg = colorsEqualForTouchSmoke(srcAfterCopy[1], bgColor, 5);
+            srcUnchanged = insideIsRed && outsideIsBg;
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("inside"), colorToJson(srcAfterCopy.size() > 0 ? srcAfterCopy[0] : QColor()));
+            details.insert(QStringLiteral("outside"), colorToJson(srcAfterCopy.size() > 1 ? srcAfterCopy[1] : QColor()));
+            report.step(QStringLiteral("copypaste.source_layer_unchanged"), srcUnchanged, details);
+        }
+        if (!srcUnchanged) {
             ok = false;
         }
 
