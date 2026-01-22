@@ -2177,26 +2177,43 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 return colors.isEmpty() ? QColor() : colors.first();
             };
 
-            auto runClearLayerScrub = [&]() {
+            qreal scrubStepX = 0.0;
+            auto withClearLayerScrubEvents = [&](auto callback) {
                 const QRect r = canvasWidget->rect();
-                const int centerX = r.width() / 2;
-                const int centerY = r.height() / 2;
-                const int spacing = qMin(60, r.width() / 6);
+                const qreal centerX = r.width() / 2.0;
+                const qreal centerY = r.height() / 2.0;
+                const qreal margin = 12.0;
+                const qreal spacing = qMin<qreal>(60.0, r.width() / 6.0);
 
                 const QPointF p0Start(centerX - spacing, centerY);
                 const QPointF p1Start(centerX, centerY);
                 const QPointF p2Start(centerX + spacing, centerY);
 
-                const QPointF p0Mid = p0Start + QPointF(100, 0);
-                const QPointF p1Mid = p1Start + QPointF(100, 0);
-                const QPointF p2Mid = p2Start + QPointF(100, 0);
+                const qreal maxStep = qMax<qreal>(0.0, centerX - spacing - margin);
+                const qreal stepX = qMin<qreal>(120.0, maxStep);
+                scrubStepX = stepX;
 
-                const QPointF p0StartGlobal(canvasWidget->mapToGlobal(p0Start.toPoint()));
-                const QPointF p1StartGlobal(canvasWidget->mapToGlobal(p1Start.toPoint()));
-                const QPointF p2StartGlobal(canvasWidget->mapToGlobal(p2Start.toPoint()));
-                const QPointF p0MidGlobal(canvasWidget->mapToGlobal(p0Mid.toPoint()));
-                const QPointF p1MidGlobal(canvasWidget->mapToGlobal(p1Mid.toPoint()));
-                const QPointF p2MidGlobal(canvasWidget->mapToGlobal(p2Mid.toPoint()));
+                const QPointF p0Right = p0Start + QPointF(stepX, 0.0);
+                const QPointF p1Right = p1Start + QPointF(stepX, 0.0);
+                const QPointF p2Right = p2Start + QPointF(stepX, 0.0);
+
+                const QPointF p0Left = p0Start - QPointF(stepX, 0.0);
+                const QPointF p1Left = p1Start - QPointF(stepX, 0.0);
+                const QPointF p2Left = p2Start - QPointF(stepX, 0.0);
+
+                auto toGlobal = [&](const QPointF &localPos) {
+                    return QPointF(canvasWidget->mapToGlobal(localPos.toPoint()));
+                };
+
+                const QPointF p0StartGlobal = toGlobal(p0Start);
+                const QPointF p1StartGlobal = toGlobal(p1Start);
+                const QPointF p2StartGlobal = toGlobal(p2Start);
+                const QPointF p0RightGlobal = toGlobal(p0Right);
+                const QPointF p1RightGlobal = toGlobal(p1Right);
+                const QPointF p2RightGlobal = toGlobal(p2Right);
+                const QPointF p0LeftGlobal = toGlobal(p0Left);
+                const QPointF p1LeftGlobal = toGlobal(p1Left);
+                const QPointF p2LeftGlobal = toGlobal(p2Left);
 
                 QTouchEvent::TouchPoint tp0(0);
                 QTouchEvent::TouchPoint tp1(1);
@@ -2205,50 +2222,262 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 tp0.setState(Qt::TouchPointPressed);
                 tp0.setPos(p0Start);
                 tp0.setScreenPos(p0StartGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Start);
+                tp0.setLastScreenPos(p0StartGlobal);
+
                 tp1.setState(Qt::TouchPointPressed);
                 tp1.setPos(p1Start);
                 tp1.setScreenPos(p1StartGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Start);
+                tp1.setLastScreenPos(p1StartGlobal);
+
                 tp2.setState(Qt::TouchPointPressed);
                 tp2.setPos(p2Start);
                 tp2.setScreenPos(p2StartGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Start);
+                tp2.setLastScreenPos(p2StartGlobal);
 
                 QList<QTouchEvent::TouchPoint> beginPoints{tp0, tp1, tp2};
                 QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
 
+                // Scrub pattern: right → left → right → left → back to start.
                 tp0.setState(Qt::TouchPointMoved);
-                tp0.setPos(p0Mid);
-                tp0.setScreenPos(p0MidGlobal);
+                tp0.setPos(p0Right);
+                tp0.setScreenPos(p0RightGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Start);
+                tp0.setLastScreenPos(p0StartGlobal);
+
                 tp1.setState(Qt::TouchPointMoved);
-                tp1.setPos(p1Mid);
-                tp1.setScreenPos(p1MidGlobal);
+                tp1.setPos(p1Right);
+                tp1.setScreenPos(p1RightGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Start);
+                tp1.setLastScreenPos(p1StartGlobal);
+
                 tp2.setState(Qt::TouchPointMoved);
-                tp2.setPos(p2Mid);
-                tp2.setScreenPos(p2MidGlobal);
+                tp2.setPos(p2Right);
+                tp2.setScreenPos(p2RightGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Start);
+                tp2.setLastScreenPos(p2StartGlobal);
 
                 QList<QTouchEvent::TouchPoint> updatePoints1{tp0, tp1, tp2};
                 QTouchEvent updateEvent1(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints1);
 
-                tp0.setPos(p0Start);
-                tp0.setScreenPos(p0StartGlobal);
-                tp1.setPos(p1Start);
-                tp1.setScreenPos(p1StartGlobal);
-                tp2.setPos(p2Start);
-                tp2.setScreenPos(p2StartGlobal);
+                tp0.setPos(p0Left);
+                tp0.setScreenPos(p0LeftGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Right);
+                tp0.setLastScreenPos(p0RightGlobal);
+
+                tp1.setPos(p1Left);
+                tp1.setScreenPos(p1LeftGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Right);
+                tp1.setLastScreenPos(p1RightGlobal);
+
+                tp2.setPos(p2Left);
+                tp2.setScreenPos(p2LeftGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Right);
+                tp2.setLastScreenPos(p2RightGlobal);
 
                 QList<QTouchEvent::TouchPoint> updatePoints2{tp0, tp1, tp2};
                 QTouchEvent updateEvent2(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints2);
 
+                tp0.setPos(p0Right);
+                tp0.setScreenPos(p0RightGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Left);
+                tp0.setLastScreenPos(p0LeftGlobal);
+
+                tp1.setPos(p1Right);
+                tp1.setScreenPos(p1RightGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Left);
+                tp1.setLastScreenPos(p1LeftGlobal);
+
+                tp2.setPos(p2Right);
+                tp2.setScreenPos(p2RightGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Left);
+                tp2.setLastScreenPos(p2LeftGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints3{tp0, tp1, tp2};
+                QTouchEvent updateEvent3(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints3);
+
+                tp0.setPos(p0Left);
+                tp0.setScreenPos(p0LeftGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Right);
+                tp0.setLastScreenPos(p0RightGlobal);
+
+                tp1.setPos(p1Left);
+                tp1.setScreenPos(p1LeftGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Right);
+                tp1.setLastScreenPos(p1RightGlobal);
+
+                tp2.setPos(p2Left);
+                tp2.setScreenPos(p2LeftGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Right);
+                tp2.setLastScreenPos(p2RightGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints4{tp0, tp1, tp2};
+                QTouchEvent updateEvent4(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints4);
+
+                tp0.setPos(p0Start);
+                tp0.setScreenPos(p0StartGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Left);
+                tp0.setLastScreenPos(p0LeftGlobal);
+
+                tp1.setPos(p1Start);
+                tp1.setScreenPos(p1StartGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Left);
+                tp1.setLastScreenPos(p1LeftGlobal);
+
+                tp2.setPos(p2Start);
+                tp2.setScreenPos(p2StartGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Left);
+                tp2.setLastScreenPos(p2LeftGlobal);
+
+                QList<QTouchEvent::TouchPoint> updatePoints5{tp0, tp1, tp2};
+                QTouchEvent updateEvent5(QEvent::TouchUpdate, touchDevice, Qt::NoModifier, Qt::TouchPointMoved, updatePoints5);
+
                 tp0.setState(Qt::TouchPointReleased);
+                tp0.setPos(p0Start);
+                tp0.setScreenPos(p0StartGlobal);
+                tp0.setStartPos(p0Start);
+                tp0.setStartScreenPos(p0StartGlobal);
+                tp0.setLastPos(p0Start);
+                tp0.setLastScreenPos(p0StartGlobal);
+
                 tp1.setState(Qt::TouchPointReleased);
+                tp1.setPos(p1Start);
+                tp1.setScreenPos(p1StartGlobal);
+                tp1.setStartPos(p1Start);
+                tp1.setStartScreenPos(p1StartGlobal);
+                tp1.setLastPos(p1Start);
+                tp1.setLastScreenPos(p1StartGlobal);
+
                 tp2.setState(Qt::TouchPointReleased);
+                tp2.setPos(p2Start);
+                tp2.setScreenPos(p2StartGlobal);
+                tp2.setStartPos(p2Start);
+                tp2.setStartScreenPos(p2StartGlobal);
+                tp2.setLastPos(p2Start);
+                tp2.setLastScreenPos(p2StartGlobal);
+
                 QList<QTouchEvent::TouchPoint> endPoints{tp0, tp1, tp2};
                 QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
 
-                KisTouchGestureAction gesture;
-                gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
-                gesture.inputEvent(&updateEvent1);
-                gesture.inputEvent(&updateEvent2);
-                gesture.end(&endEvent);
+                callback(beginEvent, updateEvent1, updateEvent2, updateEvent3, updateEvent4, updateEvent5, endEvent);
+            };
+
+            auto performClearLayerScrubViaInputManager = [&]() {
+                withClearLayerScrubEvents([&](QTouchEvent &beginEvent,
+                                             QTouchEvent &updateEvent1,
+                                             QTouchEvent &updateEvent2,
+                                             QTouchEvent &updateEvent3,
+                                             QTouchEvent &updateEvent4,
+                                             QTouchEvent &updateEvent5,
+                                             QTouchEvent &endEvent) {
+                    QApplication::sendEvent(canvasWidget, &beginEvent);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent1);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent2);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent3);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent4);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &updateEvent5);
+                    QApplication::processEvents();
+                    QApplication::sendEvent(canvasWidget, &endEvent);
+                    QApplication::processEvents();
+                });
+            };
+
+            auto performClearLayerScrubViaDirectAction = [&]() {
+                withClearLayerScrubEvents([&](QTouchEvent &beginEvent,
+                                             QTouchEvent &updateEvent1,
+                                             QTouchEvent &updateEvent2,
+                                             QTouchEvent &updateEvent3,
+                                             QTouchEvent &updateEvent4,
+                                             QTouchEvent &updateEvent5,
+                                             QTouchEvent &endEvent) {
+                    KisTouchGestureAction gesture;
+                    gesture.begin(KisTouchGestureAction::CopyPasteOverlay, &beginEvent);
+                    gesture.inputEvent(&updateEvent1);
+                    gesture.inputEvent(&updateEvent2);
+                    gesture.inputEvent(&updateEvent3);
+                    gesture.inputEvent(&updateEvent4);
+                    gesture.inputEvent(&updateEvent5);
+                    gesture.end(&endEvent);
+                });
+            };
+
+            auto runClearLayerScrubGestureWithFallback = [&](int clearTimeoutMs, QJsonObject *details) -> bool {
+                performClearLayerScrubViaInputManager();
+                const int inputManagerTimeoutMs = qMin(900, clearTimeoutMs);
+                const bool clearedViaInputManager = waitForImageCondition(inputManagerTimeoutMs, [&]() { return sampleCenter().alpha() <= 10; });
+
+                bool clearedViaDirectAction = false;
+                if (!clearedViaInputManager) {
+                    performClearLayerScrubViaDirectAction();
+                    clearedViaDirectAction = waitForImageCondition(clearTimeoutMs, [&]() { return sampleCenter().alpha() <= 10; });
+                }
+
+                if (details) {
+                    details->insert(QStringLiteral("scrub_step_px"), scrubStepX);
+                    details->insert(QStringLiteral("input_manager_timeout_ms"), inputManagerTimeoutMs);
+                    details->insert(QStringLiteral("input_manager_cleared"), clearedViaInputManager);
+                    details->insert(QStringLiteral("direct_action_cleared"), clearedViaDirectAction);
+                }
+
+                return clearedViaInputManager || clearedViaDirectAction;
+            };
+
+            auto runClearLayerScrubGestureNoClear = [&](int settleMs, QJsonObject *details) -> bool {
+                performClearLayerScrubViaInputManager();
+                performClearLayerScrubViaDirectAction();
+
+                const bool cleared = waitForImageCondition(settleMs, [&]() { return sampleCenter().alpha() <= 10; });
+                if (details) {
+                    details->insert(QStringLiteral("scrub_step_px"), scrubStepX);
+                    details->insert(QStringLiteral("settle_ms"), settleMs);
+                    details->insert(QStringLiteral("input_manager_attempted"), true);
+                    details->insert(QStringLiteral("direct_action_attempted"), true);
+                    details->insert(QStringLiteral("cleared"), cleared);
+                }
+                return cleared;
             };
 
             // Paint a deterministic non-transparent pixel so we can validate clearing.
@@ -2269,14 +2498,17 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
                 cfg.setTouchClearLayerGestureEnabled(true);
                 QApplication::processEvents();
-                runClearLayerScrub();
-
-                const bool cleared = waitForImageCondition(1500, [&]() { return sampleCenter().alpha() <= 10; });
+                QJsonObject scrubDetails;
+                const bool cleared = runClearLayerScrubGestureWithFallback(1500, &scrubDetails);
                 const QColor after = sampleCenter();
                 {
                     QJsonObject d;
                     d.insert(QStringLiteral("before_alpha"), before.alpha());
                     d.insert(QStringLiteral("after_alpha"), after.alpha());
+                    d.insert(QStringLiteral("scrub_step_px"), scrubDetails.value(QStringLiteral("scrub_step_px")));
+                    d.insert(QStringLiteral("input_manager_timeout_ms"), scrubDetails.value(QStringLiteral("input_manager_timeout_ms")));
+                    d.insert(QStringLiteral("input_manager_cleared"), scrubDetails.value(QStringLiteral("input_manager_cleared")));
+                    d.insert(QStringLiteral("direct_action_cleared"), scrubDetails.value(QStringLiteral("direct_action_cleared")));
                     report.step(QStringLiteral("gesture_controls.clear_layer_enabled_clears_layer"), cleared, d);
                 }
                 if (!cleared) {
@@ -2292,15 +2524,20 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     const QColor beforeBlocked = sampleCenter();
                     cfg.setTouchClearLayerGestureEnabled(false);
                     QApplication::processEvents();
-                    runClearLayerScrub();
-                    waitForImageCondition(200, [&]() { return false; });
+                    QJsonObject blockedScrubDetails;
+                    const bool clearedWhileDisabled = runClearLayerScrubGestureNoClear(250, &blockedScrubDetails);
 
                     const QColor afterBlocked = sampleCenter();
-                    const bool blocked = colorsEqualForTouchSmoke(beforeBlocked, afterBlocked, 3);
+                    const bool blocked = !clearedWhileDisabled && colorsEqualForTouchSmoke(beforeBlocked, afterBlocked, 3);
                     {
                         QJsonObject d;
                         d.insert(QStringLiteral("before_alpha"), beforeBlocked.alpha());
                         d.insert(QStringLiteral("after_alpha"), afterBlocked.alpha());
+                        d.insert(QStringLiteral("scrub_step_px"), blockedScrubDetails.value(QStringLiteral("scrub_step_px")));
+                        d.insert(QStringLiteral("settle_ms"), blockedScrubDetails.value(QStringLiteral("settle_ms")));
+                        d.insert(QStringLiteral("input_manager_attempted"), blockedScrubDetails.value(QStringLiteral("input_manager_attempted")));
+                        d.insert(QStringLiteral("direct_action_attempted"), blockedScrubDetails.value(QStringLiteral("direct_action_attempted")));
+                        d.insert(QStringLiteral("cleared"), blockedScrubDetails.value(QStringLiteral("cleared")));
                         report.step(QStringLiteral("gesture_controls.clear_layer_disabled_no_clear"), blocked, d);
                     }
                     if (!blocked) {
