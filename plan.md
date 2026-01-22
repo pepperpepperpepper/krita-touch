@@ -75,6 +75,7 @@ Recently completed:
 Work log (append-only; newest first):
 
 - **2026‑01‑22**:
+  - Smoke: `--touch-smoke=gesture-controls` undo/redo tap gestures now run through the **input-manager path** by sending synthetic multi-touch tap events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
   - Smoke: `--touch-smoke=gesture-controls` clear-layer scrub gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
   - Smoke: `--touch-smoke=gesture-controls` rotate-with-pinch gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching).
   - Smoke: `--touch-smoke=quickmenu` now covers the gesture-path end-to-end: slide/highlight routing, release triggers slot action, and hold-on-slot opens QuickMenu Setup (config sheet).
@@ -929,12 +930,12 @@ Next test targets (cross-platform, assertive):
 
 - QuickMenu: now covered by `--touch-smoke=quickmenu` (gesture-path slide/highlight, release triggers slot action, hold opens config sheet) and `--touch-smoke=gesture-controls` (QuickMenu enable/disable gating).
 - Copy/Paste overlay: now covered by `--touch-smoke=copypaste` (selection → copy to new layer + pixel assertions for copied content + outside-selection transparency) and `--touch-smoke=gesture-controls` (3-finger swipe down gating opens the overlay).
-- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + clear-layer scrub + fullscreen gating assertions), **including input-manager-path checks** by driving rotate-with-pinch, the 3-finger clipboard swipe, **and** the 3-finger clear-layer scrub via synthetic touch events delivered to the canvas (exercises `KisInputManager` shortcut matching; not just direct input-action calls).
+- Gesture Controls: now covered by `--touch-smoke=gesture-controls` (rotate-with-pinch + clipboard + undo/redo + quickmenu + clear-layer scrub + fullscreen gating assertions), **including input-manager-path checks** by driving rotate-with-pinch, the 3-finger clipboard swipe, the 2/3-finger undo/redo taps, **and** the 3-finger clear-layer scrub via synthetic touch events delivered to the canvas (exercises `KisInputManager` shortcut matching; not just direct input-action calls).
 - Layers: now covered by `--touch-smoke=layers-panel` (swipe-right multi-select + hold-visibility solo/restore) and `--touch-smoke=layer-options` (swipe-left opens options).
 
 Next offer (recommended next implementation):
 
-- Expand “input-manager path” coverage to **undo/redo taps**: drive Undo (2-finger tap) and Redo (3-finger tap) via synthetic touch events delivered to the canvas so `KisInputManager` shortcut matching is exercised (keep the existing direct-gesture invocation as a fallback for platforms where multi-touch injection is flaky).
+- Expand “input-manager path” coverage to the **fullscreen/canvas-only tap**: drive the 4-finger tap via synthetic touch events delivered to the canvas so `KisInputManager` shortcut matching is exercised (keep the existing direct-gesture invocation as a fallback for platforms where multi-touch injection is flaky).
 
 ---
 

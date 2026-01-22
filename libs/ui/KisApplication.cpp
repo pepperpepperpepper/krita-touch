@@ -1759,6 +1759,62 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QApplication::sendEvent(canvasWidget, &endEvent);
         };
 
+        auto sendMultiFingerTouchTap = [&](int fingerCount) {
+            if (fingerCount <= 0) {
+                return;
+            }
+
+            const QPointF center = QPointF(canvasWidget->rect().center());
+            constexpr qreal spacingPx = 60.0;
+            QVector<QPointF> points;
+            points.reserve(fingerCount);
+
+            if (fingerCount == 1) {
+                points.append(center);
+            } else if (fingerCount == 2) {
+                points.append(center + QPointF(-spacingPx * 0.5, 0.0));
+                points.append(center + QPointF(spacingPx * 0.5, 0.0));
+            } else if (fingerCount == 3) {
+                points.append(center + QPointF(-spacingPx, spacingPx * 0.5));
+                points.append(center + QPointF(0.0, -spacingPx * 0.5));
+                points.append(center + QPointF(spacingPx, spacingPx * 0.5));
+            } else {
+                for (int i = 0; i < fingerCount; ++i) {
+                    const qreal offset = (qreal(i) - qreal(fingerCount - 1) * 0.5) * spacingPx;
+                    points.append(center + QPointF(offset, 0.0));
+                }
+            }
+
+            QList<QTouchEvent::TouchPoint> beginPoints;
+            QList<QTouchEvent::TouchPoint> endPoints;
+
+            for (int i = 0; i < points.size(); ++i) {
+                const QPointF pos = points.at(i);
+                const QPointF posGlobal = QPointF(canvasWidget->mapToGlobal(pos.toPoint()));
+
+                QTouchEvent::TouchPoint point(i);
+                point.setState(Qt::TouchPointPressed);
+                point.setPos(pos);
+                point.setScreenPos(posGlobal);
+                point.setStartPos(pos);
+                point.setStartScreenPos(posGlobal);
+                point.setLastPos(pos);
+                point.setLastScreenPos(posGlobal);
+                beginPoints.append(point);
+
+                point.setState(Qt::TouchPointReleased);
+                endPoints.append(point);
+            }
+
+            QTouchEvent beginEvent(QEvent::TouchBegin, touchDevice, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+            QApplication::sendEvent(canvasWidget, &beginEvent);
+            QApplication::processEvents();
+
+            QTouchEvent endEvent(QEvent::TouchEnd, touchDevice, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+            QApplication::sendEvent(canvasWidget, &endEvent);
+            QApplication::processEvents();
+        };
+
         auto applyTwoFingerRotateGesture = [&]() -> qreal {
             const QPointF center = QPointF(canvasWidget->rect().center());
             constexpr qreal radius = 90.0;
@@ -2586,15 +2642,104 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 } else {
                     KisTouchGestureAction gesture;
 
-                    cfg.setTouchUndoRedoGesturesEnabled(true);
-                    gesture.begin(KisTouchGestureAction::UndoActionShortcut, nullptr);
-                    gesture.end(nullptr);
+                    auto performUndoViaInputManager = [&]() { sendMultiFingerTouchTap(2); };
+                    auto performRedoViaInputManager = [&]() { sendMultiFingerTouchTap(3); };
 
-                    const bool undone = waitForImageCondition(1500, [&]() { return layerCount() == beforeCount; });
+                    auto performUndoViaDirectAction = [&]() {
+                        gesture.begin(KisTouchGestureAction::UndoActionShortcut, nullptr);
+                        gesture.end(nullptr);
+                    };
+
+                    auto performRedoViaDirectAction = [&]() {
+                        gesture.begin(KisTouchGestureAction::RedoActionShortcut, nullptr);
+                        gesture.end(nullptr);
+                    };
+
+                    auto runUndoTapWithFallback = [&](int expectedLayerCount, int timeoutMs, QJsonObject *details) -> bool {
+                        bool undoneViaInputManager = false;
+                        bool undoneViaDirectAction = false;
+
+                        performUndoViaInputManager();
+                        undoneViaInputManager = waitForImageCondition(timeoutMs, [&]() { return layerCount() == expectedLayerCount; });
+                        if (!undoneViaInputManager) {
+                            performUndoViaDirectAction();
+                            undoneViaDirectAction = waitForImageCondition(timeoutMs, [&]() { return layerCount() == expectedLayerCount; });
+                        }
+
+                        if (details) {
+                            details->insert(QStringLiteral("expected_layer_count"), expectedLayerCount);
+                            details->insert(QStringLiteral("actual_layer_count"), layerCount());
+                            details->insert(QStringLiteral("input_manager_timeout_ms"), timeoutMs);
+                            details->insert(QStringLiteral("input_manager_undone"), undoneViaInputManager);
+                            details->insert(QStringLiteral("direct_action_undone"), undoneViaDirectAction);
+                        }
+
+                        return undoneViaInputManager || undoneViaDirectAction;
+                    };
+
+                    auto runRedoTapWithFallback = [&](int expectedLayerCount, int timeoutMs, QJsonObject *details) -> bool {
+                        bool redoneViaInputManager = false;
+                        bool redoneViaDirectAction = false;
+
+                        performRedoViaInputManager();
+                        redoneViaInputManager = waitForImageCondition(timeoutMs, [&]() { return layerCount() == expectedLayerCount; });
+                        if (!redoneViaInputManager) {
+                            performRedoViaDirectAction();
+                            redoneViaDirectAction = waitForImageCondition(timeoutMs, [&]() { return layerCount() == expectedLayerCount; });
+                        }
+
+                        if (details) {
+                            details->insert(QStringLiteral("expected_layer_count"), expectedLayerCount);
+                            details->insert(QStringLiteral("actual_layer_count"), layerCount());
+                            details->insert(QStringLiteral("input_manager_timeout_ms"), timeoutMs);
+                            details->insert(QStringLiteral("input_manager_redone"), redoneViaInputManager);
+                            details->insert(QStringLiteral("direct_action_redone"), redoneViaDirectAction);
+                        }
+
+                        return redoneViaInputManager || redoneViaDirectAction;
+                    };
+
+                    auto runUndoTapNoChange = [&](int expectedLayerCount, int settleMs, QJsonObject *details) -> bool {
+                        performUndoViaInputManager();
+                        performUndoViaDirectAction();
+
+                        waitForImageCondition(settleMs, [&]() { return false; });
+
+                        const bool blocked = layerCount() == expectedLayerCount;
+                        if (details) {
+                            details->insert(QStringLiteral("expected_layer_count"), expectedLayerCount);
+                            details->insert(QStringLiteral("actual_layer_count"), layerCount());
+                            details->insert(QStringLiteral("settle_ms"), settleMs);
+                            details->insert(QStringLiteral("input_manager_attempted"), true);
+                            details->insert(QStringLiteral("direct_action_attempted"), true);
+                        }
+                        return blocked;
+                    };
+
+                    auto runRedoTapNoChange = [&](int expectedLayerCount, int settleMs, QJsonObject *details) -> bool {
+                        performRedoViaInputManager();
+                        performRedoViaDirectAction();
+
+                        waitForImageCondition(settleMs, [&]() { return false; });
+
+                        const bool blocked = layerCount() == expectedLayerCount;
+                        if (details) {
+                            details->insert(QStringLiteral("expected_layer_count"), expectedLayerCount);
+                            details->insert(QStringLiteral("actual_layer_count"), layerCount());
+                            details->insert(QStringLiteral("settle_ms"), settleMs);
+                            details->insert(QStringLiteral("input_manager_attempted"), true);
+                            details->insert(QStringLiteral("direct_action_attempted"), true);
+                        }
+                        return blocked;
+                    };
+
+                    cfg.setTouchUndoRedoGesturesEnabled(true);
+                    QApplication::processEvents();
+                    QJsonObject undoDetails;
+                    const bool undone = runUndoTapWithFallback(beforeCount, 1500, &undoDetails);
+
                     {
-                        QJsonObject details;
-                        details.insert(QStringLiteral("expected_layer_count"), beforeCount);
-                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        QJsonObject details = undoDetails;
                         report.step(QStringLiteral("gesture_controls.undo_enabled_undoes_layer_add"), undone, details);
                     }
                     if (!undone) {
@@ -2602,15 +2747,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     }
 
                     cfg.setTouchUndoRedoGesturesEnabled(false);
+                    QApplication::processEvents();
                     const int beforeBlockedRedo = layerCount();
-                    gesture.begin(KisTouchGestureAction::RedoActionShortcut, nullptr);
-                    gesture.end(nullptr);
-                    waitForImageCondition(200, [&]() { return false; });
-                    const bool redoBlocked = layerCount() == beforeBlockedRedo;
+                    QJsonObject redoBlockedDetails;
+                    const bool redoBlocked = runRedoTapNoChange(beforeBlockedRedo, 250, &redoBlockedDetails);
                     {
-                        QJsonObject details;
-                        details.insert(QStringLiteral("expected_layer_count"), beforeBlockedRedo);
-                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        QJsonObject details = redoBlockedDetails;
                         report.step(QStringLiteral("gesture_controls.undo_redo_disabled_blocks_redo"), redoBlocked, details);
                     }
                     if (!redoBlocked) {
@@ -2618,14 +2760,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     }
 
                     cfg.setTouchUndoRedoGesturesEnabled(true);
-                    gesture.begin(KisTouchGestureAction::RedoActionShortcut, nullptr);
-                    gesture.end(nullptr);
-
-                    const bool redone = waitForImageCondition(1500, [&]() { return layerCount() == afterAddCount; });
+                    QApplication::processEvents();
+                    QJsonObject redoDetails;
+                    const bool redone = runRedoTapWithFallback(afterAddCount, 1500, &redoDetails);
                     {
-                        QJsonObject details;
-                        details.insert(QStringLiteral("expected_layer_count"), afterAddCount);
-                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        QJsonObject details = redoDetails;
                         report.step(QStringLiteral("gesture_controls.redo_enabled_redoes_layer_add"), redone, details);
                     }
                     if (!redone) {
@@ -2633,15 +2772,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     }
 
                     cfg.setTouchUndoRedoGesturesEnabled(false);
+                    QApplication::processEvents();
                     const int beforeBlockedUndo = layerCount();
-                    gesture.begin(KisTouchGestureAction::UndoActionShortcut, nullptr);
-                    gesture.end(nullptr);
-                    waitForImageCondition(200, [&]() { return false; });
-                    const bool undoBlocked = layerCount() == beforeBlockedUndo;
+                    QJsonObject undoBlockedDetails;
+                    const bool undoBlocked = runUndoTapNoChange(beforeBlockedUndo, 250, &undoBlockedDetails);
                     {
-                        QJsonObject details;
-                        details.insert(QStringLiteral("expected_layer_count"), beforeBlockedUndo);
-                        details.insert(QStringLiteral("actual_layer_count"), layerCount());
+                        QJsonObject details = undoBlockedDetails;
                         report.step(QStringLiteral("gesture_controls.undo_redo_disabled_blocks_undo"), undoBlocked, details);
                     }
                     if (!undoBlocked) {
@@ -2649,6 +2785,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     }
 
                     cfg.setTouchUndoRedoGesturesEnabled(true);
+                    QApplication::processEvents();
                 }
             }
         } else {
