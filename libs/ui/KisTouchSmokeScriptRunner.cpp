@@ -23,6 +23,7 @@
 #include "input/KisTouchGestureAction.h"
 #include "input/kis_input_profile_manager.h"
 #include "kis_config.h"
+#include "kis_group_layer.h"
 #include "kis_image.h"
 
 namespace {
@@ -69,9 +70,37 @@ bool waitForUiCondition(int timeoutMs, ConditionFn condition)
     return condition();
 }
 
+template<typename ConditionFn>
+bool waitForImageCondition(KisImageWSP image, int timeoutMs, ConditionFn condition)
+{
+    constexpr int stepMs = 20;
+    const int iterations = qMax(1, timeoutMs / stepMs);
+    for (int i = 0; i < iterations; ++i) {
+        QApplication::processEvents();
+        if (image) {
+            image->waitForDone();
+        }
+        if (condition()) {
+            return true;
+        }
+        QThread::msleep(stepMs);
+    }
+    QApplication::processEvents();
+    if (image) {
+        image->waitForDone();
+    }
+    return condition();
+}
+
 bool sleepWithEvents(int ms)
 {
     return waitForUiCondition(ms, []() { return false; });
+}
+
+bool sleepWithImageEvents(KisImageWSP image, int ms)
+{
+    waitForImageCondition(image, ms, []() { return false; });
+    return true;
 }
 
 QTouchDevice *touchDevice()
@@ -102,6 +131,12 @@ bool setInputProfile(const QString &profileName, QString *errorOut)
     profileManager->setCurrentProfile(profile);
     QApplication::processEvents();
     return true;
+}
+
+int layerCount(KisImageWSP image)
+{
+    KisGroupLayerSP root = image ? image->rootLayer() : KisGroupLayerSP();
+    return root ? int(root->childCount()) : 0;
 }
 
 bool setConfigBool(KisConfig &cfg, const QString &key, bool value, QJsonObject *details, QString *errorOut)
@@ -516,6 +551,193 @@ bool touchTapCheckableActionNoChange(KisMainWindow *mainWindow,
     return blocked;
 }
 
+bool actionTriggerWaitLayerCountDelta(KisMainWindow *mainWindow,
+                                      const QString &actionId,
+                                      int delta,
+                                      int timeoutMs,
+                                      QJsonObject *details,
+                                      QString *errorOut)
+{
+    if (!mainWindow || !mainWindow->actionCollection()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing action collection");
+        }
+        return false;
+    }
+
+    QAction *action = mainWindow->actionCollection()->action(actionId);
+    if (!action) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Action not found: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    const int before = layerCount(image);
+    const int expected = before + delta;
+
+    action->trigger();
+    QApplication::processEvents();
+
+    const bool ok = waitForImageCondition(image, timeoutMs, [&]() { return layerCount(image) == expected; });
+
+    if (details) {
+        details->insert(QStringLiteral("action_id"), actionId);
+        details->insert(QStringLiteral("delta"), delta);
+        details->insert(QStringLiteral("before_layer_count"), before);
+        details->insert(QStringLiteral("expected_layer_count"), expected);
+        details->insert(QStringLiteral("actual_layer_count"), layerCount(image));
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Timed out waiting for layer count delta %1 (expected %2)")
+                        .arg(delta)
+                        .arg(expected);
+    }
+
+    return ok;
+}
+
+bool waitForLayerCountDelta(KisImageWSP image,
+                            int delta,
+                            int timeoutMs,
+                            QJsonObject *details,
+                            QString *errorOut)
+{
+    const int before = layerCount(image);
+    const int expected = before + delta;
+    const bool ok = waitForImageCondition(image, timeoutMs, [&]() { return layerCount(image) == expected; });
+    if (details) {
+        details->insert(QStringLiteral("delta"), delta);
+        details->insert(QStringLiteral("before_layer_count"), before);
+        details->insert(QStringLiteral("expected_layer_count"), expected);
+        details->insert(QStringLiteral("actual_layer_count"), layerCount(image));
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Timed out waiting for layer count delta %1 (expected %2)")
+                        .arg(delta)
+                        .arg(expected);
+    }
+    return ok;
+}
+
+bool touchTapLayerCountWithFallback(KisMainWindow *mainWindow,
+                                   int fingerCount,
+                                   const QJsonObject &posObj,
+                                   int delta,
+                                   int timeoutMs,
+                                   int fallbackShortcut,
+                                   bool requireInputManager,
+                                   QJsonObject *details,
+                                   QString *errorOut)
+{
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    const int before = layerCount(image);
+    const int expected = before + delta;
+
+    bool changedViaInputManager = false;
+    bool changedViaDirectAction = false;
+
+    QString injectError;
+    sendMultiFingerTouchTap(mainWindow, fingerCount, posObj, &injectError);
+    changedViaInputManager = waitForImageCondition(image, timeoutMs, [&]() { return layerCount(image) == expected; });
+
+    if (!changedViaInputManager && !requireInputManager) {
+        QJsonObject fallbackDetails;
+        QString fallbackError;
+        performTouchGestureShortcut(fallbackShortcut, &fallbackDetails, &fallbackError);
+        changedViaDirectAction = waitForImageCondition(image, timeoutMs, [&]() { return layerCount(image) == expected; });
+        if (details) {
+            details->insert(QStringLiteral("direct_action_details"), fallbackDetails);
+            if (!fallbackError.isEmpty()) {
+                details->insert(QStringLiteral("direct_action_error"), fallbackError);
+            }
+        }
+    }
+
+    if (details) {
+        details->insert(QStringLiteral("delta"), delta);
+        details->insert(QStringLiteral("before_layer_count"), before);
+        details->insert(QStringLiteral("expected_layer_count"), expected);
+        details->insert(QStringLiteral("actual_layer_count"), layerCount(image));
+        details->insert(QStringLiteral("input_manager_timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("require_input_manager"), requireInputManager);
+        details->insert(QStringLiteral("input_manager_changed"), changedViaInputManager);
+        details->insert(QStringLiteral("direct_action_changed"), changedViaDirectAction);
+        if (!injectError.isEmpty()) {
+            details->insert(QStringLiteral("touch_inject_error"), injectError);
+        }
+    }
+
+    return requireInputManager ? changedViaInputManager : (changedViaInputManager || changedViaDirectAction);
+}
+
+bool touchTapLayerCountNoChange(KisMainWindow *mainWindow,
+                               int fingerCount,
+                               const QJsonObject &posObj,
+                               int settleMs,
+                               int directShortcut,
+                               QJsonObject *details,
+                               QString *errorOut)
+{
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    const int before = layerCount(image);
+
+    QString injectError;
+    sendMultiFingerTouchTap(mainWindow, fingerCount, posObj, &injectError);
+    {
+        QJsonObject fallbackDetails;
+        QString fallbackError;
+        performTouchGestureShortcut(directShortcut, &fallbackDetails, &fallbackError);
+        if (details) {
+            details->insert(QStringLiteral("direct_action_details"), fallbackDetails);
+            if (!fallbackError.isEmpty()) {
+                details->insert(QStringLiteral("direct_action_error"), fallbackError);
+            }
+        }
+    }
+
+    sleepWithImageEvents(image, settleMs);
+
+    const bool blocked = layerCount(image) == before;
+
+    if (details) {
+        details->insert(QStringLiteral("before_layer_count"), before);
+        details->insert(QStringLiteral("actual_layer_count"), layerCount(image));
+        details->insert(QStringLiteral("settle_ms"), settleMs);
+        details->insert(QStringLiteral("input_manager_attempted"), true);
+        details->insert(QStringLiteral("direct_action_attempted"), true);
+        if (!injectError.isEmpty()) {
+            details->insert(QStringLiteral("touch_inject_error"), injectError);
+        }
+    }
+
+    return blocked;
+}
+
 bool loadJsonObject(const QString &path, QJsonObject *out, QString *errorOut)
 {
     QFile f(path);
@@ -736,6 +958,48 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             details.insert(QStringLiteral("fingers"), fingers);
             details.insert(QStringLiteral("direct_shortcut"), shortcutName);
             ok = touchTapCheckableActionNoChange(mainWindow, fingers, posObj, actionId, expected, settleMs, shortcut, &details, &localError);
+        } else if (op == QStringLiteral("action.trigger_wait_layer_count_delta")) {
+            const QString actionId = step.value(QStringLiteral("id")).toString();
+            const int delta = step.value(QStringLiteral("delta")).toInt(0);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1500);
+            ok = actionTriggerWaitLayerCountDelta(mainWindow, actionId, delta, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("image.wait_layer_count_delta")) {
+            const int delta = step.value(QStringLiteral("delta")).toInt(0);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1500);
+            KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+            if (!image) {
+                localError = QStringLiteral("Missing image");
+            } else {
+                ok = waitForLayerCountDelta(image, delta, timeoutMs, &details, &localError);
+            }
+        } else if (op == QStringLiteral("touch.tap_layer_count_with_fallback")) {
+            const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
+            const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
+            const int delta = step.value(QStringLiteral("layer_count_delta")).toInt(0);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1500);
+            const QString shortcutName = step.value(QStringLiteral("fallback_shortcut")).toString();
+            const int shortcut = touchShortcutFromString(shortcutName);
+            const bool requireInputManager = step.value(QStringLiteral("require_input_manager")).toBool(false);
+            details.insert(QStringLiteral("fingers"), fingers);
+            details.insert(QStringLiteral("fallback_shortcut"), shortcutName);
+            ok = touchTapLayerCountWithFallback(mainWindow,
+                                                fingers,
+                                                posObj,
+                                                delta,
+                                                timeoutMs,
+                                                shortcut,
+                                                requireInputManager,
+                                                &details,
+                                                &localError);
+        } else if (op == QStringLiteral("touch.tap_layer_count_no_change")) {
+            const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
+            const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
+            const int settleMs = step.value(QStringLiteral("settle_ms")).toInt(250);
+            const QString shortcutName = step.value(QStringLiteral("direct_shortcut")).toString();
+            const int shortcut = touchShortcutFromString(shortcutName);
+            details.insert(QStringLiteral("fingers"), fingers);
+            details.insert(QStringLiteral("direct_shortcut"), shortcutName);
+            ok = touchTapLayerCountNoChange(mainWindow, fingers, posObj, settleMs, shortcut, &details, &localError);
         } else {
             localError = QStringLiteral("Unknown op: %1").arg(op);
         }

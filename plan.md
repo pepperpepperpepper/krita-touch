@@ -77,7 +77,9 @@ Work log (append-only; newest first):
 - **2026‑01‑23**:
   - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
   - Infra: added a **scriptable touch-smoke runner** (`--touch-smoke=script:<name>`) that loads JSON scripts from Qt resources (`:/touchsmoke/...`) and executes reusable primitives with per-step `KRITA_TOUCH_SMOKE_JSON` reporting; added the first script `canvas-only-toggle` and validated it on Linux Xvfb.
+  - Infra: touch-smoke scripts now support layer-count assertions + undo/redo gesture steps; added script `undo-redo-layer-gating` (2/3-finger tap) for cross-platform gating coverage.
   - Validation: Linux Xvfb `gesture-controls` scenario OK.
+  - Validation: Linux Xvfb `script:undo-redo-layer-gating` scenario OK.
 - **2026‑01‑22**:
   - Smoke: `--touch-smoke=gesture-controls` undo/redo tap gestures now run through the **input-manager path** by sending synthetic multi-touch tap events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
   - Smoke: `--touch-smoke=gesture-controls` clear-layer scrub gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
@@ -939,9 +941,9 @@ Next test targets (cross-platform, assertive):
 
 Next offer (recommended next implementation):
 
-- Add a small **scriptable touch-smoke runner** so we can author more elaborate, cross-platform tests without growing `KisApplication.cpp` endlessly:
-  - Define a minimal “touch script” format (JSON/YAML) with reusable primitives: `tap(n)`, `drag`, `pinch`, `rotate`, `waitFor(actionChecked|layerCount|pixel)`, etc.
-  - Implement a shared executor for Linux Xvfb + Android/Genymotion that reuses the existing primitives (Qt touch injection first, direct-action fallback when injection is flaky) and emits per-step `KRITA_TOUCH_SMOKE_JSON` results.
+- Extend the **scriptable touch-smoke runner** so we can author more elaborate, cross-platform tests without growing `KisApplication.cpp` endlessly:
+  - Add primitives: `drag`, `pinch_rotate`, `waitFor(pixel|overlayVisible)`, etc. (Qt touch injection first, direct-action fallback when injection is flaky).
+  - Grow a small suite of JSON scripts for our Procreate-MVP surfaces, and run them on both Linux Xvfb and Android/Genymotion.
 
 ---
 

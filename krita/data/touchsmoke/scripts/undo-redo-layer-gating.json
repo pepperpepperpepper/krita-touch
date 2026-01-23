@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "undo_redo.enable_gesture",
+      "op": "config.set_bool",
+      "key": "touch_undo_redo_gestures_enabled",
+      "value": true
+    },
+    {
+      "name": "undo_redo.add_layer",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "undo_redo.undo_enabled_undoes_layer_add",
+      "op": "touch.tap_layer_count_with_fallback",
+      "fingers": 2,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "layer_count_delta": -1,
+      "timeout_ms": 1500,
+      "fallback_shortcut": "undo"
+    },
+    {
+      "name": "undo_redo.disable_gesture",
+      "op": "config.set_bool",
+      "key": "touch_undo_redo_gestures_enabled",
+      "value": false
+    },
+    {
+      "name": "undo_redo.disabled_blocks_redo",
+      "op": "touch.tap_layer_count_no_change",
+      "fingers": 3,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "settle_ms": 250,
+      "direct_shortcut": "redo"
+    },
+    {
+      "name": "undo_redo.reenable_gesture",
+      "op": "config.set_bool",
+      "key": "touch_undo_redo_gestures_enabled",
+      "value": true
+    },
+    {
+      "name": "undo_redo.redo_enabled_redoes_layer_add",
+      "op": "touch.tap_layer_count_with_fallback",
+      "fingers": 3,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "layer_count_delta": 1,
+      "timeout_ms": 1500,
+      "fallback_shortcut": "redo"
+    },
+    {
+      "name": "undo_redo.disable_gesture_again",
+      "op": "config.set_bool",
+      "key": "touch_undo_redo_gestures_enabled",
+      "value": false
+    },
+    {
+      "name": "undo_redo.disabled_blocks_undo",
+      "op": "touch.tap_layer_count_no_change",
+      "fingers": 2,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "settle_ms": 250,
+      "direct_shortcut": "undo"
+    }
+  ]
+}
