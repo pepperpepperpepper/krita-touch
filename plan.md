@@ -74,6 +74,9 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑23**:
+  - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
+  - Validation: Linux Xvfb `gesture-controls` scenario OK.
 - **2026‑01‑22**:
   - Smoke: `--touch-smoke=gesture-controls` undo/redo tap gestures now run through the **input-manager path** by sending synthetic multi-touch tap events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
   - Smoke: `--touch-smoke=gesture-controls` clear-layer scrub gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
@@ -935,7 +938,9 @@ Next test targets (cross-platform, assertive):
 
 Next offer (recommended next implementation):
 
-- Expand “input-manager path” coverage to the **fullscreen/canvas-only tap**: drive the 4-finger tap via synthetic touch events delivered to the canvas so `KisInputManager` shortcut matching is exercised (keep the existing direct-gesture invocation as a fallback for platforms where multi-touch injection is flaky).
+- Add a small **scriptable touch-smoke runner** so we can author more elaborate, cross-platform tests without growing `KisApplication.cpp` endlessly:
+  - Define a minimal “touch script” format (JSON/YAML) with reusable primitives: `tap(n)`, `drag`, `pinch`, `rotate`, `waitFor(actionChecked|layerCount|pixel)`, etc.
+  - Implement a shared executor for Linux Xvfb + Android/Genymotion that reuses the existing primitives (Qt touch injection first, direct-action fallback when injection is flaky) and emits per-step `KRITA_TOUCH_SMOKE_JSON` results.
 
 ---
 

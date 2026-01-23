@@ -2855,73 +2855,126 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             cfg.setTouchQuickMenuEnabled(true);
         }
 
-        // Validate canvas-only/fullscreen gesture gating (4-finger tap routing).
-        if (mainWindow->actionCollection()) {
-            QAction *canvasOnlyAction = mainWindow->actionCollection()->action(QStringLiteral("view_show_canvas_only"));
-            if (!canvasOnlyAction) {
-                qWarning() << "Touch smoke: gesture-controls missing action: view_show_canvas_only";
-                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
-                ok = false;
-            } else {
-                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), true);
+	        // Validate canvas-only/fullscreen gesture gating (4-finger tap routing).
+	        if (mainWindow->actionCollection()) {
+	            QAction *canvasOnlyAction = mainWindow->actionCollection()->action(QStringLiteral("view_show_canvas_only"));
+	            if (!canvasOnlyAction) {
+	                qWarning() << "Touch smoke: gesture-controls missing action: view_show_canvas_only";
+	                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
+	                ok = false;
+	            } else {
+	                report.step(QStringLiteral("gesture_controls.fullscreen.setup"), true);
 
-                const bool initialChecked = canvasOnlyAction->isChecked();
-                KisTouchGestureAction gesture;
+	                const bool initialChecked = canvasOnlyAction->isChecked();
+	                KisTouchGestureAction gesture;
 
-                cfg.setTouchFullscreenGestureEnabled(true);
-                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
-                gesture.end(nullptr);
+	                cfg.setTouchFullscreenGestureEnabled(true);
+	                QApplication::processEvents();
 
-                const bool toggled = waitForUiCondition(900, [&]() { return canvasOnlyAction->isChecked() != initialChecked; });
-                {
-                    QJsonObject details;
-                    details.insert(QStringLiteral("before_checked"), initialChecked);
-                    details.insert(QStringLiteral("after_checked"), canvasOnlyAction->isChecked());
-                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_toggles_canvas_only"), toggled, details);
-                }
-                if (!toggled) {
-                    ok = false;
-                }
+	                auto performToggleCanvasOnlyViaInputManager = [&]() { sendMultiFingerTouchTap(4); };
+	                auto performToggleCanvasOnlyViaDirectAction = [&]() {
+	                    gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
+	                    gesture.end(nullptr);
+	                };
 
-                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
-                gesture.end(nullptr);
-                const bool restored = waitForUiCondition(900, [&]() { return canvasOnlyAction->isChecked() == initialChecked; });
-                {
-                    QJsonObject details;
-                    details.insert(QStringLiteral("expected_checked"), initialChecked);
-                    details.insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
-                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_restores_canvas_only"), restored, details);
-                }
-                if (!restored) {
-                    ok = false;
-                }
+	                auto runCanvasOnlyTapWithFallback = [&](bool expectedChecked, int timeoutMs, QJsonObject *details) -> bool {
+	                    bool toggledViaInputManager = false;
+	                    bool toggledViaDirectAction = false;
 
-                cfg.setTouchFullscreenGestureEnabled(false);
-                const bool beforeBlocked = canvasOnlyAction->isChecked();
-                gesture.begin(KisTouchGestureAction::ToggleCanvasOnlyShortcut, nullptr);
-                gesture.end(nullptr);
-                waitForUiCondition(200, [&]() { return false; });
-                const bool blocked = canvasOnlyAction->isChecked() == beforeBlocked;
-                {
-                    QJsonObject details;
-                    details.insert(QStringLiteral("expected_checked"), beforeBlocked);
-                    details.insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
-                    report.step(QStringLiteral("gesture_controls.fullscreen_disabled_no_toggle"), blocked, details);
-                }
-                if (!blocked) {
-                    ok = false;
-                }
+	                    performToggleCanvasOnlyViaInputManager();
+	                    toggledViaInputManager = waitForUiCondition(timeoutMs, [&]() { return canvasOnlyAction->isChecked() == expectedChecked; });
+	                    if (!toggledViaInputManager) {
+	                        performToggleCanvasOnlyViaDirectAction();
+	                        toggledViaDirectAction = waitForUiCondition(timeoutMs, [&]() { return canvasOnlyAction->isChecked() == expectedChecked; });
+	                    }
 
-                if (canvasOnlyAction->isChecked() != initialChecked) {
-                    canvasOnlyAction->trigger();
-                    QApplication::processEvents();
-                }
-                cfg.setTouchFullscreenGestureEnabled(true);
-            }
-        } else {
-            report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
-            ok = false;
-        }
+	                    if (details) {
+	                        details->insert(QStringLiteral("expected_checked"), expectedChecked);
+	                        details->insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
+	                        details->insert(QStringLiteral("input_manager_timeout_ms"), timeoutMs);
+	                        details->insert(QStringLiteral("input_manager_toggled"), toggledViaInputManager);
+	                        details->insert(QStringLiteral("direct_action_toggled"), toggledViaDirectAction);
+	                    }
+
+	                    return toggledViaInputManager || toggledViaDirectAction;
+	                };
+
+	                auto runCanvasOnlyTapNoChange = [&](bool expectedChecked, int settleMs, QJsonObject *details) -> bool {
+	                    performToggleCanvasOnlyViaInputManager();
+	                    performToggleCanvasOnlyViaDirectAction();
+
+	                    waitForUiCondition(settleMs, [&]() { return false; });
+
+	                    const bool blocked = canvasOnlyAction->isChecked() == expectedChecked;
+	                    if (details) {
+	                        details->insert(QStringLiteral("expected_checked"), expectedChecked);
+	                        details->insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
+	                        details->insert(QStringLiteral("settle_ms"), settleMs);
+	                        details->insert(QStringLiteral("input_manager_attempted"), true);
+	                        details->insert(QStringLiteral("direct_action_attempted"), true);
+	                    }
+	                    return blocked;
+	                };
+
+	                QJsonObject toggledDetails;
+	                toggledDetails.insert(QStringLiteral("before_checked"), initialChecked);
+	                const bool toggled = runCanvasOnlyTapWithFallback(!initialChecked, 900, &toggledDetails);
+	                {
+	                    QJsonObject details = toggledDetails;
+	                    details.insert(QStringLiteral("after_checked"), canvasOnlyAction->isChecked());
+	                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_toggles_canvas_only"), toggled, details);
+	                }
+	                if (!toggled) {
+	                    ok = false;
+	                }
+
+	                bool restored = false;
+	                if (toggled) {
+	                    QJsonObject restoredDetails;
+	                    restoredDetails.insert(QStringLiteral("before_checked"), canvasOnlyAction->isChecked());
+	                    restored = runCanvasOnlyTapWithFallback(initialChecked, 900, &restoredDetails);
+	                    {
+	                        QJsonObject details = restoredDetails;
+	                        details.insert(QStringLiteral("after_checked"), canvasOnlyAction->isChecked());
+	                        report.step(QStringLiteral("gesture_controls.fullscreen_enabled_restores_canvas_only"), restored, details);
+	                    }
+	                } else {
+	                    QJsonObject details;
+	                    details.insert(QStringLiteral("skipped"), true);
+	                    details.insert(QStringLiteral("expected_checked"), initialChecked);
+	                    details.insert(QStringLiteral("actual_checked"), canvasOnlyAction->isChecked());
+	                    report.step(QStringLiteral("gesture_controls.fullscreen_enabled_restores_canvas_only"), false, details);
+	                }
+	                if (!restored) {
+	                    ok = false;
+	                }
+
+	                cfg.setTouchFullscreenGestureEnabled(false);
+	                QApplication::processEvents();
+	                const bool beforeBlocked = canvasOnlyAction->isChecked();
+	                QJsonObject blockedDetails;
+	                const bool blocked = runCanvasOnlyTapNoChange(beforeBlocked, 200, &blockedDetails);
+	                {
+	                    QJsonObject details;
+	                    details = blockedDetails;
+	                    details.insert(QStringLiteral("before_checked"), beforeBlocked);
+	                    report.step(QStringLiteral("gesture_controls.fullscreen_disabled_no_toggle"), blocked, details);
+	                }
+	                if (!blocked) {
+	                    ok = false;
+	                }
+
+	                if (canvasOnlyAction->isChecked() != initialChecked) {
+	                    canvasOnlyAction->trigger();
+	                    QApplication::processEvents();
+	                }
+	                cfg.setTouchFullscreenGestureEnabled(true);
+	                QApplication::processEvents();
+	            }
+	        } else {
+	            report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
+	            ok = false;
+	        }
 
         QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
         if (!anchor) {
