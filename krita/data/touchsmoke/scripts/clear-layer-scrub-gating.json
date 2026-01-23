@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "clear_layer.disable_clipboard_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clipboard_gesture_enabled",
+      "value": false
+    },
+    {
+      "name": "clear_layer.enable_clear_layer_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clear_layer_gesture_enabled",
+      "value": true
+    },
+    {
+      "name": "clear_layer.seed_layer",
+      "op": "image.paint_rect",
+      "rect": { "space": "image", "x": 0.49, "y": 0.49, "w": 0.02, "h": 0.02 },
+      "stroke_px": 64.0,
+      "color": { "r": 0, "g": 0, "b": 0, "a": 255 }
+    },
+    {
+      "name": "clear_layer.seed_pixel_alpha_is_opaque",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 200,
+      "max_alpha": 255,
+      "timeout_ms": 900
+    },
+    {
+      "name": "clear_layer.enabled_scrub_clears_layer",
+      "op": "touch.drag_path_wait_pixel_alpha_with_fallback",
+      "fingers": 3,
+      "path": [
+        { "space": "widget", "x": 0.5, "y": 0.5 },
+        { "space": "widget", "x": 0.75, "y": 0.5 },
+        { "space": "widget", "x": 0.25, "y": 0.5 },
+        { "space": "widget", "x": 0.75, "y": 0.5 },
+        { "space": "widget", "x": 0.25, "y": 0.5 },
+        { "space": "widget", "x": 0.5, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 1500,
+      "step_ms": 20,
+      "fallback_shortcut": "copypaste_overlay"
+    },
+    {
+      "name": "clear_layer.reseed_layer",
+      "op": "image.paint_rect",
+      "rect": { "space": "image", "x": 0.49, "y": 0.49, "w": 0.02, "h": 0.02 },
+      "stroke_px": 64.0,
+      "color": { "r": 0, "g": 0, "b": 0, "a": 255 }
+    },
+    {
+      "name": "clear_layer.reseed_pixel_alpha_is_opaque",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 200,
+      "max_alpha": 255,
+      "timeout_ms": 900
+    },
+    {
+      "name": "clear_layer.disable_clear_layer_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clear_layer_gesture_enabled",
+      "value": false
+    },
+    {
+      "name": "clear_layer.disabled_scrub_does_not_clear_layer",
+      "op": "touch.drag_path_pixel_alpha_no_change",
+      "fingers": 3,
+      "path": [
+        { "space": "widget", "x": 0.5, "y": 0.5 },
+        { "space": "widget", "x": 0.75, "y": 0.5 },
+        { "space": "widget", "x": 0.25, "y": 0.5 },
+        { "space": "widget", "x": 0.75, "y": 0.5 },
+        { "space": "widget", "x": 0.25, "y": 0.5 },
+        { "space": "widget", "x": 0.5, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 200,
+      "max_alpha": 255,
+      "settle_ms": 350,
+      "step_ms": 20,
+      "direct_shortcut": "copypaste_overlay"
+    }
+  ]
+}

@@ -78,8 +78,12 @@ Work log (append-only; newest first):
   - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
   - Infra: added a **scriptable touch-smoke runner** (`--touch-smoke=script:<name>`) that loads JSON scripts from Qt resources (`:/touchsmoke/...`) and executes reusable primitives with per-step `KRITA_TOUCH_SMOKE_JSON` reporting; added the first script `canvas-only-toggle` and validated it on Linux Xvfb.
   - Infra: touch-smoke scripts now support layer-count assertions + undo/redo gesture steps; added script `undo-redo-layer-gating` (2/3-finger tap) for cross-platform gating coverage.
+  - Infra: touch-smoke scripts now support drag-path gesture primitives + assertions (`overlayVisible`, pixel alpha range) with Qt touch injection first and a direct gesture-action fallback; added `image.paint_rect` seeding for deterministic pixel tests.
+  - Infra: added scripts `clipboard-overlay-gating` (3-finger swipe down) and `clear-layer-scrub-gating` (3-finger scrub) for cross-platform Gesture Controls regression coverage.
   - Validation: Linux Xvfb `gesture-controls` scenario OK.
   - Validation: Linux Xvfb `script:undo-redo-layer-gating` scenario OK.
+  - Validation: Linux Xvfb `script:clipboard-overlay-gating` scenario OK.
+  - Validation: Linux Xvfb `script:clear-layer-scrub-gating` scenario OK.
 - **2026‑01‑22**:
   - Smoke: `--touch-smoke=gesture-controls` undo/redo tap gestures now run through the **input-manager path** by sending synthetic multi-touch tap events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).
   - Smoke: `--touch-smoke=gesture-controls` clear-layer scrub gating now runs through the **input-manager path** by sending synthetic touch events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).

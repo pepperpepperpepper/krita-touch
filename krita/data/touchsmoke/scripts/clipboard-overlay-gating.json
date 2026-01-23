@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "clipboard.enable_clipboard_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clipboard_gesture_enabled",
+      "value": true
+    },
+    {
+      "name": "clipboard.disable_clear_layer_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clear_layer_gesture_enabled",
+      "value": false
+    },
+    {
+      "name": "clipboard.hide_overlay",
+      "op": "ui.overlay.hide",
+      "object_name": "kisTouchCopyPasteOverlay"
+    },
+    {
+      "name": "clipboard.enabled_swipe_opens_overlay",
+      "op": "touch.drag_path_wait_overlay_visible_with_fallback",
+      "fingers": 3,
+      "path": [
+        { "space": "widget", "x": 0.5, "y": 0.25 },
+        { "space": "widget", "x": 0.5, "y": 0.5 },
+        { "space": "widget", "x": 0.5, "y": 0.75 }
+      ],
+      "overlay_object_name": "kisTouchCopyPasteOverlay",
+      "timeout_ms": 900,
+      "step_ms": 20,
+      "fallback_shortcut": "copypaste_overlay"
+    },
+    {
+      "name": "clipboard.hide_overlay_again",
+      "op": "ui.overlay.hide",
+      "object_name": "kisTouchCopyPasteOverlay"
+    },
+    {
+      "name": "clipboard.disable_clipboard_gesture",
+      "op": "config.set_bool",
+      "key": "touch_clipboard_gesture_enabled",
+      "value": false
+    },
+    {
+      "name": "clipboard.disabled_swipe_does_not_open_overlay",
+      "op": "touch.drag_path_overlay_no_change",
+      "fingers": 3,
+      "path": [
+        { "space": "widget", "x": 0.5, "y": 0.25 },
+        { "space": "widget", "x": 0.5, "y": 0.5 },
+        { "space": "widget", "x": 0.5, "y": 0.75 }
+      ],
+      "overlay_object_name": "kisTouchCopyPasteOverlay",
+      "settle_ms": 250,
+      "step_ms": 20,
+      "direct_shortcut": "copypaste_overlay"
+    }
+  ]
+}
