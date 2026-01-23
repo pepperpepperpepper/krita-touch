@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "canvas_only.ensure_off",
+      "op": "action.ensure_checked",
+      "id": "view_show_canvas_only",
+      "expected": false,
+      "timeout_ms": 500
+    },
+    {
+      "name": "canvas_only.enable_gesture",
+      "op": "config.set_bool",
+      "key": "touch_fullscreen_gesture_enabled",
+      "value": true
+    },
+    {
+      "name": "canvas_only.enable_via_4finger_tap",
+      "op": "touch.tap_checkable_action_with_fallback",
+      "fingers": 4,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "action_id": "view_show_canvas_only",
+      "expected_checked": true,
+      "timeout_ms": 900,
+      "fallback_shortcut": "toggle_canvas_only"
+    },
+    {
+      "name": "canvas_only.disable_via_4finger_tap",
+      "op": "touch.tap_checkable_action_with_fallback",
+      "fingers": 4,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "action_id": "view_show_canvas_only",
+      "expected_checked": false,
+      "timeout_ms": 900,
+      "fallback_shortcut": "toggle_canvas_only"
+    },
+    {
+      "name": "canvas_only.disable_gesture",
+      "op": "config.set_bool",
+      "key": "touch_fullscreen_gesture_enabled",
+      "value": false
+    },
+    {
+      "name": "canvas_only.disabled_gesture_blocks_toggle",
+      "op": "touch.tap_checkable_action_no_change",
+      "fingers": 4,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "action_id": "view_show_canvas_only",
+      "expected_checked": false,
+      "settle_ms": 200,
+      "direct_shortcut": "toggle_canvas_only"
+    }
+  ]
+}

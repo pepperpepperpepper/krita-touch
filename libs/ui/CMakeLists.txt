@@ -425,6 +425,7 @@ set(kritaui_LIB_SRCS
 
     KisPlatformPluginInterfaceFactory.cpp
     KisApplication.cpp
+    KisTouchSmokeScriptRunner.cpp
     KisAutoSaveRecoveryDialog.cpp
     KisDetailsPane.cpp
     KisDocument.cpp

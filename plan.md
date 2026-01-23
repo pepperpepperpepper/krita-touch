@@ -76,6 +76,7 @@ Work log (append-only; newest first):
 
 - **2026‑01‑23**:
   - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
+  - Infra: added a **scriptable touch-smoke runner** (`--touch-smoke=script:<name>`) that loads JSON scripts from Qt resources (`:/touchsmoke/...`) and executes reusable primitives with per-step `KRITA_TOUCH_SMOKE_JSON` reporting; added the first script `canvas-only-toggle` and validated it on Linux Xvfb.
   - Validation: Linux Xvfb `gesture-controls` scenario OK.
 - **2026‑01‑22**:
   - Smoke: `--touch-smoke=gesture-controls` undo/redo tap gestures now run through the **input-manager path** by sending synthetic multi-touch tap events to the canvas (exercises `KisInputManager` shortcut matching; keeps a direct-action fallback for flaky platforms).

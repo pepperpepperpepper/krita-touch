@@ -120,6 +120,7 @@
 #include "input/KisTouchQuickMenuAction.h"
 #include "input/kis_input_profile_manager.h"
 #include "widgets/kis_touch_copypaste_overlay.h"
+#include "KisTouchSmokeScriptRunner.h"
 
 #include <KritaVersionWrapper.h>
 #include <dialogs/KisSessionManagerDialog.h>
@@ -585,7 +586,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return;
     }
 
-    const QString normalizedScenario = scenario.trimmed().toLower();
+    const QString scenarioTrimmed = scenario.trimmed();
+    const QString normalizedScenario = scenarioTrimmed.toLower();
     if (normalizedScenario.isEmpty()) {
         return;
     }
@@ -672,6 +674,39 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         if (dock) {
             dock->hide();
         }
+    }
+
+    if (KisTouchSmokeScriptRunner::isScriptScenarioSpec(scenarioTrimmed)) {
+        QJsonObject script;
+        QString loadError;
+        const bool loaded = KisTouchSmokeScriptRunner::loadScriptFromScenarioSpec(scenarioTrimmed, &script, &loadError);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("spec"), scenarioTrimmed);
+            if (!loadError.isEmpty()) {
+                details.insert(QStringLiteral("error"), loadError);
+            }
+            report.step(QStringLiteral("touch_script.load"), loaded, details);
+        }
+        if (!loaded) {
+            finalizeSmoke(false);
+            return;
+        }
+
+        QString runError;
+        const bool ok = KisTouchSmokeScriptRunner::runScript(script,
+                                                            mainWindow,
+                                                            [&](const QString &name, bool ok, const QJsonObject &details) {
+                                                                report.step(name, ok, details);
+                                                            },
+                                                            &runError);
+        if (!runError.isEmpty()) {
+            QJsonObject details;
+            details.insert(QStringLiteral("error"), runError);
+            report.step(QStringLiteral("touch_script.run"), ok, details);
+        }
+        finalizeSmoke(ok);
+        return;
     }
 
     if (normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar") {

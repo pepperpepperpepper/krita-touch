@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/touchsmoke">
+        <file>scripts/canvas-only-toggle.json</file>
+    </qresource>
+</RCC>
