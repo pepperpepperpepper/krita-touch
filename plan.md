@@ -48,6 +48,7 @@ Current focus (prioritized): **Android tablet smoke + device validation**
 
 - [x] **Infra** — Android tablet smoke suite on Genymotion (Nexus 10): `./bin/krita-gmsaas-smoke-touch` runs the full touch batch end-to-end (incl. `modify` + `top-bar-light`).
 - [ ] **Infra** — Touch smoke test architecture v2 *(in progress)*: evolve `--touch-smoke` from “stable screenshots” into **assertive, cross-platform tests** (Linux Xvfb + Android/Genymotion) with reusable primitives + machine-readable results (not just pixels/PNG diffs).
+- [ ] **Infra** — UI smoke artifacts: every scenario run must produce a screenshot, and we should generate a shareable `index.html` gallery that embeds/links all screenshots (Linux + Android) and upload it via `wtf-upload` (in `$PATH`).
 - [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
 - [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
 - [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
@@ -711,6 +712,20 @@ wtf-upload persistent/smoke-linux-appimage-*.png
 wtf-upload persistent/smoke-linux-appimage-*-log.txt
 wtf-upload persistent/smoke-android-krita-*.png
 wtf-upload persistent/smoke-android-krita-*-logcat.txt
+```
+
+#### 4.3.1 Screenshot gallery (index.html)
+
+Goal: make “UI smoke” easy to review by producing **one URL** that shows **all screenshots** from a given run.
+
+- After uploading the per-scenario screenshots/logs, generate an `index.html` that embeds the screenshot URLs (and links to logs).
+- Upload that `index.html` via `wtf-upload` as well (it’s in `$PATH`) and share the resulting single gallery URL in review/CI output.
+
+Convenience wrapper (uploads smoke artifacts + generates/uploads `index.html`):
+
+```bash
+cd ~/dev/krita/krita-docker-setup
+./bin/krita-smoke-upload-gallery
 ```
 
 Example URLs (2026‑01‑17):
