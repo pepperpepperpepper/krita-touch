@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "quick_pinch.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "quick_pinch.reset_display",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "quick_pinch.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "quick_pinch.enable_quick_pinch_fit",
+      "op": "config.set_bool",
+      "key": "touch_quick_pinch_to_fit_enabled",
+      "value": true
+    },
+    {
+      "name": "quick_pinch.reset_toggle_zoom_to_fit_trigger_count",
+      "op": "action.reset_trigger_count",
+      "id": "toggle_zoom_to_fit"
+    },
+    {
+      "name": "quick_pinch.enabled_pinch_triggers_zoom_to_fit_action",
+      "op": "touch.pinch_rotate_wait_canvas_transform",
+      "center": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "radius_start_frac": 0.12,
+      "radius_end_frac": 0.32,
+      "rotation_deg": 0.0,
+      "start_angle_deg": 10.0,
+      "steps": 3,
+      "timeout_ms": 1200,
+      "step_ms": 0,
+      "expect_rotation": false,
+      "min_zoom_ratio_change": 0.0,
+      "max_abs_rotation_deg": 2.0
+    },
+    {
+      "name": "quick_pinch.enabled_wait_for_toggle_zoom_to_fit",
+      "op": "action.wait_trigger_count_delta",
+      "id": "toggle_zoom_to_fit",
+      "delta": 1,
+      "timeout_ms": 900
+    },
+    {
+      "name": "quick_pinch.reset_display_again",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "quick_pinch.disable_quick_pinch_fit",
+      "op": "config.set_bool",
+      "key": "touch_quick_pinch_to_fit_enabled",
+      "value": false
+    },
+    {
+      "name": "quick_pinch.reset_toggle_zoom_to_fit_trigger_count_again",
+      "op": "action.reset_trigger_count",
+      "id": "toggle_zoom_to_fit"
+    },
+    {
+      "name": "quick_pinch.disabled_pinch_does_not_trigger_zoom_to_fit_action",
+      "op": "touch.pinch_rotate_wait_canvas_transform",
+      "center": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "radius_start_frac": 0.12,
+      "radius_end_frac": 0.32,
+      "rotation_deg": 0.0,
+      "start_angle_deg": 10.0,
+      "steps": 3,
+      "timeout_ms": 1200,
+      "step_ms": 0,
+      "expect_rotation": false,
+      "min_zoom_ratio_change": 0.0,
+      "max_abs_rotation_deg": 2.0
+    },
+    {
+      "name": "quick_pinch.disabled_assert_toggle_zoom_to_fit_not_triggered",
+      "op": "action.wait_trigger_count_no_change",
+      "id": "toggle_zoom_to_fit",
+      "settle_ms": 350
+    }
+  ]
+}

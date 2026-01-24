@@ -80,6 +80,7 @@ Work log (append-only; newest first):
   - Infra: Linux Xvfb + Genymotion touch smoke batch suites now include key cross-platform `script:` scenarios (canvas-only, undo/redo gating, clipboard overlay gating, clear-layer scrub gating).
   - Infra: touch-smoke scripts now support a deterministic pinch+rotate primitive that asserts canvas zoom + rotation deltas; added script `rotate-with-pinch-gating` and wired it into both the Linux and Genymotion smoke batches.
   - Infra: touch-smoke scripts now support mouse drag primitives + cross-platform “paint” drags (touch-first, then mouse) with a tool mask assertion step; added script `touch-painting-gating` (Linux asserts paint/no-paint; Android allows “no paint detected” but still asserts `maskSyntheticEvents` toggles correctly).
+  - Infra: touch-smoke scripts now support action trigger-count assertions; added script `quick-pinch-fit-gating` to validate **Quick Pinch Fit** gating by detecting `toggle_zoom_to_fit` triggers from a fast pinch gesture.
   - Fix: Android 3‑finger clear-layer scrub now clears the active layer via `KisToolUtils::clearImage` (tool-independent), so clear-layer gating tests pass cross-platform.
 - **2026‑01‑23**:
   - Infra: smoke scenarios `gesture-controls` + `layer-options` now fill the canvas black for more readable UI screenshots (Actions sheet / Layer Options sheet).
@@ -652,6 +653,7 @@ Script scenarios:
   - `script:canvas-only-toggle`
   - `script:undo-redo-layer-gating`
   - `script:clipboard-overlay-gating`
+  - `script:quick-pinch-fit-gating`
   - `script:rotate-with-pinch-gating`
   - `script:clear-layer-scrub-gating`
   - `script:touch-painting-gating`
