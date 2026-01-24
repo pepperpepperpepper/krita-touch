@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "rotate.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "rotate.disable_quick_pinch_to_fit",
+      "op": "config.set_bool",
+      "key": "touch_quick_pinch_to_fit_enabled",
+      "value": false
+    },
+    {
+      "name": "rotate.reset_display",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "rotate.enable_rotate_with_pinch",
+      "op": "config.set_bool",
+      "key": "touch_rotate_with_pinch_enabled",
+      "value": true
+    },
+    {
+      "name": "rotate.enabled_pinch_changes_rotation",
+      "op": "touch.pinch_rotate_wait_canvas_transform",
+      "center": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "radius_start_frac": 0.12,
+      "radius_end_frac": 0.18,
+      "rotation_deg": 30.0,
+      "start_angle_deg": 25.0,
+      "steps": 12,
+      "timeout_ms": 1200,
+      "step_ms": 20,
+      "expect_rotation": true,
+      "min_zoom_ratio_change": 0.05,
+      "min_abs_rotation_deg": 8.0
+    },
+    {
+      "name": "rotate.reset_display_again",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "rotate.disable_rotate_with_pinch",
+      "op": "config.set_bool",
+      "key": "touch_rotate_with_pinch_enabled",
+      "value": false
+    },
+    {
+      "name": "rotate.disabled_pinch_does_not_change_rotation",
+      "op": "touch.pinch_rotate_wait_canvas_transform",
+      "center": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "radius_start_frac": 0.12,
+      "radius_end_frac": 0.18,
+      "rotation_deg": 30.0,
+      "start_angle_deg": 25.0,
+      "steps": 12,
+      "timeout_ms": 1200,
+      "step_ms": 20,
+      "expect_rotation": false,
+      "min_zoom_ratio_change": 0.05,
+      "max_abs_rotation_deg": 2.0
+    }
+  ]
+}

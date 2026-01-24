@@ -26,6 +26,7 @@
 #include "KisView.h"
 #include "KisViewManager.h"
 #include "canvas/kis_canvas2.h"
+#include "canvas/kis_canvas_controller.h"
 #include "canvas/kis_coordinates_converter.h"
 #include "input/KisTouchGestureAction.h"
 #include "input/kis_input_profile_manager.h"
@@ -627,6 +628,157 @@ struct TouchDragPathPoints {
     QVector<QVector<QPointF>> localPoints; // [step][finger]
     QVector<QVector<QPointF>> globalPoints; // [step][finger]
 };
+
+struct CanvasTransform {
+    qreal zoom = 0.0;
+    qreal rotationDeg = 0.0;
+};
+
+bool readCanvasTransform(KisMainWindow *mainWindow, CanvasTransform *out, QString *errorOut)
+{
+    if (!out) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Internal error: missing output");
+        }
+        return false;
+    }
+
+    KisView *view = nullptr;
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, &view, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    KisCanvas2 *canvas = view ? view->canvasBase() : nullptr;
+    KisCanvasController *controller = canvas ? static_cast<KisCanvasController *>(canvas->canvasController()) : nullptr;
+    if (!canvas || !controller) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing canvas/controller");
+        }
+        return false;
+    }
+
+    out->zoom = canvas->viewConverter() ? canvas->viewConverter()->zoom() : 0.0;
+    out->rotationDeg = controller->rotation();
+    return true;
+}
+
+qreal normalizedAngleDeltaDeg(qreal beforeDeg, qreal afterDeg)
+{
+    qreal d = afterDeg - beforeDeg;
+    while (d > 180.0) {
+        d -= 360.0;
+    }
+    while (d < -180.0) {
+        d += 360.0;
+    }
+    return d;
+}
+
+QPointF clampToRect(const QPointF &p, const QRectF &rect, bool *clampedOut)
+{
+    const qreal x = qBound(rect.left(), p.x(), rect.right());
+    const qreal y = qBound(rect.top(), p.y(), rect.bottom());
+    const bool clamped = (x != p.x()) || (y != p.y());
+    if (clampedOut && clamped) {
+        *clampedOut = true;
+    }
+    return QPointF(x, y);
+}
+
+bool buildPinchRotatePathPoints(KisMainWindow *mainWindow,
+                                const QJsonObject &centerObj,
+                                qreal radiusStartFrac,
+                                qreal radiusEndFrac,
+                                qreal rotationDeg,
+                                qreal startAngleDeg,
+                                int steps,
+                                TouchDragPathPoints *out,
+                                QJsonObject *details,
+                                QString *errorOut)
+{
+    if (!out) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Internal error: missing output");
+        }
+        return false;
+    }
+
+    KisView *view = nullptr;
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, &view, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    QPointF center;
+    if (!resolveWidgetPos(mainWindow, centerObj, &center, errorOut)) {
+        return false;
+    }
+
+    const QRect canvasRect = canvasWidget->rect();
+    const qreal minDim = qMax(1.0, qMin<qreal>(canvasRect.width(), canvasRect.height()));
+    const qreal r0 = radiusStartFrac * minDim;
+    const qreal r1 = radiusEndFrac * minDim;
+
+    if (steps < 2) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("touch.pinch_rotate: steps must be >= 2");
+        }
+        return false;
+    }
+
+    canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+    out->localPoints.clear();
+    out->globalPoints.clear();
+    out->localPoints.reserve(steps);
+    out->globalPoints.reserve(steps);
+
+    const qreal rotRad = (rotationDeg * M_PI) / 180.0;
+    const qreal startRad = (startAngleDeg * M_PI) / 180.0;
+
+    bool clamped = false;
+    const QRectF safe = canvasRect.adjusted(1, 1, -2, -2);
+    for (int i = 0; i < steps; ++i) {
+        const qreal t = steps <= 1 ? 0.0 : (qreal(i) / qreal(steps - 1));
+        const qreal r = r0 + (r1 - r0) * t;
+        const qreal a = startRad + rotRad * t;
+        const QPointF v(std::cos(a) * r, std::sin(a) * r);
+
+        QPointF p0 = clampToRect(center + v, safe, &clamped);
+        QPointF p1 = clampToRect(center - v, safe, &clamped);
+
+        QVector<QPointF> locals;
+        locals.reserve(2);
+        locals.append(p0);
+        locals.append(p1);
+
+        QVector<QPointF> globals;
+        globals.reserve(2);
+        const QPoint g0 = canvasWidget->mapToGlobal(QPoint(int(std::lround(p0.x())), int(std::lround(p0.y()))));
+        const QPoint g1 = canvasWidget->mapToGlobal(QPoint(int(std::lround(p1.x())), int(std::lround(p1.y()))));
+        globals.append(QPointF(g0));
+        globals.append(QPointF(g1));
+
+        out->localPoints.append(locals);
+        out->globalPoints.append(globals);
+    }
+
+    if (details) {
+        details->insert(QStringLiteral("center_x"), center.x());
+        details->insert(QStringLiteral("center_y"), center.y());
+        details->insert(QStringLiteral("radius_start_frac"), radiusStartFrac);
+        details->insert(QStringLiteral("radius_end_frac"), radiusEndFrac);
+        details->insert(QStringLiteral("rotation_deg"), rotationDeg);
+        details->insert(QStringLiteral("start_angle_deg"), startAngleDeg);
+        details->insert(QStringLiteral("steps"), steps);
+        details->insert(QStringLiteral("canvas_w"), canvasRect.width());
+        details->insert(QStringLiteral("canvas_h"), canvasRect.height());
+        details->insert(QStringLiteral("clamped"), clamped);
+    }
+
+    return true;
+}
 
 bool buildTouchDragPathPoints(KisMainWindow *mainWindow, int fingerCount, const QJsonArray &pathArray, TouchDragPathPoints *out, QString *errorOut)
 {
@@ -1546,10 +1698,10 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
 }
 
 bool touchDragPathPixelAlphaNoChange(KisMainWindow *mainWindow,
-                                    int fingerCount,
-                                    const QJsonArray &pathArray,
-                                    const QJsonObject &samplePosObj,
-                                    int minAlpha,
+                                     int fingerCount,
+                                     const QJsonArray &pathArray,
+                                     const QJsonObject &samplePosObj,
+                                     int minAlpha,
                                     int maxAlpha,
                                     int settleMs,
                                     int directShortcut,
@@ -1620,6 +1772,98 @@ bool touchDragPathPixelAlphaNoChange(KisMainWindow *mainWindow,
     }
 
     return blocked;
+}
+
+bool touchPinchRotateWaitCanvasTransform(KisMainWindow *mainWindow,
+                                        const QJsonObject &centerObj,
+                                        qreal radiusStartFrac,
+                                        qreal radiusEndFrac,
+                                        qreal rotationDeg,
+                                        qreal startAngleDeg,
+                                        int steps,
+                                        int timeoutMs,
+                                        int stepMs,
+                                        bool expectRotation,
+                                        qreal minZoomRatioChange,
+                                        qreal minAbsRotationDeg,
+                                        qreal maxAbsRotationDeg,
+                                        QJsonObject *details,
+                                        QString *errorOut)
+{
+    KisView *view = nullptr;
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, &view, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    CanvasTransform before;
+    if (!readCanvasTransform(mainWindow, &before, errorOut)) {
+        return false;
+    }
+
+    TouchDragPathPoints pathPoints;
+    QJsonObject pathDetails;
+    if (!buildPinchRotatePathPoints(mainWindow,
+                                    centerObj,
+                                    radiusStartFrac,
+                                    radiusEndFrac,
+                                    rotationDeg,
+                                    startAngleDeg,
+                                    steps,
+                                    &pathPoints,
+                                    &pathDetails,
+                                    errorOut)) {
+        return false;
+    }
+
+    QJsonObject injectDetails;
+    sendTouchDragPath(canvasWidget, pathPoints, stepMs, &injectDetails);
+
+    CanvasTransform after;
+    const bool ok = waitForUiCondition(timeoutMs, [&]() {
+        CanvasTransform cur;
+        if (!readCanvasTransform(mainWindow, &cur, nullptr)) {
+            return false;
+        }
+
+        const qreal zoomRatioChangeNow = before.zoom > 0.0 ? std::abs(cur.zoom / before.zoom - 1.0) : std::abs(cur.zoom - before.zoom);
+        const qreal absRotDeltaNow = std::abs(normalizedAngleDeltaDeg(before.rotationDeg, cur.rotationDeg));
+
+        const bool zoomOk = zoomRatioChangeNow >= minZoomRatioChange;
+        const bool rotOk = expectRotation ? (absRotDeltaNow >= minAbsRotationDeg) : (absRotDeltaNow <= maxAbsRotationDeg);
+        return zoomOk && rotOk;
+    });
+
+    readCanvasTransform(mainWindow, &after, nullptr);
+    const qreal rotDelta = normalizedAngleDeltaDeg(before.rotationDeg, after.rotationDeg);
+    const qreal absRotDelta = std::abs(rotDelta);
+    const qreal zoomRatioChange = before.zoom > 0.0 ? std::abs(after.zoom / before.zoom - 1.0) : std::abs(after.zoom - before.zoom);
+
+    if (details) {
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("expect_rotation"), expectRotation);
+        details->insert(QStringLiteral("min_zoom_ratio_change"), minZoomRatioChange);
+        details->insert(QStringLiteral("min_abs_rotation_deg"), minAbsRotationDeg);
+        details->insert(QStringLiteral("max_abs_rotation_deg"), maxAbsRotationDeg);
+        details->insert(QStringLiteral("before_zoom"), before.zoom);
+        details->insert(QStringLiteral("after_zoom"), after.zoom);
+        details->insert(QStringLiteral("zoom_ratio_change"), zoomRatioChange);
+        details->insert(QStringLiteral("before_rotation_deg"), before.rotationDeg);
+        details->insert(QStringLiteral("after_rotation_deg"), after.rotationDeg);
+        details->insert(QStringLiteral("rotation_delta_deg"), rotDelta);
+        details->insert(QStringLiteral("abs_rotation_delta_deg"), absRotDelta);
+        details->insert(QStringLiteral("path_details"), pathDetails);
+        details->insert(QStringLiteral("touch_inject_details"), injectDetails);
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Canvas transform did not match expectation (zoom_change=%1 rot_delta=%2)")
+                        .arg(zoomRatioChange, 0, 'f', 4)
+                        .arg(rotDelta, 0, 'f', 2);
+    }
+
+    return ok;
 }
 
 bool loadJsonObject(const QString &path, QJsonObject *out, QString *errorOut)
@@ -1997,6 +2241,35 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
                                                  stepMs,
                                                  &details,
                                                  &localError);
+        } else if (op == QStringLiteral("touch.pinch_rotate_wait_canvas_transform")) {
+            const QJsonObject centerObj = step.value(QStringLiteral("center")).toObject();
+            const qreal radiusStartFrac = step.value(QStringLiteral("radius_start_frac")).toDouble(0.18);
+            const qreal radiusEndFrac = step.value(QStringLiteral("radius_end_frac")).toDouble(0.22);
+            const qreal rotationDeg = step.value(QStringLiteral("rotation_deg")).toDouble(20.0);
+            const qreal startAngleDeg = step.value(QStringLiteral("start_angle_deg")).toDouble(0.0);
+            const int steps = step.value(QStringLiteral("steps")).toInt(12);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1200);
+            const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+            const bool expectRotation = step.value(QStringLiteral("expect_rotation")).toBool(true);
+            const qreal minZoomRatioChange = step.value(QStringLiteral("min_zoom_ratio_change")).toDouble(0.03);
+            const qreal minAbsRotationDeg = step.value(QStringLiteral("min_abs_rotation_deg")).toDouble(5.0);
+            const qreal maxAbsRotationDeg = step.value(QStringLiteral("max_abs_rotation_deg")).toDouble(2.0);
+
+            ok = touchPinchRotateWaitCanvasTransform(mainWindow,
+                                                    centerObj,
+                                                    radiusStartFrac,
+                                                    radiusEndFrac,
+                                                    rotationDeg,
+                                                    startAngleDeg,
+                                                    steps,
+                                                    timeoutMs,
+                                                    stepMs,
+                                                    expectRotation,
+                                                    minZoomRatioChange,
+                                                    minAbsRotationDeg,
+                                                    maxAbsRotationDeg,
+                                                    &details,
+                                                    &localError);
         } else {
             localError = QStringLiteral("Unknown op: %1").arg(op);
         }
