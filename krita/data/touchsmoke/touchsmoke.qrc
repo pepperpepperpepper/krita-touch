@@ -4,6 +4,7 @@
         <file>scripts/clipboard-overlay-gating.json</file>
         <file>scripts/clear-layer-scrub-gating.json</file>
         <file>scripts/rotate-with-pinch-gating.json</file>
+        <file>scripts/touch-painting-gating.json</file>
         <file>scripts/undo-redo-layer-gating.json</file>
     </qresource>
 </RCC>

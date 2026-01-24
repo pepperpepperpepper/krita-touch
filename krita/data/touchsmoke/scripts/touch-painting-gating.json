@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "touch_painting.set_disabled",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_disabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_painting.refresh_tool_mask_disabled.switch_tool",
+      "op": "action.trigger",
+      "id": "KritaTransform/KisToolMove"
+    },
+    {
+      "name": "touch_painting.refresh_tool_mask_disabled.back_to_brush",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "touch_painting.disabled_masks_synthetic_events",
+      "op": "tool.assert_mask_synthetic_events",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_painting.add_layer",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "touch_painting.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "touch_painting.layer_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_painting.disabled_drag_does_not_paint",
+      "op": "paint.drag_path_pixel_alpha_no_change",
+      "mouse_source": "synthesized_by_system",
+      "path": [
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "settle_ms": 350,
+      "step_ms": 20
+    },
+    {
+      "name": "touch_painting.set_enabled",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_enabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_painting.refresh_tool_mask_enabled.switch_tool",
+      "op": "action.trigger",
+      "id": "KritaTransform/KisToolMove"
+    },
+    {
+      "name": "touch_painting.refresh_tool_mask_enabled.back_to_brush",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "touch_painting.enabled_allows_synthetic_events",
+      "op": "tool.assert_mask_synthetic_events",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_painting.enabled_drag_paints",
+      "op": "paint.drag_path_wait_pixel_alpha_range",
+      "mouse_source": "synthesized_by_system",
+      "allow_no_paint_on_android": true,
+      "path": [
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1200,
+      "step_ms": 20
+    }
+  ]
+}
