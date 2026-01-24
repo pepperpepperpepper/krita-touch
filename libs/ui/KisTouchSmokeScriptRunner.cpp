@@ -190,6 +190,179 @@ bool setConfigBool(KisConfig &cfg, const QString &key, bool value, QJsonObject *
     return true;
 }
 
+struct ActionTriggerCounter
+{
+    explicit ActionTriggerCounter(KisMainWindow *mainWindow)
+        : m_mainWindow(mainWindow)
+    {
+    }
+
+    ~ActionTriggerCounter()
+    {
+        for (const QMetaObject::Connection &c : m_connections) {
+            QObject::disconnect(c);
+        }
+    }
+
+    bool reset(const QString &actionId, QJsonObject *details, QString *errorOut)
+    {
+        QStringList foundIn;
+        const QVector<QAction *> actions = findActions(actionId, &foundIn, errorOut);
+        if (actions.isEmpty()) {
+            return false;
+        }
+        ensureHook(actionId, actions);
+        m_counts[actionId] = 0;
+        if (details) {
+            QJsonArray foundInArray;
+            for (const QString &s : foundIn) {
+                foundInArray.append(s);
+            }
+            details->insert(QStringLiteral("action_id"), actionId);
+            details->insert(QStringLiteral("found_in"), foundInArray);
+            details->insert(QStringLiteral("actions_found"), actions.size());
+            details->insert(QStringLiteral("count"), 0);
+        }
+        return true;
+    }
+
+    bool waitDelta(const QString &actionId, int delta, int timeoutMs, QJsonObject *details, QString *errorOut)
+    {
+        QStringList foundIn;
+        const QVector<QAction *> actions = findActions(actionId, &foundIn, errorOut);
+        if (actions.isEmpty()) {
+            return false;
+        }
+        ensureHook(actionId, actions);
+
+        const int before = m_counts.value(actionId, 0);
+        const int expectedMin = qMax(0, delta);
+
+        const bool ok = waitForUiCondition(timeoutMs, [&]() {
+            return m_counts.value(actionId, 0) >= expectedMin;
+        });
+
+        if (details) {
+            QJsonArray foundInArray;
+            for (const QString &s : foundIn) {
+                foundInArray.append(s);
+            }
+            details->insert(QStringLiteral("action_id"), actionId);
+            details->insert(QStringLiteral("found_in"), foundInArray);
+            details->insert(QStringLiteral("actions_found"), actions.size());
+            details->insert(QStringLiteral("delta"), delta);
+            details->insert(QStringLiteral("expected_min_count"), expectedMin);
+            details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+            details->insert(QStringLiteral("before_count"), before);
+            details->insert(QStringLiteral("after_count"), m_counts.value(actionId, 0));
+        }
+
+        if (!ok && errorOut) {
+            *errorOut = QStringLiteral("Action did not trigger enough times");
+        }
+
+        return ok;
+    }
+
+    bool waitNoChange(const QString &actionId, int settleMs, QJsonObject *details, QString *errorOut)
+    {
+        QStringList foundIn;
+        const QVector<QAction *> actions = findActions(actionId, &foundIn, errorOut);
+        if (actions.isEmpty()) {
+            return false;
+        }
+        ensureHook(actionId, actions);
+
+        const int before = m_counts.value(actionId, 0);
+        sleepWithEvents(settleMs);
+        const int after = m_counts.value(actionId, 0);
+        const bool ok = before == after;
+
+        if (details) {
+            QJsonArray foundInArray;
+            for (const QString &s : foundIn) {
+                foundInArray.append(s);
+            }
+            details->insert(QStringLiteral("action_id"), actionId);
+            details->insert(QStringLiteral("found_in"), foundInArray);
+            details->insert(QStringLiteral("actions_found"), actions.size());
+            details->insert(QStringLiteral("settle_ms"), settleMs);
+            details->insert(QStringLiteral("before_count"), before);
+            details->insert(QStringLiteral("after_count"), after);
+        }
+
+        if (!ok && errorOut) {
+            *errorOut = QStringLiteral("Action triggered unexpectedly");
+        }
+
+        return ok;
+    }
+
+private:
+    QVector<QAction *> findActions(const QString &actionId, QStringList *foundInOut, QString *errorOut) const
+    {
+        QVector<QAction *> actions;
+
+        if (!m_mainWindow) {
+            if (errorOut) {
+                *errorOut = QStringLiteral("Missing main window");
+            }
+            return actions;
+        }
+
+        if (KisKActionCollection *actionCollection = m_mainWindow->actionCollection()) {
+            if (QAction *action = actionCollection->action(actionId)) {
+                if (foundInOut) {
+                    foundInOut->append(QStringLiteral("main_window"));
+                }
+                actions.append(action);
+            }
+        }
+
+        if (KisViewManager *viewManager = m_mainWindow->viewManager()) {
+            if (KisKActionCollection *actionCollection = viewManager->actionCollection()) {
+                if (QAction *action = actionCollection->action(actionId)) {
+                    if (foundInOut) {
+                        foundInOut->append(QStringLiteral("view_manager"));
+                    }
+                    if (!actions.contains(action)) {
+                        actions.append(action);
+                    }
+                }
+            }
+        }
+
+        if (actions.isEmpty() && errorOut) {
+            *errorOut = QStringLiteral("Action not found: %1").arg(actionId);
+        }
+        return actions;
+    }
+
+    void ensureHook(const QString &actionId, const QVector<QAction *> &actions)
+    {
+        if (!m_counts.contains(actionId)) {
+            m_counts.insert(actionId, 0);
+        }
+
+        QSet<QAction *> &hooked = m_hookedActions[actionId];
+        for (QAction *action : actions) {
+            if (!action || hooked.contains(action)) {
+                continue;
+            }
+
+            hooked.insert(action);
+            m_connections.append(QObject::connect(action, &QAction::triggered, action, [this, actionId](bool) {
+                m_counts[actionId] = m_counts.value(actionId, 0) + 1;
+            }));
+        }
+    }
+
+    KisMainWindow *m_mainWindow {nullptr};
+    QHash<QString, int> m_counts;
+    QHash<QString, QSet<QAction *>> m_hookedActions;
+    QVector<QMetaObject::Connection> m_connections;
+};
+
 bool getCanvasContext(KisMainWindow *mainWindow, KisView **viewOut, QWidget **canvasWidgetOut, QString *errorOut)
 {
     if (!mainWindow) {
@@ -2601,6 +2774,7 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
     }
 
     KisConfig cfg(true);
+    ActionTriggerCounter actionTriggerCounter(mainWindow);
 
     const QJsonArray steps = stepsValue.toArray();
     for (int i = 0; i < steps.size(); ++i) {
@@ -2658,6 +2832,18 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const bool expected = step.value(QStringLiteral("expected")).toBool(false);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
             ok = actionEnsureChecked(mainWindow, actionId, expected, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("action.reset_trigger_count")) {
+            const QString actionId = step.value(QStringLiteral("id")).toString();
+            ok = actionTriggerCounter.reset(actionId, &details, &localError);
+        } else if (op == QStringLiteral("action.wait_trigger_count_delta")) {
+            const QString actionId = step.value(QStringLiteral("id")).toString();
+            const int delta = step.value(QStringLiteral("delta")).toInt(1);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            ok = actionTriggerCounter.waitDelta(actionId, delta, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("action.wait_trigger_count_no_change")) {
+            const QString actionId = step.value(QStringLiteral("id")).toString();
+            const int settleMs = step.value(QStringLiteral("settle_ms")).toInt(250);
+            ok = actionTriggerCounter.waitNoChange(actionId, settleMs, &details, &localError);
         } else if (op == QStringLiteral("tool.assert_mask_synthetic_events")) {
             const bool expected = step.value(QStringLiteral("expected")).toBool(false);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
