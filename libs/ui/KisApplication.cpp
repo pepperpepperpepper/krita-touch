@@ -638,8 +638,29 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         QApplication::processEvents();
 
         const QString status = ok ? QStringLiteral("OK") : QStringLiteral("ERROR");
+        const QByteArray json = report.toJson(status);
+
+#ifdef Q_OS_ANDROID
+        {
+            const QString baseDir = QDir::homePath();
+            if (!baseDir.isEmpty()) {
+                QDir dir(baseDir);
+                dir.mkpath(QStringLiteral("."));
+                QFile f(dir.filePath(QStringLiteral("touch-smoke-report.json")));
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                    f.write(json);
+                    f.close();
+                } else {
+                    qWarning() << "Touch smoke: failed to write report file";
+                }
+            } else {
+                qWarning() << "Touch smoke: Home path is empty; cannot write report file";
+            }
+        }
+#endif
+
         qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_DONE scenario=%1 status=%2").arg(normalizedScenario, status);
-        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_JSON %1").arg(QString::fromUtf8(report.toJson(status)));
+        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_JSON %1").arg(QString::fromUtf8(json));
     };
 
     // Don't persist smoke-only settings changes into the user's config file. We only

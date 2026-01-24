@@ -1,5 +1,7 @@
 #include "KisTouchSmokeScriptRunner.h"
 
+#include <cmath>
+
 #include <QApplication>
 #include <QAction>
 #include <QDir>
@@ -789,10 +791,13 @@ void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoi
     QApplication::processEvents();
 
     if (details) {
+        const QRect r = canvasWidget->rect();
         details->insert(QStringLiteral("sent"), true);
         details->insert(QStringLiteral("step_ms"), stepMs);
         details->insert(QStringLiteral("steps"), steps);
         details->insert(QStringLiteral("fingers"), fingerCount);
+        details->insert(QStringLiteral("canvas_w"), r.width());
+        details->insert(QStringLiteral("canvas_h"), r.height());
     }
 }
 
@@ -883,6 +888,52 @@ void performTouchDragPathViaGestureAction(int shortcut, const TouchDragPathPoint
 
     QApplication::processEvents();
 
+    if (details) {
+        QVector<QPointF> avg;
+        avg.reserve(pathPoints.localPoints.size());
+        for (const QVector<QPointF> &stepPoints : pathPoints.localPoints) {
+            QPointF sum;
+            for (const QPointF &p : stepPoints) {
+                sum += p;
+            }
+            avg.append(stepPoints.isEmpty() ? QPointF() : (sum / qreal(stepPoints.size())));
+        }
+
+        qreal accumAbsDx = 0.0;
+        qreal accumAbsDy = 0.0;
+        int xDirectionChanges = 0;
+        int lastXSign = 0;
+        for (int i = 1; i < avg.size(); ++i) {
+            const QPointF d = avg.at(i) - avg.at(i - 1);
+            accumAbsDx += std::abs(d.x());
+            accumAbsDy += std::abs(d.y());
+
+            constexpr qreal kMinTrackStepPx = 3.0;
+            if (std::abs(d.x()) > std::abs(d.y()) && std::abs(d.x()) >= kMinTrackStepPx) {
+                const int sign = d.x() > 0.0 ? 1 : -1;
+                if (lastXSign != 0 && sign != lastXSign) {
+                    xDirectionChanges += 1;
+                }
+                lastXSign = sign;
+            }
+        }
+
+        const QPointF netDelta = (avg.size() >= 2) ? (avg.last() - avg.first()) : QPointF();
+        details->insert(QStringLiteral("net_dx"), netDelta.x());
+        details->insert(QStringLiteral("net_dy"), netDelta.y());
+        details->insert(QStringLiteral("accum_abs_dx"), accumAbsDx);
+        details->insert(QStringLiteral("accum_abs_dy"), accumAbsDy);
+        details->insert(QStringLiteral("x_direction_changes"), xDirectionChanges);
+
+        constexpr qreal kDominance = 1.2;
+        constexpr qreal kMinScrubAbsPx = 160.0;
+        const qreal absDx = std::abs(netDelta.x());
+        const qreal absDy = std::abs(netDelta.y());
+        details->insert(QStringLiteral("mostly_vertical"), absDy >= absDx * kDominance);
+        details->insert(QStringLiteral("mostly_horizontal"), absDx >= absDy * kDominance);
+        details->insert(QStringLiteral("scrub_distance_ok"), accumAbsDx >= kMinScrubAbsPx && accumAbsDx >= accumAbsDy * kDominance);
+        details->insert(QStringLiteral("scrub_direction_ok"), xDirectionChanges >= 1);
+    }
     if (details) {
         details->insert(QStringLiteral("performed"), true);
         details->insert(QStringLiteral("steps"), steps);

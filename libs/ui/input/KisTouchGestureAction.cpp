@@ -10,11 +10,18 @@
 
 #include <KisMainWindow.h>
 #include <KisPart.h>
+#include <KisViewManager.h>
 #include <QAction>
 #include <QTouchEvent>
 #include <kactioncollection.h>
 #include <kis_config.h>
 #include <kis_debug.h>
+#include <kis_image.h>
+#include <kis_group_layer.h>
+#include <kis_node_manager.h>
+#include <kis_node.h>
+#include <kis_selection.h>
+#include <tool/kis_tool_utils.h>
 
 namespace {
 
@@ -264,6 +271,31 @@ void KisTouchGestureAction::end(QEvent *event)
             const bool scrubDirectionOk = m_gestureXDirectionChanges >= kMinScrubDirectionChanges;
 
             if (scrubDistanceOk && scrubDirectionOk) {
+                KisMainWindow *mw = KisPart::instance()->currentMainwindow();
+                KisViewManager *viewManager = mw ? mw->viewManager() : nullptr;
+                KisImageSP image = viewManager ? viewManager->image().toStrongRef() : KisImageSP();
+                KisNodeList nodes;
+                if (viewManager && viewManager->nodeManager()) {
+                    nodes = viewManager->nodeManager()->selectedNodes();
+                }
+                if (nodes.isEmpty() && viewManager && viewManager->activeNode()) {
+                    nodes.append(viewManager->activeNode());
+                }
+                if (nodes.isEmpty() && image) {
+                    KisNodeSP root = image->rootLayer();
+                    for (KisNodeSP node = root ? root->lastChild() : KisNodeSP(); node; node = node->prevSibling()) {
+                        if (node->hasEditablePaintDevice()) {
+                            nodes.append(node);
+                            break;
+                        }
+                    }
+                }
+
+                if (image && !nodes.isEmpty() && KisToolUtils::clearImage(image, nodes, KisSelectionSP())) {
+                    m_triggeredThisGesture = true;
+                    return;
+                }
+
                 actionName = QStringLiteral("clear");
                 break;
             }
@@ -271,6 +303,31 @@ void KisTouchGestureAction::end(QEvent *event)
             // Fallback: if we couldn't track intermediate motion (e.g. missing updates),
             // allow a strong horizontal swipe.
             if (m_gestureAccumAbsDx <= 0.0 && mostlyHorizontal && absDx >= kMinScrubAbsPx) {
+                KisMainWindow *mw = KisPart::instance()->currentMainwindow();
+                KisViewManager *viewManager = mw ? mw->viewManager() : nullptr;
+                KisImageSP image = viewManager ? viewManager->image().toStrongRef() : KisImageSP();
+                KisNodeList nodes;
+                if (viewManager && viewManager->nodeManager()) {
+                    nodes = viewManager->nodeManager()->selectedNodes();
+                }
+                if (nodes.isEmpty() && viewManager && viewManager->activeNode()) {
+                    nodes.append(viewManager->activeNode());
+                }
+                if (nodes.isEmpty() && image) {
+                    KisNodeSP root = image->rootLayer();
+                    for (KisNodeSP node = root ? root->lastChild() : KisNodeSP(); node; node = node->prevSibling()) {
+                        if (node->hasEditablePaintDevice()) {
+                            nodes.append(node);
+                            break;
+                        }
+                    }
+                }
+
+                if (image && !nodes.isEmpty() && KisToolUtils::clearImage(image, nodes, KisSelectionSP())) {
+                    m_triggeredThisGesture = true;
+                    return;
+                }
+
                 actionName = QStringLiteral("clear");
                 break;
             }
