@@ -1483,6 +1483,15 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     if (normalizedScenario == "layer-options" || normalizedScenario == "layer_options") {
         showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
         populateLayersForTouchSmoke(mainWindow, 6);
+
+        // UI readability: the layer options sheet is hard to see on a light/white canvas.
+        // Keep smoke screenshots reviewable by ensuring a black canvas background.
+        const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
+        report.step(QStringLiteral("layer_options.fill_canvas_black_for_screenshot"), filledBlack);
+        if (!filledBlack) {
+            qWarning() << "Touch smoke: layer-options failed to fill canvas black for screenshot";
+        }
+
         // Validate the Procreate-style swipe-left gesture that opens the layer options sheet.
         QDockWidget *dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
         QTreeView *nodeView = nullptr;
@@ -3010,6 +3019,14 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 	            report.step(QStringLiteral("gesture_controls.fullscreen.setup"), false);
 	            ok = false;
 	        }
+
+        // UI readability: the Gestures page is hard to see on a light/white canvas.
+        // Keep smoke screenshots reviewable by ensuring a black canvas background.
+        const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
+        report.step(QStringLiteral("gesture_controls.fill_canvas_black_for_screenshot"), filledBlack);
+        if (!filledBlack) {
+            qWarning() << "Touch smoke: gesture-controls failed to fill canvas black for screenshot";
+        }
 
         QWidget *anchor = mainWindow->viewManager() ? mainWindow->viewManager()->canvas() : nullptr;
         if (!anchor) {

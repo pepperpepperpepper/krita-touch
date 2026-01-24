@@ -48,7 +48,7 @@ Current focus (prioritized): **Android tablet smoke + device validation**
 
 - [x] **Infra** — Android tablet smoke suite on Genymotion (Nexus 10): `./bin/krita-gmsaas-smoke-touch` runs the full touch batch end-to-end (incl. `modify` + `top-bar-light`).
 - [ ] **Infra** — Touch smoke test architecture v2 *(in progress)*: evolve `--touch-smoke` from “stable screenshots” into **assertive, cross-platform tests** (Linux Xvfb + Android/Genymotion) with reusable primitives + machine-readable results (not just pixels/PNG diffs).
-- [ ] **Infra** — UI smoke artifacts: every scenario run must produce a screenshot, and we should generate a shareable `index.html` gallery that embeds/links all screenshots (Linux + Android) and upload it via `wtf-upload` (in `$PATH`).
+- [x] **Infra** — UI smoke artifacts: every scenario run must produce a screenshot, and we should generate a shareable `index.html` gallery that embeds/links all screenshots (Linux + Android) and upload it via `wtf-upload` (in `$PATH`).
 - [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
 - [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
 - [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
@@ -75,7 +75,11 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑24**:
+  - Infra: Linux + Android smoke runners now extract the per-scenario `KRITA_TOUCH_SMOKE_JSON` line into `smoke-*-report.json` artifacts, and the screenshot gallery links those reports alongside PNG + logs.
+  - Infra: Linux Xvfb + Genymotion touch smoke batch suites now include key cross-platform `script:` scenarios (canvas-only, undo/redo gating, clipboard overlay gating, clear-layer scrub gating).
 - **2026‑01‑23**:
+  - Infra: smoke scenarios `gesture-controls` + `layer-options` now fill the canvas black for more readable UI screenshots (Actions sheet / Layer Options sheet).
   - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
   - Infra: added a **scriptable touch-smoke runner** (`--touch-smoke=script:<name>`) that loads JSON scripts from Qt resources (`:/touchsmoke/...`) and executes reusable primitives with per-step `KRITA_TOUCH_SMOKE_JSON` reporting; added the first script `canvas-only-toggle` and validated it on Linux Xvfb.
   - Infra: touch-smoke scripts now support layer-count assertions + undo/redo gesture steps; added script `undo-redo-layer-gating` (2/3-finger tap) for cross-platform gating coverage.
@@ -638,10 +642,20 @@ Scenario names (keep stable):
 - `quickmenu-setup` *(opens the touch QuickMenu Setup sheet)*
 - `copypaste` *(creates selection, copies to new layer, and shows the touch Copy/Paste overlay)*
 
+Script scenarios:
+
+- `script:<name>` (or `script=<name>`) loads a JSON touch-smoke script from Qt resources (`:/touchsmoke/scripts/<name>.json`) and runs it with per-step `KRITA_TOUCH_SMOKE_JSON` reporting.
+- Currently shipped scripts:
+  - `script:canvas-only-toggle`
+  - `script:undo-redo-layer-gating`
+  - `script:clipboard-overlay-gating`
+  - `script:clear-layer-scrub-gating`
+
 Notes:
 
 - Docker IDs in smoke scenarios refer to `KoDockFactoryBase::id()` (example: the Touch sidebar docker id is `TouchDocker`).
 - The Krita side accepts some aliases (`touch_sidebar`, `touchdocker`, etc.), but CI should use the stable names above.
+- Screenshot readability: `gesture-controls` and `layer-options` are hard to see on a light/white canvas. For smoke runs (and especially the screenshot gallery), ensure the document background/content is **black** before capturing (these scenarios should fill the canvas black automatically).
 - Android realism note: Qt synthetic mouse/drag events can be unreliable on some Android builds.
   - To keep CI deterministic, smoke scenarios like `colordrop`, `quickshape`, `transform-tool` include a fallback that paints/fills directly if the input-event path doesn’t visibly change the layer.
 
@@ -650,6 +664,7 @@ Notes:
 Notes:
 
 - `./bin/krita-xvfb-screenshot` writes a per-run log file (default: `<output>-log.txt`).
+- `./bin/krita-xvfb-screenshot` also extracts `KRITA_TOUCH_SMOKE_JSON ...` into a per-run report file (default: `<output>-report.json` when `<output>` ends with `.png`).
 - When running a `--touch-smoke=<scenario>` it will wait (up to `--wait`) for the marker:
   - `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
   - This makes CI faster + avoids “half-painted” UI screenshots.
@@ -712,6 +727,7 @@ wtf-upload persistent/smoke-linux-appimage-*.png
 wtf-upload persistent/smoke-linux-appimage-*-log.txt
 wtf-upload persistent/smoke-android-krita-*.png
 wtf-upload persistent/smoke-android-krita-*-logcat.txt
+wtf-upload persistent/smoke-*-report.json
 ```
 
 #### 4.3.1 Screenshot gallery (index.html)
@@ -719,6 +735,7 @@ wtf-upload persistent/smoke-android-krita-*-logcat.txt
 Goal: make “UI smoke” easy to review by producing **one URL** that shows **all screenshots** from a given run.
 
 - After uploading the per-scenario screenshots/logs, generate an `index.html` that embeds the screenshot URLs (and links to logs).
+- After uploading the per-scenario screenshots/logs/reports, generate an `index.html` that embeds the screenshot URLs (and links to logs + `*-report.json`).
 - Upload that `index.html` via `wtf-upload` as well (it’s in `$PATH`) and share the resulting single gallery URL in review/CI output.
 
 Convenience wrapper (uploads smoke artifacts + generates/uploads `index.html`):
@@ -868,6 +885,7 @@ Notes:
   - `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
   - `--wait` is the **timeout** for this marker (fallback: sleep if `timeout(1)` is missing).
   - Use `--no-marker-wait` to force the legacy “sleep then screenshot” behavior.
+- The script also extracts `KRITA_TOUCH_SMOKE_JSON ...` into `smoke-android-*-report.json` alongside the screenshot + logcat.
 - The script best-effort dismisses Android’s first-run “Viewing full screen” / “Got it” system tip (if detected via `uiautomator dump`) so screenshots show Krita.
 - The script uses bounded `timeout(1)` for ADB operations (install, launch, screencap, logcat) to avoid CI hangs.
 - The script also uses timeouts for Genymotion provisioning + `adbconnect` so instance startup can’t hang for hours.
