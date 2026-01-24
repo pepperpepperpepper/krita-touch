@@ -76,8 +76,9 @@ Recently completed:
 Work log (append-only; newest first):
 
 - **2026‑01‑24**:
-  - Infra: Linux + Android smoke runners now extract the per-scenario `KRITA_TOUCH_SMOKE_JSON` line into `smoke-*-report.json` artifacts, and the screenshot gallery links those reports alongside PNG + logs.
+  - Infra: Linux smoke runner extracts per-scenario `KRITA_TOUCH_SMOKE_JSON` into `smoke-*-report.json`. Android runner pulls the full JSON report from `files/touch-smoke-report.json` (written by Krita) to avoid logcat truncation. Screenshot gallery links reports alongside PNG + logs.
   - Infra: Linux Xvfb + Genymotion touch smoke batch suites now include key cross-platform `script:` scenarios (canvas-only, undo/redo gating, clipboard overlay gating, clear-layer scrub gating).
+  - Fix: Android 3‑finger clear-layer scrub now clears the active layer via `KisToolUtils::clearImage` (tool-independent), so clear-layer gating tests pass cross-platform.
 - **2026‑01‑23**:
   - Infra: smoke scenarios `gesture-controls` + `layer-options` now fill the canvas black for more readable UI screenshots (Actions sheet / Layer Options sheet).
   - Smoke: `--touch-smoke=gesture-controls` fullscreen/canvas-only (4-finger tap) now runs through the **input-manager path** by sending synthetic 4-finger tap events to the canvas (keeps a direct-action fallback for platforms where multi-touch injection is flaky).
@@ -885,7 +886,9 @@ Notes:
   - `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
   - `--wait` is the **timeout** for this marker (fallback: sleep if `timeout(1)` is missing).
   - Use `--no-marker-wait` to force the legacy “sleep then screenshot” behavior.
-- The script also extracts `KRITA_TOUCH_SMOKE_JSON ...` into `smoke-android-*-report.json` alongside the screenshot + logcat.
+- The script also saves a machine-readable report alongside the screenshot + logcat:
+  - First it pulls `files/touch-smoke-report.json` from the app sandbox via `adb exec-out run-as ...` (avoids logcat truncation).
+  - Fallback: extracts `KRITA_TOUCH_SMOKE_JSON ...` into `smoke-android-*-report.json`.
 - The script best-effort dismisses Android’s first-run “Viewing full screen” / “Got it” system tip (if detected via `uiautomator dump`) so screenshots show Krita.
 - The script uses bounded `timeout(1)` for ADB operations (install, launch, screencap, logcat) to avoid CI hangs.
 - The script also uses timeouts for Genymotion provisioning + `adbconnect` so instance startup can’t hang for hours.
@@ -965,7 +968,9 @@ Architecture direction (v2):
   - validate config gating (“Gesture Controls” toggles actually change behavior)
 - **Better reporting**:
   - keep the existing log marker `KRITA_TOUCH_SMOKE_DONE scenario=<name> status=<OK|ERROR>`
-  - emit a second machine-readable line: `KRITA_TOUCH_SMOKE_JSON { ... }` containing per-step pass/fail + details, so scripts can give useful CI diffs without image comparison.
+  - emit a machine-readable report containing per-step pass/fail + details, so scripts can give useful CI diffs without image comparison:
+    - keep `KRITA_TOUCH_SMOKE_JSON { ... }` (easy to grep on Linux)
+    - on Android also write the full report to `touch-smoke-report.json` in the app’s files dir so runners can pull it reliably (logcat can truncate long lines)
     - Example shape:
       - `KRITA_TOUCH_SMOKE_JSON {"scenario":"layers-panel","status":"OK","duration_ms":1234,"steps":[{"name":"layers_panel.find_node_view","ok":true},{"name":"layers_panel.hold_visibility_solo","ok":true,"details":{"before_visible":7,"after_visible":1}}]}`
 
