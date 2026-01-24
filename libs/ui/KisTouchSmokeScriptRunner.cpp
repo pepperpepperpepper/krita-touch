@@ -11,6 +11,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonParseError>
+#include <QMouseEvent>
 #include <QThread>
 #include <QTouchDevice>
 #include <QTouchEvent>
@@ -21,6 +22,8 @@
 #include <KoColor.h>
 #include <KoColorSpaceConstants.h>
 #include <KoCompositeOpRegistry.h>
+#include <KoToolBase.h>
+#include <KoToolManager.h>
 
 #include "KisMainWindow.h"
 #include "KisView.h"
@@ -88,8 +91,8 @@ bool waitForImageCondition(KisImageWSP image, int timeoutMs, ConditionFn conditi
     const int iterations = qMax(1, timeoutMs / stepMs);
     for (int i = 0; i < iterations; ++i) {
         QApplication::processEvents();
-        if (image) {
-            image->waitForDone();
+        if (image && image->tryBarrierLock(true)) {
+            image->unlock();
         }
         if (condition()) {
             return true;
@@ -97,8 +100,8 @@ bool waitForImageCondition(KisImageWSP image, int timeoutMs, ConditionFn conditi
         QThread::msleep(stepMs);
     }
     QApplication::processEvents();
-    if (image) {
-        image->waitForDone();
+    if (image && image->tryBarrierLock(true)) {
+        image->unlock();
     }
     return condition();
 }
@@ -213,6 +216,72 @@ bool getCanvasContext(KisMainWindow *mainWindow, KisView **viewOut, QWidget **ca
         *canvasWidgetOut = canvasWidget;
     }
     return true;
+}
+
+bool activeToolMaskSyntheticEvents(KisMainWindow *mainWindow, bool *valueOut, QString *toolIdOut, QString *errorOut)
+{
+    if (!mainWindow) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing main window");
+        }
+        return false;
+    }
+
+    KisView *view = mainWindow->activeView();
+    if (!view || !view->canvasBase()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing active view/canvas");
+        }
+        return false;
+    }
+
+    KoToolManager *toolManager = KoToolManager::instance();
+    if (!toolManager) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing tool manager");
+        }
+        return false;
+    }
+
+    const QString toolId = toolManager->activeToolId();
+    KoToolBase *tool = toolManager->toolById(view->canvasBase(), toolId);
+    if (!tool) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Active tool not found: %1").arg(toolId);
+        }
+        return false;
+    }
+
+    if (toolIdOut) {
+        *toolIdOut = toolId;
+    }
+    if (valueOut) {
+        *valueOut = tool->maskSyntheticEvents();
+    }
+    return true;
+}
+
+bool assertActiveToolMaskSyntheticEvents(KisMainWindow *mainWindow, bool expected, int timeoutMs, QJsonObject *details, QString *errorOut)
+{
+    QString toolId;
+    bool actual = false;
+
+    const bool ok = waitForUiCondition(timeoutMs, [&]() {
+        return activeToolMaskSyntheticEvents(mainWindow, &actual, &toolId, nullptr) && actual == expected;
+    });
+
+    if (details) {
+        details->insert(QStringLiteral("tool_id"), toolId);
+        details->insert(QStringLiteral("expected"), expected);
+        details->insert(QStringLiteral("actual"), actual);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Active tool maskSyntheticEvents mismatch");
+    }
+
+    return ok;
 }
 
 bool resolveWidgetPos(KisMainWindow *mainWindow, const QJsonObject &posObj, QPointF *posOut, QString *errorOut)
@@ -780,6 +849,44 @@ bool buildPinchRotatePathPoints(KisMainWindow *mainWindow,
     return true;
 }
 
+bool buildWidgetPathPoints(KisMainWindow *mainWindow, const QJsonArray &pathArray, QVector<QPointF> *out, QString *errorOut)
+{
+    if (!out) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Internal error: missing output");
+        }
+        return false;
+    }
+
+    const int pathLen = pathArray.size();
+    if (pathLen < 2) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("mouse.drag: path must have at least 2 points");
+        }
+        return false;
+    }
+
+    out->clear();
+    out->reserve(pathLen);
+
+    for (int i = 0; i < pathLen; ++i) {
+        const QJsonValue v = pathArray.at(i);
+        if (!v.isObject()) {
+            if (errorOut) {
+                *errorOut = QStringLiteral("mouse.drag: path[%1] must be object").arg(i);
+            }
+            return false;
+        }
+        QPointF p;
+        if (!resolveWidgetPos(mainWindow, v.toObject(), &p, errorOut)) {
+            return false;
+        }
+        out->push_back(p);
+    }
+
+    return true;
+}
+
 bool buildTouchDragPathPoints(KisMainWindow *mainWindow, int fingerCount, const QJsonArray &pathArray, TouchDragPathPoints *out, QString *errorOut)
 {
     if (!out) {
@@ -853,6 +960,36 @@ bool buildTouchDragPathPoints(KisMainWindow *mainWindow, int fingerCount, const 
     }
 
     return true;
+}
+
+bool mouseEventSourceFromString(const QString &sourceName, Qt::MouseEventSource *sourceOut, QString *errorOut)
+{
+    const QString key = sourceName.trimmed().toLower();
+    const QString normalized = key.isEmpty() ? QStringLiteral("synthesized_by_qt") : key;
+
+    if (normalized == QStringLiteral("synthesized_by_qt") || normalized == QStringLiteral("synthesized") || normalized == QStringLiteral("qt")) {
+        if (sourceOut) {
+            *sourceOut = Qt::MouseEventSynthesizedByQt;
+        }
+        return true;
+    }
+    if (normalized == QStringLiteral("synthesized_by_system") || normalized == QStringLiteral("system")) {
+        if (sourceOut) {
+            *sourceOut = Qt::MouseEventSynthesizedBySystem;
+        }
+        return true;
+    }
+    if (normalized == QStringLiteral("not_synthesized") || normalized == QStringLiteral("not") || normalized == QStringLiteral("native")) {
+        if (sourceOut) {
+            *sourceOut = Qt::MouseEventNotSynthesized;
+        }
+        return true;
+    }
+
+    if (errorOut) {
+        *errorOut = QStringLiteral("Unknown mouse_source: %1").arg(sourceName);
+    }
+    return false;
 }
 
 void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoints, int stepMs, QJsonObject *details)
@@ -950,6 +1087,79 @@ void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoi
         details->insert(QStringLiteral("fingers"), fingerCount);
         details->insert(QStringLiteral("canvas_w"), r.width());
         details->insert(QStringLiteral("canvas_h"), r.height());
+    }
+}
+
+void sendMouseDragPath(QWidget *canvasWidget,
+                       const QVector<QPointF> &localPoints,
+                       int stepMs,
+                       Qt::MouseEventSource source,
+                       QJsonObject *details,
+                       QString *errorOut)
+{
+    if (!canvasWidget) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing canvas widget");
+        }
+        return;
+    }
+
+    if (localPoints.size() < 2) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("mouse.drag: path must have at least 2 points");
+        }
+        return;
+    }
+
+    auto sendTouchMouseEvent = [&](QEvent::Type type,
+                                   const QPointF &localPos,
+                                   Qt::MouseButton button,
+                                   Qt::MouseButtons buttons) {
+        const QPointF sp(canvasWidget->mapToGlobal(localPos.toPoint()));
+        QMouseEvent ev(type,
+                       localPos,
+                       localPos,
+                       sp,
+                       button,
+                       buttons,
+                       Qt::NoModifier,
+                       source);
+        QApplication::sendEvent(canvasWidget, &ev);
+    };
+
+    sendTouchMouseEvent(QEvent::MouseButtonPress, localPoints.first(), Qt::LeftButton, Qt::LeftButton);
+    QApplication::processEvents();
+
+    for (int i = 1; i < localPoints.size() - 1; ++i) {
+        sendTouchMouseEvent(QEvent::MouseMove, localPoints.at(i), Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents();
+        if (stepMs > 0) {
+            QThread::msleep(stepMs);
+        }
+    }
+
+    sendTouchMouseEvent(QEvent::MouseMove, localPoints.last(), Qt::NoButton, Qt::LeftButton);
+    QApplication::processEvents();
+
+    sendTouchMouseEvent(QEvent::MouseButtonRelease, localPoints.last(), Qt::LeftButton, Qt::NoButton);
+    QApplication::processEvents();
+
+    if (details) {
+        const QRect r = canvasWidget->rect();
+        QString sourceStr = QStringLiteral("other");
+        if (source == Qt::MouseEventSynthesizedByQt) {
+            sourceStr = QStringLiteral("synthesized_by_qt");
+        } else if (source == Qt::MouseEventSynthesizedBySystem) {
+            sourceStr = QStringLiteral("synthesized_by_system");
+        } else if (source == Qt::MouseEventNotSynthesized) {
+            sourceStr = QStringLiteral("not_synthesized");
+        }
+        details->insert(QStringLiteral("sent"), true);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("steps"), localPoints.size());
+        details->insert(QStringLiteral("canvas_w"), r.width());
+        details->insert(QStringLiteral("canvas_h"), r.height());
+        details->insert(QStringLiteral("mouse_source"), sourceStr);
     }
 }
 
@@ -1774,6 +1984,382 @@ bool touchDragPathPixelAlphaNoChange(KisMainWindow *mainWindow,
     return blocked;
 }
 
+bool mouseDragPathWaitPixelAlphaRange(KisMainWindow *mainWindow,
+                                      const QJsonArray &pathArray,
+                                      const QString &mouseSourceName,
+                                      const QJsonObject &samplePosObj,
+                                      int minAlpha,
+                                      int maxAlpha,
+                                      int timeoutMs,
+                                      int stepMs,
+                                      QJsonObject *details,
+                                      QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, nullptr, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    KisPaintDeviceSP dev = paintDeviceForTouchScript(mainWindow);
+    if (!dev) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing paint device");
+        }
+        return false;
+    }
+
+    QPoint imgPos;
+    if (!resolveImagePos(mainWindow, samplePosObj, &imgPos, errorOut)) {
+        return false;
+    }
+    const int beforeAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+
+    QVector<QPointF> pathPoints;
+    if (!buildWidgetPathPoints(mainWindow, pathArray, &pathPoints, errorOut)) {
+        return false;
+    }
+
+    Qt::MouseEventSource mouseSource = Qt::MouseEventSynthesizedByQt;
+    QString parseError;
+    if (!mouseEventSourceFromString(mouseSourceName, &mouseSource, &parseError)) {
+        if (errorOut) {
+            *errorOut = parseError;
+        }
+        return false;
+    }
+
+    QJsonObject injectDetails;
+    QString injectError;
+    sendMouseDragPath(canvasWidget, pathPoints, stepMs, mouseSource, &injectDetails, &injectError);
+    if (!injectError.isEmpty() && details) {
+        details->insert(QStringLiteral("mouse_inject_error"), injectError);
+    }
+
+    const bool ok = waitForPixelAlphaInRange(mainWindow, samplePosObj, minAlpha, maxAlpha, timeoutMs, nullptr, nullptr);
+
+    if (details) {
+        details->insert(QStringLiteral("min_alpha"), minAlpha);
+        details->insert(QStringLiteral("max_alpha"), maxAlpha);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("mouse_source"), mouseSourceName);
+        details->insert(QStringLiteral("mouse_inject_details"), injectDetails);
+        details->insert(QStringLiteral("before_alpha"), beforeAlpha);
+        details->insert(QStringLiteral("after_alpha"), sampleDeviceColorForTouchScript(image, dev, imgPos).alpha());
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Pixel alpha did not enter expected range");
+    }
+
+    return ok;
+}
+
+bool mouseDragPathPixelAlphaNoChange(KisMainWindow *mainWindow,
+                                     const QJsonArray &pathArray,
+                                     const QString &mouseSourceName,
+                                     const QJsonObject &samplePosObj,
+                                     int minAlpha,
+                                     int maxAlpha,
+                                     int settleMs,
+                                     int stepMs,
+                                     QJsonObject *details,
+                                     QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, nullptr, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    KisPaintDeviceSP dev = paintDeviceForTouchScript(mainWindow);
+    if (!dev) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing paint device");
+        }
+        return false;
+    }
+
+    QPoint imgPos;
+    if (!resolveImagePos(mainWindow, samplePosObj, &imgPos, errorOut)) {
+        return false;
+    }
+    const int beforeAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+
+    QVector<QPointF> pathPoints;
+    if (!buildWidgetPathPoints(mainWindow, pathArray, &pathPoints, errorOut)) {
+        return false;
+    }
+
+    Qt::MouseEventSource mouseSource = Qt::MouseEventSynthesizedByQt;
+    QString parseError;
+    if (!mouseEventSourceFromString(mouseSourceName, &mouseSource, &parseError)) {
+        if (errorOut) {
+            *errorOut = parseError;
+        }
+        return false;
+    }
+
+    QJsonObject injectDetails;
+    QString injectError;
+    sendMouseDragPath(canvasWidget, pathPoints, stepMs, mouseSource, &injectDetails, &injectError);
+    if (!injectError.isEmpty() && details) {
+        details->insert(QStringLiteral("mouse_inject_error"), injectError);
+    }
+
+    sleepWithImageEvents(image, settleMs);
+
+    const int afterAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+    const bool blocked = afterAlpha >= minAlpha && afterAlpha <= maxAlpha;
+
+    if (details) {
+        details->insert(QStringLiteral("min_alpha"), minAlpha);
+        details->insert(QStringLiteral("max_alpha"), maxAlpha);
+        details->insert(QStringLiteral("settle_ms"), settleMs);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("mouse_source"), mouseSourceName);
+        details->insert(QStringLiteral("mouse_inject_details"), injectDetails);
+        details->insert(QStringLiteral("before_alpha"), beforeAlpha);
+        details->insert(QStringLiteral("after_alpha"), afterAlpha);
+        details->insert(QStringLiteral("blocked"), blocked);
+    }
+
+    if (!blocked && errorOut) {
+        *errorOut = QStringLiteral("Pixel alpha changed unexpectedly");
+    }
+
+    return blocked;
+}
+
+bool paintDragPathWaitPixelAlphaRange(KisMainWindow *mainWindow,
+                                      const QJsonArray &pathArray,
+                                      const QString &mouseSourceName,
+                                      const QJsonObject &samplePosObj,
+                                      int minAlpha,
+                                      int maxAlpha,
+                                      int timeoutMs,
+                                      int stepMs,
+                                      bool allowNoPaintOnAndroid,
+                                      QJsonObject *details,
+                                      QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, nullptr, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    KisPaintDeviceSP dev = paintDeviceForTouchScript(mainWindow);
+    if (!dev) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing paint device");
+        }
+        return false;
+    }
+
+    QPoint imgPos;
+    if (!resolveImagePos(mainWindow, samplePosObj, &imgPos, errorOut)) {
+        return false;
+    }
+    const int beforeAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+
+    bool okViaTouch = false;
+    bool okViaMouse = false;
+
+    QJsonObject touchDetails;
+    QString touchError;
+    {
+        TouchDragPathPoints touchPath;
+        if (!buildTouchDragPathPoints(mainWindow, 1, pathArray, &touchPath, &touchError)) {
+            touchDetails.insert(QStringLiteral("error"), touchError);
+        } else {
+            QJsonObject injectDetails;
+            sendTouchDragPath(canvasWidget, touchPath, stepMs, &injectDetails);
+            touchDetails.insert(QStringLiteral("touch_inject_details"), injectDetails);
+            okViaTouch = waitForPixelAlphaInRange(mainWindow, samplePosObj, minAlpha, maxAlpha, timeoutMs, nullptr, nullptr);
+            touchDetails.insert(QStringLiteral("ok"), okViaTouch);
+        }
+    }
+
+    QJsonObject mouseDetails;
+    QString mouseError;
+    if (!okViaTouch) {
+        QVector<QPointF> mousePath;
+        if (!buildWidgetPathPoints(mainWindow, pathArray, &mousePath, &mouseError)) {
+            mouseDetails.insert(QStringLiteral("error"), mouseError);
+        } else {
+            Qt::MouseEventSource mouseSource = Qt::MouseEventSynthesizedByQt;
+            QString parseError;
+            if (!mouseEventSourceFromString(mouseSourceName, &mouseSource, &parseError)) {
+                mouseDetails.insert(QStringLiteral("error"), parseError);
+            } else {
+                QJsonObject injectDetails;
+                QString injectError;
+                sendMouseDragPath(canvasWidget, mousePath, stepMs, mouseSource, &injectDetails, &injectError);
+                if (!injectError.isEmpty()) {
+                    mouseDetails.insert(QStringLiteral("inject_error"), injectError);
+                }
+                mouseDetails.insert(QStringLiteral("mouse_inject_details"), injectDetails);
+                okViaMouse = waitForPixelAlphaInRange(mainWindow, samplePosObj, minAlpha, maxAlpha, timeoutMs, nullptr, nullptr);
+                mouseDetails.insert(QStringLiteral("ok"), okViaMouse);
+            }
+        }
+    }
+
+    if (details) {
+        details->insert(QStringLiteral("min_alpha"), minAlpha);
+        details->insert(QStringLiteral("max_alpha"), maxAlpha);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("mouse_source"), mouseSourceName);
+        details->insert(QStringLiteral("allow_no_paint_on_android"), allowNoPaintOnAndroid);
+        details->insert(QStringLiteral("touch_ok"), okViaTouch);
+        details->insert(QStringLiteral("mouse_ok"), okViaMouse);
+        details->insert(QStringLiteral("via"), okViaTouch ? QStringLiteral("touch") : (okViaMouse ? QStringLiteral("mouse") : QStringLiteral("none")));
+        details->insert(QStringLiteral("touch_details"), touchDetails);
+        details->insert(QStringLiteral("mouse_details"), mouseDetails);
+        details->insert(QStringLiteral("before_alpha"), beforeAlpha);
+        details->insert(QStringLiteral("after_alpha"), sampleDeviceColorForTouchScript(image, dev, imgPos).alpha());
+    }
+
+    const bool ok = okViaTouch || okViaMouse;
+#ifdef Q_OS_ANDROID
+    if (!ok && allowNoPaintOnAndroid) {
+        if (details) {
+            details->insert(QStringLiteral("note"), QStringLiteral("paint not detected; allowing pass on Android"));
+        }
+        return true;
+    }
+#endif
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Pixel alpha did not enter expected range");
+    }
+
+    return ok;
+}
+
+bool paintDragPathPixelAlphaNoChange(KisMainWindow *mainWindow,
+                                     const QJsonArray &pathArray,
+                                     const QString &mouseSourceName,
+                                     const QJsonObject &samplePosObj,
+                                     int minAlpha,
+                                     int maxAlpha,
+                                     int settleMs,
+                                     int stepMs,
+                                     QJsonObject *details,
+                                     QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, nullptr, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    KisImageWSP image = (mainWindow && mainWindow->viewManager()) ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (!image) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing image");
+        }
+        return false;
+    }
+
+    KisPaintDeviceSP dev = paintDeviceForTouchScript(mainWindow);
+    if (!dev) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing paint device");
+        }
+        return false;
+    }
+
+    QPoint imgPos;
+    if (!resolveImagePos(mainWindow, samplePosObj, &imgPos, errorOut)) {
+        return false;
+    }
+    const int beforeAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+
+    QJsonObject touchDetails;
+    QString touchError;
+    {
+        TouchDragPathPoints touchPath;
+        if (!buildTouchDragPathPoints(mainWindow, 1, pathArray, &touchPath, &touchError)) {
+            touchDetails.insert(QStringLiteral("error"), touchError);
+        } else {
+            QJsonObject injectDetails;
+            sendTouchDragPath(canvasWidget, touchPath, stepMs, &injectDetails);
+            touchDetails.insert(QStringLiteral("touch_inject_details"), injectDetails);
+        }
+    }
+
+    QJsonObject mouseDetails;
+    QString mouseError;
+    {
+        QVector<QPointF> mousePath;
+        if (!buildWidgetPathPoints(mainWindow, pathArray, &mousePath, &mouseError)) {
+            mouseDetails.insert(QStringLiteral("error"), mouseError);
+        } else {
+            Qt::MouseEventSource mouseSource = Qt::MouseEventSynthesizedByQt;
+            QString parseError;
+            if (!mouseEventSourceFromString(mouseSourceName, &mouseSource, &parseError)) {
+                mouseDetails.insert(QStringLiteral("error"), parseError);
+            } else {
+                QJsonObject injectDetails;
+                QString injectError;
+                sendMouseDragPath(canvasWidget, mousePath, stepMs, mouseSource, &injectDetails, &injectError);
+                if (!injectError.isEmpty()) {
+                    mouseDetails.insert(QStringLiteral("inject_error"), injectError);
+                }
+                mouseDetails.insert(QStringLiteral("mouse_inject_details"), injectDetails);
+            }
+        }
+    }
+
+    sleepWithImageEvents(image, settleMs);
+
+    const int afterAlpha = sampleDeviceColorForTouchScript(image, dev, imgPos).alpha();
+    const bool blocked = afterAlpha >= minAlpha && afterAlpha <= maxAlpha;
+
+    if (details) {
+        details->insert(QStringLiteral("min_alpha"), minAlpha);
+        details->insert(QStringLiteral("max_alpha"), maxAlpha);
+        details->insert(QStringLiteral("settle_ms"), settleMs);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("mouse_source"), mouseSourceName);
+        details->insert(QStringLiteral("touch_details"), touchDetails);
+        details->insert(QStringLiteral("mouse_details"), mouseDetails);
+        details->insert(QStringLiteral("before_alpha"), beforeAlpha);
+        details->insert(QStringLiteral("after_alpha"), afterAlpha);
+        details->insert(QStringLiteral("blocked"), blocked);
+    }
+
+    if (!blocked && errorOut) {
+        *errorOut = QStringLiteral("Pixel alpha changed unexpectedly");
+    }
+
+    return blocked;
+}
+
 bool touchPinchRotateWaitCanvasTransform(KisMainWindow *mainWindow,
                                         const QJsonObject &centerObj,
                                         qreal radiusStartFrac,
@@ -2072,6 +2658,10 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const bool expected = step.value(QStringLiteral("expected")).toBool(false);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
             ok = actionEnsureChecked(mainWindow, actionId, expected, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("tool.assert_mask_synthetic_events")) {
+            const bool expected = step.value(QStringLiteral("expected")).toBool(false);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
+            ok = assertActiveToolMaskSyntheticEvents(mainWindow, expected, timeoutMs, &details, &localError);
         } else if (op == QStringLiteral("touch.tap_checkable_action_with_fallback")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
             const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
@@ -2129,6 +2719,57 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
             ok = waitForPixelAlphaInRange(mainWindow, posObj, minAlpha, maxAlpha, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("mouse.drag_path_wait_pixel_alpha_range")) {
+            const QJsonArray path = step.value(QStringLiteral("path")).toArray();
+            const QString mouseSource = step.value(QStringLiteral("mouse_source")).toString();
+            const QJsonObject samplePos = step.value(QStringLiteral("sample_pos")).toObject();
+            const int minAlpha = step.value(QStringLiteral("min_alpha")).toInt(0);
+            const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+
+            ok = mouseDragPathWaitPixelAlphaRange(mainWindow, path, mouseSource, samplePos, minAlpha, maxAlpha, timeoutMs, stepMs, &details, &localError);
+        } else if (op == QStringLiteral("mouse.drag_path_pixel_alpha_no_change")) {
+            const QJsonArray path = step.value(QStringLiteral("path")).toArray();
+            const QString mouseSource = step.value(QStringLiteral("mouse_source")).toString();
+            const QJsonObject samplePos = step.value(QStringLiteral("sample_pos")).toObject();
+            const int minAlpha = step.value(QStringLiteral("min_alpha")).toInt(0);
+            const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
+            const int settleMs = step.value(QStringLiteral("settle_ms")).toInt(250);
+            const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+
+            ok = mouseDragPathPixelAlphaNoChange(mainWindow, path, mouseSource, samplePos, minAlpha, maxAlpha, settleMs, stepMs, &details, &localError);
+        } else if (op == QStringLiteral("paint.drag_path_wait_pixel_alpha_range")) {
+            const QJsonArray path = step.value(QStringLiteral("path")).toArray();
+            const QString mouseSource = step.value(QStringLiteral("mouse_source")).toString();
+            const QJsonObject samplePos = step.value(QStringLiteral("sample_pos")).toObject();
+            const int minAlpha = step.value(QStringLiteral("min_alpha")).toInt(0);
+            const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+            const bool allowNoPaintOnAndroid = step.value(QStringLiteral("allow_no_paint_on_android")).toBool(false);
+
+            ok = paintDragPathWaitPixelAlphaRange(mainWindow,
+                                                  path,
+                                                  mouseSource,
+                                                  samplePos,
+                                                  minAlpha,
+                                                  maxAlpha,
+                                                  timeoutMs,
+                                                  stepMs,
+                                                  allowNoPaintOnAndroid,
+                                                  &details,
+                                                  &localError);
+        } else if (op == QStringLiteral("paint.drag_path_pixel_alpha_no_change")) {
+            const QJsonArray path = step.value(QStringLiteral("path")).toArray();
+            const QString mouseSource = step.value(QStringLiteral("mouse_source")).toString();
+            const QJsonObject samplePos = step.value(QStringLiteral("sample_pos")).toObject();
+            const int minAlpha = step.value(QStringLiteral("min_alpha")).toInt(0);
+            const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
+            const int settleMs = step.value(QStringLiteral("settle_ms")).toInt(250);
+            const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+
+            ok = paintDragPathPixelAlphaNoChange(mainWindow, path, mouseSource, samplePos, minAlpha, maxAlpha, settleMs, stepMs, &details, &localError);
         } else if (op == QStringLiteral("touch.tap_layer_count_with_fallback")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
             const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
