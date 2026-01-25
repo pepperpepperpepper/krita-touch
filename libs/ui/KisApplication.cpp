@@ -54,7 +54,6 @@
 #include <QImageWriter>
 #include <QTouchDevice>
 #include <QTouchEvent>
-#include <QToolTip>
 #include <QThread>
 
 #include <klocalizedstring.h>
@@ -711,29 +710,6 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     if (!mainWindow) {
         return;
     }
-
-    // Desktop (Linux) smoke screenshots are captured from outside the process. If Qt tooltips are
-    // visible, they show up as "floating" labels (e.g. "Actions"/"QuickMenu") and make the UI look
-    // broken. Disable tooltips for the duration of touch-smoke runs.
-    class TouchSmokeTooltipBlocker : public QObject
-    {
-    public:
-        bool eventFilter(QObject *watched, QEvent *event) override
-        {
-            if (event && event->type() == QEvent::ToolTip) {
-                return true;
-            }
-            return QObject::eventFilter(watched, event);
-        }
-    };
-
-    static TouchSmokeTooltipBlocker s_tooltipBlocker;
-    static bool s_tooltipBlockerInstalled = false;
-    if (!s_tooltipBlockerInstalled && qApp) {
-        qApp->installEventFilter(&s_tooltipBlocker);
-        s_tooltipBlockerInstalled = true;
-    }
-    QToolTip::hideText();
 
     const QString scenarioTrimmed = scenario.trimmed();
     const QString normalizedScenario = scenarioTrimmed.toLower();
