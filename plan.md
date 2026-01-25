@@ -75,6 +75,8 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑25**:
+  - Infra: touch-smoke scripts now support **touch hold** overlay assertions (`touch.hold_wait_overlay_visible_with_fallback`, `touch.hold_overlay_no_change`); added script `quickmenu-hold-gating` and wired it into both the Linux and Genymotion smoke batches.
 - **2026‑01‑24**:
   - Infra: Linux smoke runner extracts per-scenario `KRITA_TOUCH_SMOKE_JSON` into `smoke-*-report.json`. Android runner pulls the full JSON report from `files/touch-smoke-report.json` (written by Krita) to avoid logcat truncation. Screenshot gallery links reports alongside PNG + logs.
   - Infra: Linux Xvfb + Genymotion touch smoke batch suites now include key cross-platform `script:` scenarios (canvas-only, undo/redo gating, clipboard overlay gating, clear-layer scrub gating).
@@ -654,6 +656,7 @@ Script scenarios:
   - `script:undo-redo-layer-gating`
   - `script:clipboard-overlay-gating`
   - `script:quick-pinch-fit-gating`
+  - `script:quickmenu-hold-gating`
   - `script:rotate-with-pinch-gating`
   - `script:clear-layer-scrub-gating`
   - `script:touch-painting-gating`

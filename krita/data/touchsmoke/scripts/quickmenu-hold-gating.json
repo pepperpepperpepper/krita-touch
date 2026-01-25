@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "quickmenu.enable_quickmenu",
+      "op": "config.set_bool",
+      "key": "touch_quickmenu_enabled",
+      "value": true
+    },
+    {
+      "name": "quickmenu.hide_overlay",
+      "op": "ui.overlay.hide",
+      "object_name": "kisTouchQuickMenuOverlay"
+    },
+    {
+      "name": "quickmenu.enabled_hold_opens_overlay",
+      "op": "touch.hold_wait_overlay_visible_with_fallback",
+      "fingers": 1,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "overlay_object_name": "kisTouchQuickMenuOverlay",
+      "timeout_ms": 900,
+      "fallback_action": "quickmenu"
+    },
+    {
+      "name": "quickmenu.hide_overlay_again",
+      "op": "ui.overlay.hide",
+      "object_name": "kisTouchQuickMenuOverlay"
+    },
+    {
+      "name": "quickmenu.disable_quickmenu",
+      "op": "config.set_bool",
+      "key": "touch_quickmenu_enabled",
+      "value": false
+    },
+    {
+      "name": "quickmenu.disabled_hold_does_not_open_overlay",
+      "op": "touch.hold_overlay_no_change",
+      "fingers": 1,
+      "pos": { "space": "widget", "x": 0.5, "y": 0.5 },
+      "overlay_object_name": "kisTouchQuickMenuOverlay",
+      "settle_ms": 250,
+      "direct_action": "quickmenu"
+    }
+  ]
+}
