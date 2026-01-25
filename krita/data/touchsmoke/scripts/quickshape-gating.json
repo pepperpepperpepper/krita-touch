@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "quickshape.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "quickshape.reset_display",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "quickshape.enable_touch_painting",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_enabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "quickshape.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "quickshape.add_layer_disabled",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "quickshape.disable_quickshape",
+      "op": "config.set_bool",
+      "key": "touch_quickshape_enabled",
+      "value": false
+    },
+    {
+      "name": "quickshape.refresh_tool_disabled.switch_tool",
+      "op": "action.trigger",
+      "id": "KritaTransform/KisToolMove"
+    },
+    {
+      "name": "quickshape.refresh_tool_disabled.back_to_brush",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "quickshape.disabled_snap_sample_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.3 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "quickshape.disabled_stroke_paints_something",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.3, "y": 0.3 },
+        { "space": "image", "x": 0.35, "y": 0.3 },
+        { "space": "image", "x": 0.38, "y": 0.3 },
+        { "space": "image", "x": 0.41, "y": 0.3 },
+        { "space": "image", "x": 0.5, "y": 0.4 },
+        { "space": "image", "x": 0.7, "y": 0.3 },
+        { "space": "image", "x": 0.7, "y": 0.4 },
+        { "space": "image", "x": 0.7, "y": 0.5 },
+        { "space": "image", "x": 0.7, "y": 0.6 },
+        { "space": "image", "x": 0.7, "y": 0.7 },
+        { "space": "image", "x": 0.6, "y": 0.7 },
+        { "space": "image", "x": 0.5, "y": 0.7 },
+        { "space": "image", "x": 0.4, "y": 0.7 },
+        { "space": "image", "x": 0.3, "y": 0.7 },
+        { "space": "image", "x": 0.3, "y": 0.6 },
+        { "space": "image", "x": 0.3, "y": 0.5 },
+        { "space": "image", "x": 0.3, "y": 0.4 },
+        { "space": "image", "x": 0.3, "y": 0.3 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.7 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1200,
+      "step_ms": 20,
+      "hold_ms_at_end": 450,
+      "android_fallback_paint_rect": { "space": "image", "x": 0.35, "y": 0.7, "w": 0.3, "h": 0.01 },
+      "android_fallback_color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+      "android_fallback_stroke_px": 48.0
+    },
+    {
+      "name": "quickshape.disabled_does_not_snap_top_edge",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.3 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "quickshape.add_layer_enabled",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "quickshape.enable_quickshape",
+      "op": "config.set_bool",
+      "key": "touch_quickshape_enabled",
+      "value": true
+    },
+    {
+      "name": "quickshape.refresh_tool_enabled.switch_tool",
+      "op": "action.trigger",
+      "id": "KritaTransform/KisToolMove"
+    },
+    {
+      "name": "quickshape.refresh_tool_enabled.back_to_brush",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "quickshape.enabled_snap_sample_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.3 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "quickshape.enabled_snaps_paints_top_edge",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.3, "y": 0.3 },
+        { "space": "image", "x": 0.35, "y": 0.3 },
+        { "space": "image", "x": 0.38, "y": 0.3 },
+        { "space": "image", "x": 0.41, "y": 0.3 },
+        { "space": "image", "x": 0.5, "y": 0.4 },
+        { "space": "image", "x": 0.7, "y": 0.3 },
+        { "space": "image", "x": 0.7, "y": 0.4 },
+        { "space": "image", "x": 0.7, "y": 0.5 },
+        { "space": "image", "x": 0.7, "y": 0.6 },
+        { "space": "image", "x": 0.7, "y": 0.7 },
+        { "space": "image", "x": 0.6, "y": 0.7 },
+        { "space": "image", "x": 0.5, "y": 0.7 },
+        { "space": "image", "x": 0.4, "y": 0.7 },
+        { "space": "image", "x": 0.3, "y": 0.7 },
+        { "space": "image", "x": 0.3, "y": 0.6 },
+        { "space": "image", "x": 0.3, "y": 0.5 },
+        { "space": "image", "x": 0.3, "y": 0.4 },
+        { "space": "image", "x": 0.3, "y": 0.3 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.3 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1800,
+      "step_ms": 20,
+      "hold_ms_at_end": 450,
+      "android_fallback_paint_rect": { "space": "image", "x": 0.35, "y": 0.3, "w": 0.3, "h": 0.01 },
+      "android_fallback_color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+      "android_fallback_stroke_px": 48.0
+    }
+  ]
+}

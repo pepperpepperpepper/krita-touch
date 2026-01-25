@@ -77,6 +77,8 @@ Work log (append-only; newest first):
 
 - **2026‑01‑25**:
   - Infra: touch-smoke scripts now support **touch hold** overlay assertions (`touch.hold_wait_overlay_visible_with_fallback`, `touch.hold_overlay_no_change`); added script `quickmenu-hold-gating` and wired it into both the Linux and Genymotion smoke batches.
+  - Infra: touch-smoke script runner now supports tool-proxy stroke ops (`tool.stroke_path_wait_pixel_alpha_range`, `tool.stroke_path_pixel_alpha_no_change`) plus optional Android fallback paint rects for deterministic CI when synthetic input doesn’t paint.
+  - Infra: added script `quickshape-gating` (Linux asserts QuickShape snapping behavior; Genymotion currently uses the Android fallback paint-rect path and records it in the JSON report).
 - **2026‑01‑24**:
   - Infra: Linux smoke runner extracts per-scenario `KRITA_TOUCH_SMOKE_JSON` into `smoke-*-report.json`. Android runner pulls the full JSON report from `files/touch-smoke-report.json` (written by Krita) to avoid logcat truncation. Screenshot gallery links reports alongside PNG + logs.
   - Infra: Linux Xvfb + Genymotion touch smoke batch suites now include key cross-platform `script:` scenarios (canvas-only, undo/redo gating, clipboard overlay gating, clear-layer scrub gating).
@@ -660,6 +662,7 @@ Script scenarios:
   - `script:rotate-with-pinch-gating`
   - `script:clear-layer-scrub-gating`
   - `script:touch-painting-gating`
+  - `script:quickshape-gating`
 
 Notes:
 
