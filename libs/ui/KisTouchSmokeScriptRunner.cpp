@@ -32,6 +32,7 @@
 #include "canvas/kis_canvas_controller.h"
 #include "canvas/kis_coordinates_converter.h"
 #include "input/KisTouchGestureAction.h"
+#include "input/KisTouchQuickMenuAction.h"
 #include "input/kis_input_profile_manager.h"
 #include "kis_config.h"
 #include "kis_group_layer.h"
@@ -533,6 +534,76 @@ QVector<QPointF> multiFingerTapPoints(int fingerCount, const QPointF &center)
     }
 
     return points;
+}
+
+QList<QTouchEvent::TouchPoint> touchPointsForPositions(const QVector<QPointF> &localPoints,
+                                                       const QVector<QPointF> &globalPoints,
+                                                       Qt::TouchPointState state)
+{
+    QList<QTouchEvent::TouchPoint> points;
+    const int count = qMin(localPoints.size(), globalPoints.size());
+    points.reserve(count);
+
+    for (int i = 0; i < count; ++i) {
+        QTouchEvent::TouchPoint tp(i);
+        tp.setState(state);
+        tp.setPos(localPoints.at(i));
+        tp.setScreenPos(globalPoints.at(i));
+        tp.setStartPos(localPoints.at(i));
+        tp.setStartScreenPos(globalPoints.at(i));
+        tp.setLastPos(localPoints.at(i));
+        tp.setLastScreenPos(globalPoints.at(i));
+        points.append(tp);
+    }
+
+    return points;
+}
+
+bool buildTouchHoldPoints(KisMainWindow *mainWindow,
+                          int fingerCount,
+                          const QJsonObject &posObj,
+                          QWidget **canvasWidgetOut,
+                          QVector<QPointF> *localPointsOut,
+                          QVector<QPointF> *globalPointsOut,
+                          QString *errorOut)
+{
+    KisView *view = nullptr;
+    QWidget *canvasWidget = nullptr;
+    if (!getCanvasContext(mainWindow, &view, &canvasWidget, errorOut)) {
+        return false;
+    }
+
+    canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+    QPointF center;
+    if (!resolveWidgetPos(mainWindow, posObj, &center, errorOut)) {
+        return false;
+    }
+
+    const QVector<QPointF> localPoints = multiFingerTapPoints(fingerCount, center);
+    if (localPoints.isEmpty()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("touch.hold: invalid finger count: %1").arg(fingerCount);
+        }
+        return false;
+    }
+
+    QVector<QPointF> globalPoints;
+    globalPoints.reserve(localPoints.size());
+    for (const QPointF &p : localPoints) {
+        globalPoints.append(QPointF(canvasWidget->mapToGlobal(p.toPoint())));
+    }
+
+    if (canvasWidgetOut) {
+        *canvasWidgetOut = canvasWidget;
+    }
+    if (localPointsOut) {
+        *localPointsOut = localPoints;
+    }
+    if (globalPointsOut) {
+        *globalPointsOut = globalPoints;
+    }
+    return true;
 }
 
 bool sendMultiFingerTouchTap(KisMainWindow *mainWindow, int fingerCount, const QJsonObject &posObj, QString *errorOut)
@@ -1888,6 +1959,124 @@ bool waitOverlayVisible(KisMainWindow *mainWindow,
     return ok;
 }
 
+bool touchHoldWaitOverlayVisible(KisMainWindow *mainWindow,
+                                 QWidget *canvasWidget,
+                                 const QVector<QPointF> &localPoints,
+                                 const QVector<QPointF> &globalPoints,
+                                 const QString &overlayObjectName,
+                                 int timeoutMs,
+                                 QJsonObject *details,
+                                 QString *errorOut)
+{
+    if (!mainWindow) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing main window");
+        }
+        return false;
+    }
+    if (!canvasWidget) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing canvas widget");
+        }
+        return false;
+    }
+
+    QTouchDevice *device = ::touchDevice();
+    if (!device) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("touch.hold: could not allocate touch device");
+        }
+        return false;
+    }
+
+    const QList<QTouchEvent::TouchPoint> beginPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointPressed);
+    if (beginPoints.isEmpty()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("touch.hold: no touch points");
+        }
+        return false;
+    }
+
+    QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+    QApplication::sendEvent(canvasWidget, &beginEvent);
+    QApplication::processEvents();
+
+    const bool shown = waitOverlayVisible(mainWindow, overlayObjectName, true, timeoutMs, nullptr, nullptr);
+
+    const QList<QTouchEvent::TouchPoint> endPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointReleased);
+    QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+    QApplication::sendEvent(canvasWidget, &endEvent);
+    QApplication::processEvents();
+
+    if (details) {
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("touch_sent"), true);
+        details->insert(QStringLiteral("overlay_visible"), shown);
+    }
+
+    if (!shown && errorOut) {
+        *errorOut = QStringLiteral("Overlay '%1' did not appear during touch hold").arg(overlayObjectName);
+    }
+
+    return shown;
+}
+
+bool performQuickMenuHoldWaitOverlayVisible(KisMainWindow *mainWindow,
+                                           const QVector<QPointF> &localPoints,
+                                           const QVector<QPointF> &globalPoints,
+                                           const QString &overlayObjectName,
+                                           int timeoutMs,
+                                           QJsonObject *details,
+                                           QString *errorOut)
+{
+    if (!mainWindow) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing main window");
+        }
+        return false;
+    }
+    if (localPoints.size() != 1 || globalPoints.size() != 1) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("quickmenu hold expects 1 finger");
+        }
+        return false;
+    }
+
+    QTouchDevice *device = ::touchDevice();
+    if (!device) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("touch.hold: could not allocate touch device");
+        }
+        return false;
+    }
+
+    const QList<QTouchEvent::TouchPoint> beginPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointPressed);
+    QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+    KisTouchQuickMenuAction action;
+    action.begin(0, &beginEvent);
+    QApplication::processEvents();
+
+    const bool shown = waitOverlayVisible(mainWindow, overlayObjectName, true, timeoutMs, nullptr, nullptr);
+
+    const QList<QTouchEvent::TouchPoint> endPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointReleased);
+    QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+    action.end(&endEvent);
+    QApplication::processEvents();
+
+    if (details) {
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("performed"), true);
+        details->insert(QStringLiteral("overlay_visible"), shown);
+    }
+
+    if (!shown && errorOut) {
+        *errorOut = QStringLiteral("Overlay '%1' did not appear during quickmenu hold").arg(overlayObjectName);
+    }
+
+    return shown;
+}
+
 bool touchDragPathWaitOverlayVisibleWithFallback(KisMainWindow *mainWindow,
                                                 int fingerCount,
                                                 const QJsonArray &pathArray,
@@ -1948,6 +2137,84 @@ bool touchDragPathWaitOverlayVisibleWithFallback(KisMainWindow *mainWindow,
     return ok;
 }
 
+bool touchHoldWaitOverlayVisibleWithFallback(KisMainWindow *mainWindow,
+                                            int fingerCount,
+                                            const QJsonObject &posObj,
+                                            const QString &overlayObjectName,
+                                            int timeoutMs,
+                                            const QString &fallbackActionName,
+                                            bool requireInputManager,
+                                            QJsonObject *details,
+                                            QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    QVector<QPointF> localPoints;
+    QVector<QPointF> globalPoints;
+    if (!buildTouchHoldPoints(mainWindow, fingerCount, posObj, &canvasWidget, &localPoints, &globalPoints, errorOut)) {
+        return false;
+    }
+
+    bool shownViaInputManager = false;
+    bool shownViaDirectAction = false;
+
+    QJsonObject injectDetails;
+    {
+        QString localError;
+        shownViaInputManager =
+            touchHoldWaitOverlayVisible(mainWindow, canvasWidget, localPoints, globalPoints, overlayObjectName, timeoutMs, &injectDetails, &localError);
+        if (!localError.isEmpty()) {
+            injectDetails.insert(QStringLiteral("error"), localError);
+        }
+    }
+
+    QJsonObject hideDetails;
+    if (!shownViaInputManager && !requireInputManager) {
+        hideOverlay(mainWindow, overlayObjectName, &hideDetails);
+
+        const QString normalizedFallback = fallbackActionName.trimmed().toLower();
+        if (normalizedFallback.isEmpty()) {
+            // No fallback path.
+        } else if (normalizedFallback == QStringLiteral("quickmenu") || normalizedFallback == QStringLiteral("touch_quickmenu")) {
+            QJsonObject directDetails;
+            QString localError;
+            shownViaDirectAction =
+                performQuickMenuHoldWaitOverlayVisible(mainWindow, localPoints, globalPoints, overlayObjectName, timeoutMs, &directDetails, &localError);
+            if (!localError.isEmpty()) {
+                directDetails.insert(QStringLiteral("error"), localError);
+            }
+            if (details) {
+                details->insert(QStringLiteral("direct_action_details"), directDetails);
+            }
+        } else {
+            if (errorOut) {
+                *errorOut = QStringLiteral("Unknown fallback_action: %1").arg(fallbackActionName);
+            }
+            return false;
+        }
+    }
+
+    if (details) {
+        details->insert(QStringLiteral("fingers"), fingerCount);
+        details->insert(QStringLiteral("overlay_object_name"), overlayObjectName);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("require_input_manager"), requireInputManager);
+        details->insert(QStringLiteral("fallback_action"), fallbackActionName);
+        details->insert(QStringLiteral("input_manager_shown"), shownViaInputManager);
+        details->insert(QStringLiteral("direct_action_shown"), shownViaDirectAction);
+        details->insert(QStringLiteral("touch_inject_details"), injectDetails);
+        if (!hideDetails.isEmpty()) {
+            details->insert(QStringLiteral("overlay_hide_details"), hideDetails);
+        }
+        details->insert(QStringLiteral("visible"), overlayVisible(mainWindow, overlayObjectName));
+    }
+
+    const bool ok = requireInputManager ? shownViaInputManager : (shownViaInputManager || shownViaDirectAction);
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Overlay '%1' did not appear").arg(overlayObjectName);
+    }
+    return ok;
+}
+
 bool touchDragPathOverlayNoChange(KisMainWindow *mainWindow,
                                  int fingerCount,
                                  const QJsonArray &pathArray,
@@ -1984,6 +2251,121 @@ bool touchDragPathOverlayNoChange(KisMainWindow *mainWindow,
         details->insert(QStringLiteral("step_ms"), stepMs);
         details->insert(QStringLiteral("input_manager_attempted"), true);
         details->insert(QStringLiteral("direct_action_attempted"), true);
+        details->insert(QStringLiteral("touch_inject_details"), injectDetails);
+        details->insert(QStringLiteral("direct_action_details"), directDetails);
+        details->insert(QStringLiteral("blocked"), blocked);
+        details->insert(QStringLiteral("visible"), overlayVisible(mainWindow, overlayObjectName));
+    }
+
+    if (!blocked && errorOut) {
+        *errorOut = QStringLiteral("Overlay '%1' appeared unexpectedly").arg(overlayObjectName);
+    }
+
+    return blocked;
+}
+
+bool touchHoldOverlayNoChange(KisMainWindow *mainWindow,
+                              int fingerCount,
+                              const QJsonObject &posObj,
+                              const QString &overlayObjectName,
+                              int settleMs,
+                              const QString &directActionName,
+                              QJsonObject *details,
+                              QString *errorOut)
+{
+    QWidget *canvasWidget = nullptr;
+    QVector<QPointF> localPoints;
+    QVector<QPointF> globalPoints;
+    if (!buildTouchHoldPoints(mainWindow, fingerCount, posObj, &canvasWidget, &localPoints, &globalPoints, errorOut)) {
+        return false;
+    }
+
+    bool visibleViaInputManager = false;
+    bool visibleViaDirectAction = false;
+
+    QJsonObject injectDetails;
+    {
+        QTouchDevice *device = ::touchDevice();
+        if (!device) {
+            if (errorOut) {
+                *errorOut = QStringLiteral("touch.hold: could not allocate touch device");
+            }
+            return false;
+        }
+
+        const QList<QTouchEvent::TouchPoint> beginPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointPressed);
+        QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+        QApplication::sendEvent(canvasWidget, &beginEvent);
+        QApplication::processEvents();
+
+        sleepWithEvents(settleMs);
+        visibleViaInputManager = overlayVisible(mainWindow, overlayObjectName);
+
+        const QList<QTouchEvent::TouchPoint> endPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointReleased);
+        QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+        QApplication::sendEvent(canvasWidget, &endEvent);
+        QApplication::processEvents();
+
+        injectDetails.insert(QStringLiteral("touch_sent"), true);
+        injectDetails.insert(QStringLiteral("visible_during_hold"), visibleViaInputManager);
+    }
+
+    QJsonObject directDetails;
+    {
+        hideOverlay(mainWindow, overlayObjectName, nullptr);
+
+        const QString normalized = directActionName.trimmed().toLower();
+        if (normalized.isEmpty()) {
+            // no direct action attempt
+        } else if (normalized == QStringLiteral("quickmenu") || normalized == QStringLiteral("touch_quickmenu")) {
+            QString localError;
+
+            QTouchDevice *device = ::touchDevice();
+            if (!device) {
+                if (errorOut) {
+                    *errorOut = QStringLiteral("touch.hold: could not allocate touch device");
+                }
+                return false;
+            }
+
+            const QList<QTouchEvent::TouchPoint> beginPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointPressed);
+            QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+
+            KisTouchQuickMenuAction action;
+            action.begin(0, &beginEvent);
+            QApplication::processEvents();
+
+            sleepWithEvents(settleMs);
+            visibleViaDirectAction = overlayVisible(mainWindow, overlayObjectName);
+
+            const QList<QTouchEvent::TouchPoint> endPoints = touchPointsForPositions(localPoints, globalPoints, Qt::TouchPointReleased);
+            QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+            action.end(&endEvent);
+            QApplication::processEvents();
+
+            directDetails.insert(QStringLiteral("performed"), true);
+            directDetails.insert(QStringLiteral("visible_during_hold"), visibleViaDirectAction);
+
+            if (!localError.isEmpty()) {
+                directDetails.insert(QStringLiteral("error"), localError);
+            }
+        } else {
+            if (errorOut) {
+                *errorOut = QStringLiteral("Unknown direct_action: %1").arg(directActionName);
+            }
+            return false;
+        }
+    }
+
+    const bool blocked = !visibleViaInputManager && !visibleViaDirectAction;
+
+    if (details) {
+        details->insert(QStringLiteral("fingers"), fingerCount);
+        details->insert(QStringLiteral("overlay_object_name"), overlayObjectName);
+        details->insert(QStringLiteral("settle_ms"), settleMs);
+        details->insert(QStringLiteral("input_manager_attempted"), true);
+        details->insert(QStringLiteral("direct_action_attempted"), !directActionName.trimmed().isEmpty());
+        details->insert(QStringLiteral("direct_action"), directActionName);
         details->insert(QStringLiteral("touch_inject_details"), injectDetails);
         details->insert(QStringLiteral("direct_action_details"), directDetails);
         details->insert(QStringLiteral("blocked"), blocked);
@@ -3006,6 +3388,25 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
                                                             requireInputManager,
                                                             &details,
                                                             &localError);
+        } else if (op == QStringLiteral("touch.hold_wait_overlay_visible_with_fallback")) {
+            const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
+            const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
+            const QString overlayName = step.value(QStringLiteral("overlay_object_name")).toString();
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            const bool requireInputManager = step.value(QStringLiteral("require_input_manager")).toBool(false);
+            const QString fallbackAction = step.value(QStringLiteral("fallback_action")).toString();
+
+            details.insert(QStringLiteral("fingers"), fingers);
+            details.insert(QStringLiteral("fallback_action"), fallbackAction);
+            ok = touchHoldWaitOverlayVisibleWithFallback(mainWindow,
+                                                        fingers,
+                                                        posObj,
+                                                        overlayName,
+                                                        timeoutMs,
+                                                        fallbackAction,
+                                                        requireInputManager,
+                                                        &details,
+                                                        &localError);
         } else if (op == QStringLiteral("touch.drag_path_overlay_no_change")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(3);
             const QJsonArray path = step.value(QStringLiteral("path")).toArray();
@@ -3018,6 +3419,16 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             details.insert(QStringLiteral("fingers"), fingers);
             details.insert(QStringLiteral("direct_shortcut"), shortcutName);
             ok = touchDragPathOverlayNoChange(mainWindow, fingers, path, overlayName, settleMs, shortcut, stepMs, &details, &localError);
+        } else if (op == QStringLiteral("touch.hold_overlay_no_change")) {
+            const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
+            const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();
+            const QString overlayName = step.value(QStringLiteral("overlay_object_name")).toString();
+            const int settleMs = step.value(QStringLiteral("settle_ms")).toInt(250);
+            const QString directAction = step.value(QStringLiteral("direct_action")).toString();
+
+            details.insert(QStringLiteral("fingers"), fingers);
+            details.insert(QStringLiteral("direct_action"), directAction);
+            ok = touchHoldOverlayNoChange(mainWindow, fingers, posObj, overlayName, settleMs, directAction, &details, &localError);
         } else if (op == QStringLiteral("touch.drag_path_wait_pixel_alpha_with_fallback")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(3);
             const QJsonArray path = step.value(QStringLiteral("path")).toArray();
