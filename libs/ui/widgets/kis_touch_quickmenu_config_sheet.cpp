@@ -177,20 +177,24 @@ void KisTouchQuickMenuConfigSheet::openAtGlobalPos(const QPoint &globalPos, int 
 
 void KisTouchQuickMenuConfigSheet::rebuildUi()
 {
-    QLayout *oldLayout = layout();
-    if (oldLayout) {
-        QLayoutItem *item = nullptr;
-        while ((item = oldLayout->takeAt(0))) {
-            if (QWidget *w = item->widget()) {
-                delete w;
-            }
-            delete item;
-        }
+    m_slotButtons.clear();
+    m_resetButton = nullptr;
+    m_closeButton = nullptr;
+    m_selectedSlot = 0;
+    m_slotGroup = nullptr;
+
+    // This sheet is rebuilt on open and when config changes. Ensure we fully
+    // delete the previous widget tree; otherwise orphaned labels from the
+    // first (pre-layout) build can remain at (0,0) and show up as stray
+    // "floating" titles over the UI.
+    if (QLayout *oldLayout = layout()) {
         delete oldLayout;
     }
+    const auto directChildren = findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *w : directChildren) {
+        delete w;
+    }
 
-    m_slotButtons.clear();
-    m_selectedSlot = 0;
     m_slotActionIds = KisConfig(true).touchQuickMenuActionIds();
 
     QVBoxLayout *root = new QVBoxLayout(this);

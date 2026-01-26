@@ -168,16 +168,20 @@ void KisTouchActionsSheet::setCurrentCategoryRow(int row)
 
 void KisTouchActionsSheet::rebuildUi()
 {
-    QLayout *oldLayout = layout();
-    if (oldLayout) {
-        QLayoutItem *item = nullptr;
-        while ((item = oldLayout->takeAt(0))) {
-            if (QWidget *w = item->widget()) {
-                delete w;
-            }
-            delete item;
-        }
+    m_closeButton = nullptr;
+    m_categories = nullptr;
+    m_pages = nullptr;
+
+    // This sheet is rebuilt frequently (on open, on action collection changes). Make
+    // sure we fully tear down the previous widget tree; otherwise orphaned widgets
+    // from the first (pre-layout) build can remain at (0,0) and appear as stray
+    // "floating" labels over the UI.
+    if (QLayout *oldLayout = layout()) {
         delete oldLayout;
+    }
+    const auto directChildren = findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *w : directChildren) {
+        delete w;
     }
 
     QVBoxLayout *root = new QVBoxLayout(this);

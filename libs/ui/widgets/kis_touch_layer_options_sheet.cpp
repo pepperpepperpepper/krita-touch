@@ -145,17 +145,17 @@ void KisTouchLayerOptionsSheet::openAtGlobalPos(const QPoint &globalPos)
 void KisTouchLayerOptionsSheet::rebuildUi()
 {
     m_opacitySlider = nullptr;
+    m_closeButton = nullptr;
 
-    QLayout *oldLayout = layout();
-    if (oldLayout) {
-        QLayoutItem *item = nullptr;
-        while ((item = oldLayout->takeAt(0))) {
-            if (QWidget *w = item->widget()) {
-                delete w;
-            }
-            delete item;
-        }
+    // This sheet is rebuilt frequently (on open, when action collection changes, etc).
+    // Ensure we fully delete the previous widget tree; otherwise orphaned widgets from
+    // the first (pre-layout) build can remain at (0,0) and show up as stray overlays.
+    if (QLayout *oldLayout = layout()) {
         delete oldLayout;
+    }
+    const auto directChildren = findChildren<QWidget *>(QString(), Qt::FindDirectChildrenOnly);
+    for (QWidget *w : directChildren) {
+        delete w;
     }
 
     QVBoxLayout *root = new QVBoxLayout(this);
