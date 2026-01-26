@@ -882,6 +882,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "selection-tool" || normalizedScenario == "selection_tool") {
+        bool ok = true;
         KisView *view = mainWindow->activeView();
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         const QRect bounds = image ? image->bounds() : QRect();
@@ -907,8 +908,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         // Ensure deterministic canvas content before testing selection ops.
-        if (!fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0xff, 0xff))) {
+        const bool filledWhite = fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0xff, 0xff));
+        report.step(QStringLiteral("selection_tool.fill_canvas_white"), filledWhite);
+        if (!filledWhite) {
             qWarning() << "Touch smoke: selection-tool failed to fill canvas";
+            ok = false;
         }
 
         const QColor fillColor(0xff, 0x33, 0xaa);
@@ -919,8 +923,10 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         if (resourceManager) {
             resourceManager->setResource(KoCanvasResource::ForegroundColor,
                                          KoColor(fillColor, image->colorSpace()));
+            report.step(QStringLiteral("selection_tool.set_foreground_color"), true);
         } else {
             qWarning() << "Touch smoke: selection-tool missing resource manager; fill color may be non-deterministic";
+            report.step(QStringLiteral("selection_tool.set_foreground_color"), false);
         }
 
         // Force deterministic selection method (tap-to-polygon requires Freehand).
@@ -930,9 +936,21 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             KConfigGroup toolCfg = KSharedConfig::openConfig()->group(QStringLiteral("KisToolSelectTouch"));
             toolCfg.writeEntry("touchSelectionMethod", 1); // Freehand
         }
+        report.step(QStringLiteral("selection_tool.force_freehand_method"), true);
 
         toolManager->switchToolRequested(QStringLiteral("KisToolSelectTouch"));
         QApplication::processEvents();
+        const bool toolActive = waitForUiCondition(1000, [&]() {
+            return toolManager->activeToolId() == QStringLiteral("KisToolSelectTouch");
+        });
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("active_tool_id"), toolManager->activeToolId());
+            report.step(QStringLiteral("selection_tool.switch_to_select_tool"), toolActive, details);
+        }
+        if (!toolActive) {
+            ok = false;
+        }
         showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
 
         auto imgToWidget = [&](const QPointF &imgP) {
@@ -1036,8 +1054,6 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return selection->pixelSelection()->selectedExactRect();
         };
 
-        bool ok = true;
-
         bool selectionMade = false;
         for (int i = 0; i < 80; ++i) {
             QApplication::processEvents();
@@ -1049,7 +1065,10 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QThread::msleep(20);
         }
 
+        report.step(QStringLiteral("selection_tool.create_selection_via_input"), selectionMade);
+        bool usedFallback = false;
         if (!selectionMade) {
+            usedFallback = true;
             qWarning() << "Touch smoke: selection-tool did not create a selection via input; falling back to direct selection";
 
             KisCanvas2 *kisCanvas = dynamic_cast<KisCanvas2 *>(view->canvasBase());
@@ -1075,9 +1094,19 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
             if (!selectionMade) {
                 qWarning() << "Touch smoke: selection-tool still did not create a selection";
+                {
+                    QJsonObject details;
+                    details.insert(QStringLiteral("used_fallback"), true);
+                    report.step(QStringLiteral("selection_tool.create_selection_fallback"), false, details);
+                }
                 finalizeSmoke(false);
                 return;
             }
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("used_fallback"), usedFallback);
+            report.step(QStringLiteral("selection_tool.create_selection_fallback"), true, details);
         }
 
         // Exercise Save/Load selection via the tool slots (single-slot, in-memory).
@@ -1086,15 +1115,23 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         if (!toolObj) {
             qWarning() << "Touch smoke: selection-tool could not access tool object";
             ok = false;
+            report.step(QStringLiteral("selection_tool.find_tool_object"), false);
         } else {
-            QMetaObject::invokeMethod(toolObj, "slot_saveSelectionClicked", Qt::DirectConnection);
+            report.step(QStringLiteral("selection_tool.find_tool_object"), true);
+            const bool saved = QMetaObject::invokeMethod(toolObj, "slot_saveSelectionClicked", Qt::DirectConnection);
+            report.step(QStringLiteral("selection_tool.save_selection"), saved);
+            if (!saved) {
+                ok = false;
+            }
         }
 
         if (QAction *action = mainWindow->actionCollection()->action("deselect")) {
             action->trigger();
+            report.step(QStringLiteral("selection_tool.action_deselect_found"), true);
         } else {
             qWarning() << "Touch smoke: selection-tool missing action: deselect";
             ok = false;
+            report.step(QStringLiteral("selection_tool.action_deselect_found"), false);
         }
 
         bool selectionCleared = false;
@@ -1110,9 +1147,14 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             qWarning() << "Touch smoke: selection-tool deselect did not clear selection";
             ok = false;
         }
+        report.step(QStringLiteral("selection_tool.deselect_clears_selection"), selectionCleared);
 
         if (toolObj) {
-            QMetaObject::invokeMethod(toolObj, "slot_loadSelectionClicked", Qt::DirectConnection);
+            const bool loaded = QMetaObject::invokeMethod(toolObj, "slot_loadSelectionClicked", Qt::DirectConnection);
+            report.step(QStringLiteral("selection_tool.load_selection"), loaded);
+            if (!loaded) {
+                ok = false;
+            }
         }
 
         bool selectionRestored = false;
@@ -1128,6 +1170,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             qWarning() << "Touch smoke: selection-tool load did not restore selection";
             ok = false;
         }
+        report.step(QStringLiteral("selection_tool.load_restores_selection"), selectionRestored);
 
         // Fill selection and validate pixels inside/outside change as expected.
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
@@ -1146,10 +1189,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const QPointF imgP1(bounds.left() + bounds.width() * 0.60, bounds.top() + bounds.height() * 0.50);
             paintLineForTouchSmoke(mainWindow, imgP0, imgP1, fillColor);
         }
+        report.step(QStringLiteral("selection_tool.android_fill_direct_paint"), true);
 #else
         if (QAction *action = mainWindow->actionCollection()->action("fill_selection_foreground_color")) {
             action->trigger();
             QApplication::processEvents();
+            report.step(QStringLiteral("selection_tool.action_fill_found"), true);
             if (waitForImageIdleForTouchSmoke(image, 8000)) {
                 refreshImageForTouchSmoke(image);
             } else {
@@ -1157,6 +1202,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             }
         } else {
             qWarning() << "Touch smoke: selection-tool missing action: fill_selection_foreground_color";
+            report.step(QStringLiteral("selection_tool.action_fill_found"), false);
             ok = false;
         }
 #endif
@@ -1165,6 +1211,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         if (!dev) {
             qWarning() << "Touch smoke: selection-tool cannot validate fill; missing paint device";
             ok = false;
+            report.step(QStringLiteral("selection_tool.fill_expected_samples"), false);
         } else if (after.size() == samplePoints.size()) {
             const QColor expectedOutside(0xff, 0xff, 0xff);
 
@@ -1185,6 +1232,33 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const bool outsideIsWhiteFinal = colorsEqualForTouchSmoke(after[1], expectedOutside, 5);
             const bool insideChangedFinal = anySampleChangedForTouchSmoke({before[0]}, {after[0]}, 3);
 
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("inside_changed"), insideChangedFinal);
+                details.insert(QStringLiteral("inside_ok"), insideIsFillColorFinal);
+                details.insert(QStringLiteral("outside_ok"), outsideIsWhiteFinal);
+                details.insert(QStringLiteral("expected_inside_rgba"), QStringLiteral("#ff33aaff"));
+                details.insert(QStringLiteral("expected_outside_rgba"), QStringLiteral("#ffffffff"));
+                if (!after.isEmpty() && after[0].isValid()) {
+                    details.insert(QStringLiteral("inside_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(after[0].red(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].green(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].alpha(), 2, 16, QLatin1Char('0')));
+                }
+                if (after.size() > 1 && after[1].isValid()) {
+                    details.insert(QStringLiteral("outside_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(after[1].red(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[1].green(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[1].blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[1].alpha(), 2, 16, QLatin1Char('0')));
+                }
+                const bool samplesOk = insideChangedFinal && insideIsFillColorFinal && outsideIsWhiteFinal;
+                report.step(QStringLiteral("selection_tool.fill_expected_samples"), samplesOk, details);
+            }
+
             if (!insideChangedFinal || !insideIsFillColorFinal || !outsideIsWhiteFinal) {
                 qWarning() << "Touch smoke: selection-tool fill did not match expected colors"
                            << "insideChanged=" << insideChangedFinal
@@ -1196,6 +1270,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             }
         } else {
             qWarning() << "Touch smoke: selection-tool sample size mismatch";
+            report.step(QStringLiteral("selection_tool.fill_expected_samples"), false);
             ok = false;
         }
 
