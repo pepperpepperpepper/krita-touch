@@ -1395,8 +1395,31 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
     if (normalizedScenario == "touch-sidebar" || normalizedScenario == "touch_sidebar" ||
         normalizedScenario == "touchdocker" || normalizedScenario == "touch_docker") {
-        showDockerForTouchSmoke(mainWindow, QStringLiteral("TouchDocker"));
-        finalizeSmoke(true);
+        bool ok = true;
+        const QString dockerId = QStringLiteral("TouchDocker");
+        QDockWidget *dock = mainWindow->dockWidget(dockerId);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("docker_id"), dockerId);
+            report.step(QStringLiteral("touch_sidebar.docker_found"), dock != nullptr, details);
+        }
+        if (!dock) {
+            finalizeSmoke(false);
+            return;
+        }
+
+        showDockerForTouchSmoke(mainWindow, dockerId);
+        QApplication::processEvents();
+
+        const bool visible = dock->isVisible();
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("visible"), visible);
+            details.insert(QStringLiteral("floating"), dock->isFloating());
+            report.step(QStringLiteral("touch_sidebar.docker_visible"), visible, details);
+        }
+        ok = ok && visible;
+        finalizeSmoke(ok);
         return;
     }
 
@@ -1943,8 +1966,31 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "color-panel" || normalizedScenario == "color_panel") {
-        showDockerForTouchSmoke(mainWindow, QStringLiteral("ColorSelectorNg"));
-        finalizeSmoke(true);
+        bool ok = true;
+        const QString dockerId = QStringLiteral("ColorSelectorNg");
+        QDockWidget *dock = mainWindow->dockWidget(dockerId);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("docker_id"), dockerId);
+            report.step(QStringLiteral("color_panel.docker_found"), dock != nullptr, details);
+        }
+        if (!dock) {
+            finalizeSmoke(false);
+            return;
+        }
+
+        showDockerForTouchSmoke(mainWindow, dockerId);
+        QApplication::processEvents();
+
+        const bool visible = dock->isVisible();
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("visible"), visible);
+            details.insert(QStringLiteral("floating"), dock->isFloating());
+            report.step(QStringLiteral("color_panel.docker_visible"), visible, details);
+        }
+        ok = ok && visible;
+        finalizeSmoke(ok);
         return;
     }
 
@@ -1985,11 +2031,61 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         image->waitForDone();
 
         const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
-        if (!dev || !anySampleChangedForTouchSmoke(before, after, 3)) {
-            qWarning() << "Touch smoke: colordrop did not modify the canvas; falling back to direct fill";
-            fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0x33, 0xaa));
+        const QColor expectedFill(0xff, 0x33, 0xaa);
+        const bool dropChanged = dev && anySampleChangedForTouchSmoke(before, after, 3);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("drop_changed"), dropChanged);
+            if (!before.isEmpty() && before[0].isValid()) {
+                details.insert(QStringLiteral("before_rgba"),
+                               QStringLiteral("#%1%2%3%4")
+                                   .arg(before[0].red(), 2, 16, QLatin1Char('0'))
+                                   .arg(before[0].green(), 2, 16, QLatin1Char('0'))
+                                   .arg(before[0].blue(), 2, 16, QLatin1Char('0'))
+                                   .arg(before[0].alpha(), 2, 16, QLatin1Char('0')));
+            }
+            if (!after.isEmpty() && after[0].isValid()) {
+                details.insert(QStringLiteral("after_rgba"),
+                               QStringLiteral("#%1%2%3%4")
+                                   .arg(after[0].red(), 2, 16, QLatin1Char('0'))
+                                   .arg(after[0].green(), 2, 16, QLatin1Char('0'))
+                                   .arg(after[0].blue(), 2, 16, QLatin1Char('0'))
+                                   .arg(after[0].alpha(), 2, 16, QLatin1Char('0')));
+            }
+            report.step(QStringLiteral("colordrop.drop_modified_canvas"), dropChanged, details);
         }
-        finalizeSmoke(true);
+
+        bool ok = true;
+        QVector<QColor> finalColors = after;
+
+        if (!dropChanged) {
+            qWarning() << "Touch smoke: colordrop did not modify the canvas; falling back to direct fill";
+            const bool filled = fillCanvasForTouchSmoke(mainWindow, expectedFill);
+            report.step(QStringLiteral("colordrop.fallback_fill_canvas"), filled);
+            ok = ok && filled;
+
+            // Re-sample after fallback to ensure deterministic final state.
+            KisPaintDeviceSP devAfter = paintDeviceForTouchSmoke(mainWindow);
+            finalColors = sampleDeviceColorsForTouchSmoke(devAfter, samplePoints);
+        }
+
+        const bool finalOk = !finalColors.isEmpty() && colorsEqualForTouchSmoke(finalColors[0], expectedFill, 6);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("expected_rgba"), QStringLiteral("#ff33aaff"));
+            if (!finalColors.isEmpty() && finalColors[0].isValid()) {
+                details.insert(QStringLiteral("final_rgba"),
+                               QStringLiteral("#%1%2%3%4")
+                                   .arg(finalColors[0].red(), 2, 16, QLatin1Char('0'))
+                                   .arg(finalColors[0].green(), 2, 16, QLatin1Char('0'))
+                                   .arg(finalColors[0].blue(), 2, 16, QLatin1Char('0'))
+                                   .arg(finalColors[0].alpha(), 2, 16, QLatin1Char('0')));
+            }
+            report.step(QStringLiteral("colordrop.final_color_matches"), finalOk, details);
+        }
+        ok = ok && finalOk;
+
+        finalizeSmoke(ok);
         return;
     }
 
