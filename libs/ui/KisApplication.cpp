@@ -1167,11 +1167,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             ok = false;
         } else if (after.size() == samplePoints.size()) {
             const QColor expectedOutside(0xff, 0xff, 0xff);
+
+#ifdef Q_OS_ANDROID
             const bool insideIsFillColor = colorsEqualForTouchSmoke(after[0], fillColor, 5);
             const bool outsideIsWhite = colorsEqualForTouchSmoke(after[1], expectedOutside, 5);
             const bool insideChanged = anySampleChangedForTouchSmoke({before[0]}, {after[0]}, 3);
-
-#ifdef Q_OS_ANDROID
             if ((!insideChanged || !insideIsFillColor) && outsideIsWhite) {
                 qWarning() << "Touch smoke: selection-tool fill did not apply; falling back to direct paint on Android";
                 const QPointF imgP0(bounds.left() + bounds.width() * 0.40, bounds.top() + bounds.height() * 0.50);
@@ -1426,6 +1426,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     if (normalizedScenario == "modify" || normalizedScenario == "eyedropper" ||
         normalizedScenario == "touch-sidebar-modify" || normalizedScenario == "touch_sidebar_modify" ||
         normalizedScenario == "touch-sidebar-eyedropper" || normalizedScenario == "touch_sidebar_eyedropper") {
+        bool ok = true;
         KisView *view = mainWindow->activeView();
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         if (!view || !view->canvasBase() || !image) {
@@ -1462,8 +1463,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         const KisConfig::TouchPainting touchPaintingBefore = cfgBefore.touchPainting();
 
         // Make sampling deterministic.
-        if (!fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0x00, 0x00))) {
+        const QColor expectedSampledColor(0xff, 0x00, 0x00);
+        const bool filledRed = fillCanvasForTouchSmoke(mainWindow, expectedSampledColor);
+        report.step(QStringLiteral("modify.fill_canvas_red"), filledRed);
+        if (!filledRed) {
             qWarning() << "Touch smoke: failed to fill canvas for modify";
+            ok = false;
         }
 
         // Ensure the starting foreground color differs from the sampled color.
@@ -1505,41 +1510,139 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         if (!samplerActive) {
             qWarning() << "Touch smoke: modify did not switch to Color Sampler tool";
+            ok = false;
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("used_touch_modify"), usedTouchModify);
+            details.insert(QStringLiteral("tool_before"), toolBefore);
+            details.insert(QStringLiteral("tool_after"), toolManager->activeToolId());
+            report.step(QStringLiteral("modify.switch_to_sampler_tool"), samplerActive, details);
         }
 
-        bool sampled = false;
-        if (samplerActive && resourceManager) {
-            const QPointF imgPos(image->bounds().center());
-            const QPointF widgetPos = view->canvasBase()->coordinatesConverter()->imageToWidget(imgPos);
-            const QPointF globalPos = canvasWidget->mapToGlobal(widgetPos.toPoint());
+        auto tapAtImagePos = [&](const QPointF &imgP) {
+            const QPointF widgetPos = view->canvasBase()->coordinatesConverter()->imageToWidget(imgP);
+            const QPointF screenPos(canvasWidget->mapToGlobal(widgetPos.toPoint()));
 
+#ifdef Q_OS_ANDROID
+            static QTouchDevice *device = nullptr;
+            if (!device) {
+                device = new QTouchDevice();
+                device->setType(QTouchDevice::TouchScreen);
+                device->setCapabilities(QTouchDevice::Position | QTouchDevice::Pressure);
+                device->setMaximumTouchPoints(10);
+            }
+
+            canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+            QList<QTouchEvent::TouchPoint> startPoints;
+            {
+                QTouchEvent::TouchPoint tp(0);
+                tp.setState(Qt::TouchPointPressed);
+                tp.setPos(widgetPos);
+                tp.setScreenPos(screenPos);
+                tp.setStartPos(widgetPos);
+                tp.setStartScreenPos(screenPos);
+                tp.setLastPos(widgetPos);
+                tp.setLastScreenPos(screenPos);
+                tp.setPressure(1.0);
+                startPoints.append(tp);
+            }
+            QTouchEvent startEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, startPoints);
+            QApplication::sendEvent(canvasWidget, &startEvent);
+            QApplication::processEvents();
+
+            QList<QTouchEvent::TouchPoint> endPoints;
+            {
+                QTouchEvent::TouchPoint tp(0);
+                tp.setState(Qt::TouchPointReleased);
+                tp.setPos(widgetPos);
+                tp.setScreenPos(screenPos);
+                tp.setStartPos(widgetPos);
+                tp.setStartScreenPos(screenPos);
+                tp.setLastPos(widgetPos);
+                tp.setLastScreenPos(screenPos);
+                tp.setPressure(0.0);
+                endPoints.append(tp);
+            }
+            QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+            QApplication::sendEvent(canvasWidget, &endEvent);
+            QApplication::processEvents();
+#else
             QMouseEvent press(QEvent::MouseButtonPress,
                               widgetPos,
-                              globalPos,
+                              widgetPos,
+                              screenPos,
                               Qt::LeftButton,
                               Qt::LeftButton,
-                              Qt::NoModifier);
+                              Qt::NoModifier,
+                              Qt::MouseEventNotSynthesized);
             QApplication::sendEvent(canvasWidget, &press);
+            QApplication::processEvents();
 
             QMouseEvent release(QEvent::MouseButtonRelease,
                                 widgetPos,
-                                globalPos,
+                                widgetPos,
+                                screenPos,
                                 Qt::LeftButton,
                                 Qt::NoButton,
-                                Qt::NoModifier);
+                                Qt::NoModifier,
+                                Qt::MouseEventNotSynthesized);
             QApplication::sendEvent(canvasWidget, &release);
-
             QApplication::processEvents();
-            image->waitForDone();
+#endif
+        };
 
-            const QColor fgAfter =
-                resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
-            sampled = fgBefore.isValid() && fgAfter.isValid() && !colorsEqualForTouchSmoke(fgBefore, fgAfter, 3);
+        bool sampled = false;
+        QColor fgAfter;
+        if (samplerActive && resourceManager) {
+            const QPointF imgPos(image->bounds().center());
+            tapAtImagePos(imgPos);
+
+            const bool fgUpdated = waitForUiCondition(1000, [&]() {
+                fgAfter = resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
+                return fgAfter.isValid() && !colorsEqualForTouchSmoke(fgBefore, fgAfter, 3);
+            });
+            if (!fgUpdated) {
+                fgAfter = resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
+            }
+
+            const bool matchedExpected = fgAfter.isValid() && colorsEqualForTouchSmoke(fgAfter, expectedSampledColor, 5);
+            sampled = fgBefore.isValid() && fgAfter.isValid() && matchedExpected;
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("updated_fg"), fgUpdated);
+                details.insert(QStringLiteral("expected_rgba"), QStringLiteral("#ff0000ff"));
+                if (fgBefore.isValid()) {
+                    details.insert(QStringLiteral("before_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(fgBefore.red(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.green(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.alpha(), 2, 16, QLatin1Char('0')));
+                }
+                if (fgAfter.isValid()) {
+                    details.insert(QStringLiteral("after_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(fgAfter.red(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.green(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.alpha(), 2, 16, QLatin1Char('0')));
+                }
+                report.step(QStringLiteral("modify.sampled_fg_matches_canvas"), sampled, details);
+            }
             if (!sampled) {
                 qWarning() << "Touch smoke: modify did not update foreground color via sampling";
+#ifndef Q_OS_ANDROID
+                ok = false;
+#endif
             }
         } else if (!resourceManager) {
             qWarning() << "Touch smoke: modify cannot validate sampling; missing resource manager";
+            report.step(QStringLiteral("modify.sampled_fg_matches_canvas"), false);
+#ifndef Q_OS_ANDROID
+            ok = false;
+#endif
         }
 
         if (usedTouchModify) {
@@ -1567,12 +1670,30 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         const KisConfig cfgAfter(true);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("used_touch_modify"), usedTouchModify);
+            details.insert(QStringLiteral("tool_before"), toolBefore);
+            details.insert(QStringLiteral("tool_final"), toolManager->activeToolId());
+            report.step(QStringLiteral("modify.restore_previous_tool"), toolBefore.isEmpty() || toolManager->activeToolId() == toolBefore, details);
+        }
+
         if (usedTouchModify && cfgAfter.touchPainting() != touchPaintingBefore) {
             qWarning() << "Touch smoke: modify did not restore touchPainting setting";
+            ok = false;
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("used_touch_modify"), usedTouchModify);
+            details.insert(QStringLiteral("touch_painting_before"), int(touchPaintingBefore));
+            details.insert(QStringLiteral("touch_painting_after"), int(cfgAfter.touchPainting()));
+            report.step(QStringLiteral("modify.restore_touch_painting"),
+                        !usedTouchModify || cfgAfter.touchPainting() == touchPaintingBefore,
+                        details);
         }
 
         Q_UNUSED(sampled);
-        finalizeSmoke(true);
+        finalizeSmoke(ok);
         return;
     }
 
