@@ -12,6 +12,7 @@
 #include <QPainter>
 #include <QSignalBlocker>
 #include <QToolButton>
+#include <QVBoxLayout>
 
 #include <KisOptionButtonStrip.h>
 #include <KisOptionCollectionWidget.h>
@@ -216,12 +217,6 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                 "The selection operations section label in Touch Selection Tool options",
                 "Operations"));
 
-        QWidget *operationsGrid = new QWidget(sectionOperations);
-        QGridLayout *grid = new QGridLayout(operationsGrid);
-        grid->setContentsMargins(0, 0, 0, 0);
-        grid->setHorizontalSpacing(8);
-        grid->setVerticalSpacing(8);
-
         KisKActionCollection *actions = nullptr;
         if (KisCanvas2 *kisCanvas = dynamic_cast<KisCanvas2 *>(canvas())) {
             if (KisViewManager *viewManager = kisCanvas->viewManager()) {
@@ -229,17 +224,36 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             }
         }
 
-        auto addActionButton = [&](const QString &actionId, const QString &labelOverride) {
-            QAction *action = actions ? actions->action(actionId) : nullptr;
-            QToolButton *button = new QToolButton(operationsGrid);
+        QWidget *operationsWidget = new QWidget(sectionOperations);
+        QVBoxLayout *layout = new QVBoxLayout(operationsWidget);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(8);
+
+        const auto configureStripButton = [](KoGroupButton *button) {
+            if (!button) {
+                return;
+            }
             button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
             button->setIconSize(QSize(32, 32));
             button->setMinimumSize(QSize(96, 88));
+            button->setCheckable(false);
+        };
+
+        auto addActionButton = [&](KisOptionButtonStrip *strip,
+                                   const QString &actionId,
+                                   const QString &labelOverride,
+                                   const QString &fallbackIconName) {
+            QAction *action = actions ? actions->action(actionId) : nullptr;
+            KoGroupButton *button = strip->addButton(QIcon(), labelOverride);
+            configureStripButton(button);
 
             if (action) {
-                button->setIcon(action->icon());
-                const QString label =
-                    labelOverride.isEmpty() ? stripAmpersands(action->text()) : labelOverride;
+                if (!action->icon().isNull()) {
+                    button->setIcon(action->icon());
+                } else if (!fallbackIconName.isEmpty()) {
+                    button->setIcon(KisIconUtils::loadIcon(fallbackIconName));
+                }
+                const QString label = labelOverride.isEmpty() ? stripAmpersands(action->text()) : labelOverride;
                 const QString toolTip =
                     action->toolTip().isEmpty() ? stripAmpersands(action->text()) : stripAmpersands(action->toolTip());
                 button->setText(label);
@@ -250,24 +264,28 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                 button->setToolTip(i18n("Missing action: %1", actionId));
                 button->setEnabled(false);
             }
-
-            const int index = grid->count();
-            constexpr int columns = 3;
-            const int row = index / columns;
-            const int col = index % columns;
-            grid->addWidget(button, row, col);
         };
 
-        addActionButton(QStringLiteral("invert_selection"), i18n("Invert"));
-        addActionButton(QStringLiteral("deselect"), i18n("Deselect"));
-        addActionButton(QStringLiteral("fill_selection_foreground_color"), i18n("Fill"));
-        addActionButton(QStringLiteral("clear"), i18n("Clear"));
-        addActionButton(QStringLiteral("copy_selection_to_new_layer"), i18n("Copy"));
-        addActionButton(QStringLiteral("cut_selection_to_new_layer"), i18n("Cut"));
+        KisOptionButtonStrip *row1 = new KisOptionButtonStrip(operationsWidget);
+        row1->setExclusive(false);
+        addActionButton(row1, QStringLiteral("invert_selection"), i18n("Invert"), QStringLiteral("select-invert"));
+        addActionButton(row1, QStringLiteral("deselect"), i18n("Deselect"), QStringLiteral("select-clear"));
+        addActionButton(row1,
+                        QStringLiteral("fill_selection_foreground_color"),
+                        i18n("Fill"),
+                        QStringLiteral("krita_tool_color_fill"));
+        layout->addWidget(row1);
 
-        grid->setRowStretch(2, 1);
+        KisOptionButtonStrip *row2 = new KisOptionButtonStrip(operationsWidget);
+        row2->setExclusive(false);
+        addActionButton(row2, QStringLiteral("clear"), i18n("Clear"), QStringLiteral("edit-clear"));
+        addActionButton(row2, QStringLiteral("copy_selection_to_new_layer"), i18n("Copy"), QStringLiteral("edit-copy"));
+        addActionButton(row2, QStringLiteral("cut_selection_to_new_layer"), i18n("Cut"), QStringLiteral("edit-cut"));
+        layout->addWidget(row2);
 
-        sectionOperations->setPrimaryWidget(operationsGrid);
+        layout->addStretch(1);
+
+        sectionOperations->setPrimaryWidget(operationsWidget);
         selectionWidget->insertWidget(4, "sectionTouchOperations", sectionOperations);
     }
 
