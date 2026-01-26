@@ -233,9 +233,9 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             if (!button) {
                 return;
             }
-            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            button->setToolButtonStyle(Qt::ToolButtonIconOnly);
             button->setIconSize(QSize(32, 32));
-            button->setMinimumSize(QSize(96, 88));
+            button->setMinimumSize(QSize(56, 56));
             button->setCheckable(false);
         };
 
