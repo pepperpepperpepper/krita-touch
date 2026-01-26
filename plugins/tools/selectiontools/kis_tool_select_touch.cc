@@ -219,8 +219,8 @@ QWidget *KisToolSelectTouch::createOptionWidget()
         QWidget *operationsGrid = new QWidget(sectionOperations);
         QGridLayout *grid = new QGridLayout(operationsGrid);
         grid->setContentsMargins(0, 0, 0, 0);
-        grid->setHorizontalSpacing(10);
-        grid->setVerticalSpacing(10);
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(8);
 
         KisKActionCollection *actions = nullptr;
         if (KisCanvas2 *kisCanvas = dynamic_cast<KisCanvas2 *>(canvas())) {
@@ -233,8 +233,8 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             QAction *action = actions ? actions->action(actionId) : nullptr;
             QToolButton *button = new QToolButton(operationsGrid);
             button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            button->setIconSize(QSize(36, 36));
-            button->setMinimumSize(QSize(160, 110));
+            button->setIconSize(QSize(32, 32));
+            button->setMinimumSize(QSize(96, 88));
 
             if (action) {
                 button->setIcon(action->icon());
@@ -252,20 +252,20 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             }
 
             const int index = grid->count();
-            const int row = index / 2;
-            const int col = index % 2;
+            constexpr int columns = 3;
+            const int row = index / columns;
+            const int col = index % columns;
             grid->addWidget(button, row, col);
         };
 
         addActionButton(QStringLiteral("invert_selection"), i18n("Invert"));
         addActionButton(QStringLiteral("deselect"), i18n("Deselect"));
-        addActionButton(QStringLiteral("fill_selection_foreground_color"), i18n("Color Fill"));
+        addActionButton(QStringLiteral("fill_selection_foreground_color"), i18n("Fill"));
         addActionButton(QStringLiteral("clear"), i18n("Clear"));
-        addActionButton(QStringLiteral("copy_selection_to_new_layer"), i18n("Copy && Paste"));
-        addActionButton(QStringLiteral("cut_selection_to_new_layer"), i18n("Cut && Paste"));
+        addActionButton(QStringLiteral("copy_selection_to_new_layer"), i18n("Copy"));
+        addActionButton(QStringLiteral("cut_selection_to_new_layer"), i18n("Cut"));
 
-        grid->setRowStretch(3, 1);
-        grid->setColumnStretch(2, 1);
+        grid->setRowStretch(2, 1);
 
         sectionOperations->setPrimaryWidget(operationsGrid);
         selectionWidget->insertWidget(4, "sectionTouchOperations", sectionOperations);
@@ -288,8 +288,8 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                 return;
             }
             button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            button->setIconSize(QSize(36, 36));
-            button->setMinimumSize(QSize(160, 110));
+            button->setIconSize(QSize(32, 32));
+            button->setMinimumSize(QSize(96, 88));
         };
 
         m_buttonSaveSelection = new QToolButton(savedGrid);
