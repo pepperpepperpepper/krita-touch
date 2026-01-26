@@ -100,8 +100,8 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
 
     setStyleSheet(QStringLiteral(
         "QFrame#kisTouchQuickMenuConfigSheet {"
-        "  background-color: rgba(30, 30, 30, 245);"
-        "  border: 1px solid rgba(255, 255, 255, 40);"
+        "  background-color: rgba(30, 30, 30, 255);"
+        "  border: 1px solid rgba(255, 255, 255, 60);"
         "  border-radius: 16px;"
         "  color: rgb(240, 240, 240);"
         "}"
@@ -110,16 +110,20 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 10);"
-        "  border: 1px solid rgba(255, 255, 255, 25);"
+        "  background: rgba(255, 255, 255, 40);"
+        "  border: 1px solid rgba(255, 255, 255, 60);"
         "  border-radius: 12px;"
         "  padding: 10px;"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(255, 255, 255, 25);"
+        "  background-color: rgba(90, 160, 255, 70);"
+        "  border-color: rgba(90, 160, 255, 140);"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 18);"
+        "  background-color: rgba(255, 255, 255, 55);"
+        "}"
+        "QToolButton:checked:pressed {"
+        "  background-color: rgba(90, 160, 255, 100);"
         "}"));
 
     rebuildUi();
