@@ -822,6 +822,20 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
     }
 
+    auto waitForUiCondition = [&](int timeoutMs, auto condition) -> bool {
+        constexpr int stepMs = 20;
+        const int iterations = qMax(1, timeoutMs / stepMs);
+        for (int i = 0; i < iterations; ++i) {
+            QApplication::processEvents();
+            if (condition()) {
+                return true;
+            }
+            QThread::msleep(stepMs);
+        }
+        QApplication::processEvents();
+        return condition();
+    };
+
     if (KisTouchSmokeScriptRunner::isScriptScenarioSpec(scenarioTrimmed)) {
         QJsonObject script;
         QString loadError;
@@ -2020,14 +2034,35 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "actions-sheet" || normalizedScenario == "actions_sheet") {
+        bool ok = true;
+        const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
+        report.step(QStringLiteral("actions_sheet.fill_canvas_black_for_screenshot"), filledBlack);
+        if (!filledBlack) {
+            ok = false;
+        }
+
         if (QAction *action = mainWindow->actionCollection()->action("touch_actions_sheet")) {
             action->trigger();
-            finalizeSmoke(true);
+            const bool sheetVisible = waitForUiCondition(1000, [&]() {
+                QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchActionsSheet"));
+                return sheet && sheet->isVisible();
+            });
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("action_triggered"), true);
+                details.insert(QStringLiteral("sheet_visible"), sheetVisible);
+                report.step(QStringLiteral("actions_sheet.open_sheet_for_screenshot"), sheetVisible, details);
+            }
+            if (!sheetVisible) {
+                ok = false;
+            }
+            finalizeSmoke(ok);
             return;
         }
         if (QAction *action = mainWindow->actionCollection()->action("command_bar_open")) {
             action->trigger();
-            finalizeSmoke(true);
+            report.step(QStringLiteral("actions_sheet.command_bar_fallback"), true);
+            finalizeSmoke(ok);
             return;
         }
         qWarning() << "Touch smoke: action not found: touch_actions_sheet (or command_bar_open fallback)";
@@ -3727,9 +3762,30 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
     if (normalizedScenario == "quickmenu-setup" || normalizedScenario == "quickmenu_setup" ||
         normalizedScenario == "quickmenu-config" || normalizedScenario == "quickmenu_config") {
+        bool ok = true;
+        const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
+        report.step(QStringLiteral("quickmenu_setup.fill_canvas_black_for_screenshot"), filledBlack);
+        if (!filledBlack) {
+            ok = false;
+        }
+
         if (QAction *action = mainWindow->actionCollection()->action("touch_quickmenu_configure")) {
             action->trigger();
-            finalizeSmoke(true);
+            const bool sheetVisible = waitForUiCondition(1000, [&]() {
+                QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchQuickMenuConfigSheet"));
+                return sheet && sheet->isVisible();
+            });
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("action_triggered"), true);
+                details.insert(QStringLiteral("sheet_visible"), sheetVisible);
+                report.step(QStringLiteral("quickmenu_setup.open_sheet_for_screenshot"), sheetVisible, details);
+            }
+            if (!sheetVisible) {
+                ok = false;
+            }
+
+            finalizeSmoke(ok);
             return;
         }
         qWarning() << "Touch smoke: action not found: touch_quickmenu_configure";
