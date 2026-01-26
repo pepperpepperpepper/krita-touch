@@ -1279,18 +1279,30 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "transform-tool" || normalizedScenario == "transform_tool") {
+        bool ok = true;
         KisView *view = mainWindow->activeView();
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
         const QRect bounds = image ? image->bounds() : QRect();
         const QPoint boundsCenter = bounds.center();
+
+        if (!view || !image || !dev || !bounds.isValid()) {
+            qWarning() << "Touch smoke: transform-tool missing view/image/device/bounds";
+            report.step(QStringLiteral("transform_tool.setup"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("transform_tool.setup"), true);
+
         const QPoint rightSample(bounds.left() + qRound(bounds.width() * 0.90), boundsCenter.y());
         const QVector<QPoint> samplePoints = bounds.isValid()
             ? QVector<QPoint>{boundsCenter, QPoint(boundsCenter.x() - 12, boundsCenter.y()), rightSample}
             : QVector<QPoint>{};
         const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
 
-        if (!paintStrokeForTouchSmoke(mainWindow, 4, 0.0, 0)) {
+        const bool paintedViaInput = paintStrokeForTouchSmoke(mainWindow, 4, 0.0, 0);
+        report.step(QStringLiteral("transform_tool.paint_stroke_input"), paintedViaInput);
+        if (!paintedViaInput) {
             qWarning() << "Touch smoke: could not paint via input events for transform-tool scenario";
         }
 
@@ -1299,11 +1311,21 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
-        if (image && dev && !anySampleChangedForTouchSmoke(before, after, 3)) {
+        bool painted = anySampleChangedForTouchSmoke(before, after, 3);
+        if (!painted) {
             qWarning() << "Touch smoke: transform-tool content was not painted; falling back to direct line paint";
             const QPointF imgP0(bounds.left() + bounds.width() * 0.30, bounds.center().y());
             const QPointF imgP1(bounds.left() + bounds.width() * 0.70, bounds.center().y());
             paintLineForTouchSmoke(mainWindow, imgP0, imgP1, QColor(0, 0, 0));
+            if (image) {
+                refreshImageForTouchSmoke(image);
+            }
+            const QVector<QColor> afterFallback = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+            painted = anySampleChangedForTouchSmoke(before, afterFallback, 3);
+        }
+        report.step(QStringLiteral("transform_tool.paint_content_changed"), painted);
+        if (!painted) {
+            ok = false;
         }
 
         if (image) {
@@ -1330,8 +1352,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return anySampleChangedForTouchSmoke(beforeTransform, afterTransform, 3);
         };
 
-        auto ensureTransformToolReady = [&]() -> QObject * {
-            if (!view || !view->canvasBase() || !image || !bounds.isValid()) {
+        auto ensureTransformToolReady = [&](bool *outReady) -> QObject * {
+            if (outReady) {
+                *outReady = false;
+            }
+            if (!view || !view->canvasBase()) {
                 return nullptr;
             }
 
@@ -1380,11 +1405,24 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 qWarning() << "Touch smoke: transform-tool did not become ready for touch hit-testing; transform may be a no-op";
             }
 
+            if (outReady) {
+                *outReady = ready;
+            }
             return toolObj;
         };
 
-        bool transformed = false;
-        if (QObject *toolObj = ensureTransformToolReady()) {
+        bool transformApplied = false;
+        bool readyForHitTest = false;
+        QObject *toolObj = ensureTransformToolReady(&readyForHitTest);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("tool_found"), toolObj != nullptr);
+            details.insert(QStringLiteral("touch_hittest_ready"), readyForHitTest);
+            report.step(QStringLiteral("transform_tool.tool_ready"), toolObj != nullptr, details);
+        }
+
+        bool gestureApplied = false;
+        if (toolObj) {
             const KisCoordinatesConverter *converter = view->canvasBase()->coordinatesConverter();
             const QPointF startCenterImage(bounds.center());
             const QPointF endCenterImage = startCenterImage + QPointF(bounds.width() * 0.30, 0.0);
@@ -1411,60 +1449,71 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 QMetaObject::invokeMethod(toolObj, "touchTransformGestureEnd", Qt::DirectConnection);
                 QApplication::processEvents();
                 image->waitForDone();
-                transformed = sampledPixelsChanged();
+                gestureApplied = sampledPixelsChanged();
 
-                if (!transformed) {
+                if (!gestureApplied) {
                     // Some transform paths update only an internal preview until the stroke is applied.
                     QMetaObject::invokeMethod(toolObj, "applyTransform", Qt::DirectConnection);
                     QApplication::processEvents();
                     image->waitForDone();
-                    transformed = sampledPixelsChanged();
+                    gestureApplied = sampledPixelsChanged();
                 }
             }
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("invoked_begin"), invokedBegin);
+                details.insert(QStringLiteral("began"), began);
+                report.step(QStringLiteral("transform_tool.touch_gesture_applied"), gestureApplied, details);
+            }
         }
+        transformApplied = gestureApplied;
 
-        if (!transformed) {
+        bool translationApplied = false;
+        if (!transformApplied) {
             qWarning() << "Touch smoke: transform-tool touch gesture did not modify the canvas; falling back to tool translation";
 
             // Ensure a fresh transform stroke is active for the fallback attempt.
             KoToolManager::instance()->switchToolRequested(QStringLiteral("KritaShape/KisToolBrush"));
             QApplication::processEvents();
 
-            if (QObject *toolObj = ensureTransformToolReady()) {
+            bool fallbackReady = false;
+            if (QObject *fallbackToolObj = ensureTransformToolReady(&fallbackReady)) {
                 const QPointF startCenterImage(bounds.center());
                 const QPointF endCenterImage = startCenterImage + QPointF(bounds.width() * 0.30, 0.0);
 
-                QMetaObject::invokeMethod(toolObj, "setTranslateY", Qt::DirectConnection, Q_ARG(double, endCenterImage.y()));
-                QMetaObject::invokeMethod(toolObj, "setTranslateX", Qt::DirectConnection, Q_ARG(double, endCenterImage.x()));
+                QMetaObject::invokeMethod(fallbackToolObj, "setTranslateY", Qt::DirectConnection, Q_ARG(double, endCenterImage.y()));
+                QMetaObject::invokeMethod(fallbackToolObj, "setTranslateX", Qt::DirectConnection, Q_ARG(double, endCenterImage.x()));
                 QApplication::processEvents();
                 image->waitForDone();
-                transformed = sampledPixelsChanged();
+                translationApplied = sampledPixelsChanged();
 
-                if (!transformed) {
-                    QMetaObject::invokeMethod(toolObj, "applyTransform", Qt::DirectConnection);
+                if (!translationApplied) {
+                    QMetaObject::invokeMethod(fallbackToolObj, "applyTransform", Qt::DirectConnection);
                     QApplication::processEvents();
                     image->waitForDone();
-                    transformed = sampledPixelsChanged();
+                    translationApplied = sampledPixelsChanged();
                 }
             }
+            report.step(QStringLiteral("transform_tool.fallback_translation_applied"), translationApplied);
         }
+        transformApplied = transformApplied || translationApplied;
 
-        if (!transformed) {
-            qWarning() << "Touch smoke: transform-tool transform did not modify sampled pixels; falling back to direct paint";
-            const QPointF imgP0(bounds.left() + bounds.width() * 0.80, boundsCenter.y());
-            const QPointF imgP1(bounds.left() + bounds.width() * 0.95, boundsCenter.y());
-            paintLineForTouchSmoke(mainWindow, imgP0, imgP1, QColor(0, 0, 0));
-            transformed = sampledPixelsChanged();
+        report.step(QStringLiteral("transform_tool.transform_modified_projection"), transformApplied);
+
+#ifndef Q_OS_ANDROID
+        if (!transformApplied) {
+            ok = false;
         }
+#endif
 
-        if (!transformed) {
-            qWarning() << "Touch smoke: transform-tool final fallback did not modify sampled pixels; screenshot-only coverage remains";
+        if (!transformApplied) {
+            qWarning() << "Touch smoke: transform-tool transform did not modify sampled pixels; leaving as screenshot-only for this run";
         }
 
         // Restore the transform tool UI for the scenario screenshot.
         KoToolManager::instance()->switchToolRequested(QStringLiteral("KisToolTransform"));
         showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
-        finalizeSmoke(true);
+        finalizeSmoke(ok);
         return;
     }
 
