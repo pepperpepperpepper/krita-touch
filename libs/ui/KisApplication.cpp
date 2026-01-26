@@ -614,8 +614,49 @@ bool paintRectStrokeForTouchSmoke(KisMainWindow *mainWindow, const QRectF &imgRe
     QPointF wLast = imgToWidget(tl);
     QPointF gLast = canvasWidget->mapToGlobal(wLast.toPoint());
 
+#ifdef Q_OS_ANDROID
+    static QTouchDevice *device = nullptr;
+    if (!device) {
+        device = new QTouchDevice();
+        device->setType(QTouchDevice::TouchScreen);
+        device->setMaximumTouchPoints(10);
+    }
+
+    canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+    const QPointF wStart = wLast;
+    const QPointF gStart = gLast;
+
+    auto sendTouchPoint = [&](QEvent::Type type,
+                              Qt::TouchPointState state,
+                              const QPointF &wPos,
+                              const QPointF &gPos,
+                              const QPointF &wPrev,
+                              const QPointF &gPrev,
+                              qreal pressure) {
+        QTouchEvent::TouchPoint tp(0);
+        tp.setState(state);
+        tp.setPos(wPos);
+        tp.setScreenPos(gPos);
+        tp.setStartPos(wStart);
+        tp.setStartScreenPos(gStart);
+        tp.setLastPos(wPrev);
+        tp.setLastScreenPos(gPrev);
+        tp.setPressure(pressure);
+
+        QList<QTouchEvent::TouchPoint> points;
+        points.append(tp);
+
+        QTouchEvent ev(type, device, Qt::NoModifier, Qt::TouchPointStates(state), points);
+        QApplication::sendEvent(canvasWidget, &ev);
+    };
+
+    sendTouchPoint(QEvent::TouchBegin, Qt::TouchPointPressed, wLast, gLast, wLast, gLast, 1.0);
+    QApplication::processEvents();
+#else
     QMouseEvent press(QEvent::MouseButtonPress, wLast, gLast, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     QApplication::sendEvent(canvasWidget, &press);
+#endif
 
     auto lerpEdge = [&](const QPointF &a, const QPointF &b) {
         for (int i = 1; i <= steps; i++) {
@@ -623,8 +664,12 @@ bool paintRectStrokeForTouchSmoke(KisMainWindow *mainWindow, const QRectF &imgRe
             const QPointF imgP = a + t * (b - a);
             const QPointF wP = imgToWidget(imgP);
             const QPointF gP = canvasWidget->mapToGlobal(wP.toPoint());
+#ifdef Q_OS_ANDROID
+            sendTouchPoint(QEvent::TouchUpdate, Qt::TouchPointMoved, wP, gP, wLast, gLast, 1.0);
+#else
             QMouseEvent move(QEvent::MouseMove, wP, gP, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
             QApplication::sendEvent(canvasWidget, &move);
+#endif
             wLast = wP;
             gLast = gP;
         }
@@ -639,8 +684,13 @@ bool paintRectStrokeForTouchSmoke(KisMainWindow *mainWindow, const QRectF &imgRe
         QThread::msleep(holdMsAtEnd);
     }
 
+#ifdef Q_OS_ANDROID
+    sendTouchPoint(QEvent::TouchEnd, Qt::TouchPointReleased, wLast, gLast, wLast, gLast, 0.0);
+    QApplication::processEvents();
+#else
     QMouseEvent release(QEvent::MouseButtonRelease, wLast, gLast, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
     QApplication::sendEvent(canvasWidget, &release);
+#endif
 
     image->waitForDone();
     return true;
@@ -2335,9 +2385,21 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     }
 
     if (normalizedScenario == "quickshape" || normalizedScenario == "quick-shape" || normalizedScenario == "quick_shape") {
+        bool ok = true;
+        KisView *view = mainWindow->activeView();
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
         const QRect bounds = image ? image->bounds() : QRect();
+
+        QWidget *canvasWidget = view && view->canvasBase() ? view->canvasBase()->canvasWidget() : nullptr;
+        if (!view || !canvasWidget || !image || !dev || !bounds.isValid()) {
+            qWarning() << "Touch smoke: quickshape missing view/image/device/bounds/canvas";
+            report.step(QStringLiteral("quickshape.setup"), false);
+            finalizeSmoke(false);
+            return;
+        }
+        report.step(QStringLiteral("quickshape.setup"), true);
+
         const qreal w = bounds.isValid() ? qreal(bounds.width()) : 0.0;
         const qreal h = bounds.isValid() ? qreal(bounds.height()) : 0.0;
         const QRectF targetRect(bounds.left() + w * 0.25, bounds.top() + h * 0.25, w * 0.50, h * 0.50);
@@ -2357,7 +2419,9 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             : QVector<QPoint>{};
         const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
 
-        if (!paintRectStrokeForTouchSmoke(mainWindow, targetRect, 12, 450)) {
+        const bool paintedViaInput = paintRectStrokeForTouchSmoke(mainWindow, targetRect, 12, 450);
+        report.step(QStringLiteral("quickshape.paint_stroke_input"), paintedViaInput);
+        if (!paintedViaInput) {
             qWarning() << "Touch smoke: could not paint via input events for quickshape";
         }
 
@@ -2366,11 +2430,29 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
-        if (image && dev && !anySampleChangedForTouchSmoke(before, after, 3)) {
+        bool contentChanged = anySampleChangedForTouchSmoke(before, after, 3);
+        if (!contentChanged) {
             qWarning() << "Touch smoke: quickshape content was not painted; falling back to direct rect paint";
             paintRectForTouchSmoke(mainWindow, targetRect, QColor(0, 0, 0));
+            if (image) {
+                refreshImageForTouchSmoke(image);
+            }
+            const QVector<QColor> afterFallback = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+            contentChanged = anySampleChangedForTouchSmoke(before, afterFallback, 3);
         }
-        finalizeSmoke(true);
+        report.step(QStringLiteral("quickshape.paint_content_changed"), contentChanged);
+
+        const bool popupVisible = waitForUiCondition(2000, [&]() {
+            QWidget *popup = canvasWidget->findChild<QWidget *>(QStringLiteral("kisTouchQuickShapeEditPopup"));
+            return popup && popup->isVisible();
+        });
+        report.step(QStringLiteral("quickshape.edit_popup_visible"), popupVisible);
+
+#ifndef Q_OS_ANDROID
+        ok = ok && contentChanged && popupVisible;
+#endif
+
+        finalizeSmoke(ok);
         return;
     }
 
