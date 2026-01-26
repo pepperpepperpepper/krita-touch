@@ -44,6 +44,7 @@
 #include <QElapsedTimer>
 #include <QWidget>
 #include <QDockWidget>
+#include <QToolBar>
 #include <QTreeView>
 #include <QItemSelectionModel>
 #include <QMenu>
@@ -919,15 +920,44 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return;
     }
 
-    if (normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar") {
-        // Just showing the main window is enough; Touch Mode is enabled above and will
-        // create any touch chrome (like the top bar toolbar) via KisConfigNotifier.
-        finalizeSmoke(true);
-        return;
-    }
+    const bool isTopBarScenario = normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar";
+    if (isTopBarScenario || useLightTouchTheme) {
+        bool ok = true;
 
-    if (useLightTouchTheme) {
-        finalizeSmoke(true);
+        const QString expectedThemeName = useLightTouchTheme ? QStringLiteral("Touch Procreate Light") : QStringLiteral("Touch Procreate Dark");
+        {
+            const QString actualThemeName = KisConfig(true).touchThemeName();
+            const bool themeOk = actualThemeName == expectedThemeName;
+            QJsonObject details;
+            details.insert(QStringLiteral("expected"), expectedThemeName);
+            details.insert(QStringLiteral("actual"), actualThemeName);
+            report.step(QStringLiteral("top_bar.touch_theme"), themeOk, details);
+        }
+
+        QToolBar *touchTopBar = mainWindow->findChild<QToolBar *>(QStringLiteral("touchTopBar"));
+        const bool foundTopBar = touchTopBar != nullptr;
+        report.step(QStringLiteral("top_bar.find_touch_top_bar"), foundTopBar);
+        ok &= foundTopBar;
+
+        const bool visibleTopBar = waitForUiCondition(5000, [&]() {
+            return touchTopBar && touchTopBar->isVisible();
+        });
+        report.step(QStringLiteral("top_bar.touch_top_bar_visible"), visibleTopBar);
+        ok &= visibleTopBar;
+
+        if (touchTopBar) {
+            const QString styleSheet = touchTopBar->styleSheet();
+            const QString expectedBackground = useLightTouchTheme
+                ? QStringLiteral("background-color: rgba(245, 245, 245, 245);")
+                : QStringLiteral("background-color: rgba(30, 30, 30, 245);");
+            const bool styleOk = styleSheet.contains(expectedBackground);
+            QJsonObject details;
+            details.insert(QStringLiteral("expected_background"), expectedBackground);
+            details.insert(QStringLiteral("matches_expected"), styleOk);
+            report.step(QStringLiteral("top_bar.touch_top_bar_style"), styleOk, details);
+        }
+
+        finalizeSmoke(ok);
         return;
     }
 
