@@ -1979,7 +1979,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             details.insert(QStringLiteral("has_row"), hasRowForScreenshot);
             report.step(QStringLiteral("layers_panel.android.has_row_for_screenshot"), hasRowForScreenshot, details);
         }
-        finalizeSmoke(true);
+        finalizeSmoke(hasRowForScreenshot);
         return;
 #endif
 
@@ -2149,6 +2149,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             qWarning() << "Touch smoke: layer-options failed to fill canvas black for screenshot";
         }
 
+        bool ok = filledBlack;
+
 #ifdef Q_OS_ANDROID
         // On Android keep this as a screenshot smoke: trigger the layer options sheet directly.
         bool opened = false;
@@ -2182,12 +2184,13 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QJsonObject details;
             details.insert(QStringLiteral("action_triggered"), opened);
             details.insert(QStringLiteral("sheet_visible"), optionsSheet && optionsSheet->isVisible());
-            report.step(QStringLiteral("layer_options.android.open_sheet_for_screenshot"),
-                        opened && optionsSheet && optionsSheet->isVisible(),
-                        details);
+            const bool sheetVisible = optionsSheet && optionsSheet->isVisible();
+            const bool openedOk = opened && sheetVisible;
+            report.step(QStringLiteral("layer_options.android.open_sheet_for_screenshot"), openedOk, details);
+            ok = ok && openedOk;
         }
 
-        finalizeSmoke(true);
+        finalizeSmoke(ok);
         return;
 #endif
 
@@ -2271,14 +2274,19 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         QApplication::processEvents();
 
         QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+        bool fallbackUsed = false;
         if (!sheet || !sheet->isVisible()) {
             qWarning() << "Touch smoke: layer-options swipe-left did not show options sheet; falling back to action trigger";
             if (QAction *action = mainWindow->actionCollection()->action("touch_layer_options_sheet")) {
                 action->trigger();
                 QApplication::processEvents();
                 sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+                fallbackUsed = true;
             } else if (QAction *action = mainWindow->actionCollection()->action("layer_properties")) {
                 action->trigger();
+                QApplication::processEvents();
+                sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+                fallbackUsed = true;
             } else {
                 qWarning() << "Touch smoke: action not found: touch_layer_options_sheet (or layer_properties fallback)";
                 finalizeSmoke(false);
@@ -2286,7 +2294,18 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             }
         }
 
-        finalizeSmoke(true);
+        const bool sheetVisible = waitForUiCondition(2000, [&]() {
+            QWidget *s = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+            return s && s->isVisible();
+        });
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("sheet_visible"), sheetVisible);
+            details.insert(QStringLiteral("fallback_used"), fallbackUsed);
+            report.step(QStringLiteral("layer_options.open_sheet_for_screenshot"), sheetVisible, details);
+        }
+        ok = ok && sheetVisible;
+        finalizeSmoke(ok);
         return;
     }
 
