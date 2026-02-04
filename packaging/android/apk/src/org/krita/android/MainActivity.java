@@ -41,9 +41,20 @@ public class MainActivity extends QtActivity {
         // we have to do this before loading main()
         Intent i = getIntent();
         String uri = getUri(i);
+        String touchSmokeScenario = (i != null) ? i.getStringExtra("KRITA_TOUCH_SMOKE") : null;
+        StringBuilder appArgs = new StringBuilder();
+        if (touchSmokeScenario != null && !touchSmokeScenario.isEmpty()) {
+            appArgs.append("--touch-smoke=").append(touchSmokeScenario);
+        }
         if (uri != null) {
-            // this will be passed as a command line argument to main()
-            i.putExtra("applicationArguments", uri);
+            if (appArgs.length() > 0) {
+                appArgs.append(" ");
+            }
+            // This will be passed as a command line argument to main().
+            appArgs.append(uri);
+        }
+        if (appArgs.length() > 0) {
+            i.putExtra("applicationArguments", appArgs.toString());
         }
 
         SDLAudioManager.initialize();

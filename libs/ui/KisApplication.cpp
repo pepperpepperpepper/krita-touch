@@ -26,7 +26,12 @@
 #include <QStandardPaths>
 #include <QDesktopWidget>
 #include <QDir>
+#include <QDockWidget>
+#include <QElapsedTimer>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLocale>
 #include <QMessageBox>
 #include <QProcessEnvironment>
@@ -153,6 +158,127 @@ private:
 };
 
 }
+
+namespace {
+
+class TouchSmokeReport
+{
+public:
+    explicit TouchSmokeReport(const QString &scenario)
+        : m_scenario(scenario)
+    {
+        m_timer.start();
+    }
+
+    void step(const QString &name, bool ok, const QJsonObject &details = QJsonObject())
+    {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("name"), name);
+        obj.insert(QStringLiteral("ok"), ok);
+        if (!details.isEmpty()) {
+            obj.insert(QStringLiteral("details"), details);
+        }
+        m_steps.append(obj);
+    }
+
+    QByteArray toJson(const QString &status) const
+    {
+        QJsonObject root;
+        root.insert(QStringLiteral("scenario"), m_scenario);
+        root.insert(QStringLiteral("status"), status);
+        root.insert(QStringLiteral("duration_ms"), qint64(m_timer.elapsed()));
+        root.insert(QStringLiteral("steps"), m_steps);
+        return QJsonDocument(root).toJson(QJsonDocument::Compact);
+    }
+
+private:
+    QString m_scenario;
+    QElapsedTimer m_timer;
+    QJsonArray m_steps;
+};
+
+void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
+{
+    if (!mainWindow) {
+        return;
+    }
+
+    const QString scenarioTrimmed = scenario.trimmed();
+    const QString normalizedScenario = scenarioTrimmed.toLower();
+    if (normalizedScenario.isEmpty()) {
+        return;
+    }
+
+    TouchSmokeReport report(normalizedScenario);
+
+    auto finalizeSmoke = [&](bool ok) {
+        // Give Qt a moment to settle widget creation + repaint so headless screenshots
+        // capture the intended UI state (especially on Android).
+        QApplication::processEvents();
+        QThread::msleep(200);
+        QApplication::processEvents();
+
+        const QString status = ok ? QStringLiteral("OK") : QStringLiteral("ERROR");
+        const QByteArray json = report.toJson(status);
+
+        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_DONE scenario=%1 status=%2").arg(normalizedScenario, status);
+        qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_JSON %1").arg(QString::fromUtf8(json));
+    };
+
+    mainWindow->show();
+    mainWindow->raise();
+    mainWindow->activateWindow();
+    QApplication::processEvents();
+
+    if (normalizedScenario == QLatin1String("touch-sidebar") || normalizedScenario == QLatin1String("touch_sidebar") ||
+        normalizedScenario == QLatin1String("touchdocker") || normalizedScenario == QLatin1String("touch_docker") ||
+        normalizedScenario == QLatin1String("touch-docker")) {
+        const QString dockerId = QStringLiteral("TouchDocker");
+        QDockWidget *dock = mainWindow->dockWidget(dockerId);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("docker_id"), dockerId);
+            report.step(QStringLiteral("touch_sidebar.docker_found"), dock != nullptr, details);
+        }
+        if (!dock) {
+            finalizeSmoke(false);
+            return;
+        }
+
+        dock->show();
+        dock->raise();
+        QApplication::processEvents();
+
+        bool visible = false;
+        for (int i = 0; i < 100; ++i) {
+            QApplication::processEvents();
+            if (dock->isVisible()) {
+                visible = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("visible"), dock->isVisible());
+            details.insert(QStringLiteral("floating"), dock->isFloating());
+            report.step(QStringLiteral("touch_sidebar.docker_visible"), dock->isVisible(), details);
+        }
+
+        finalizeSmoke(visible);
+        return;
+    }
+
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("scenario"), normalizedScenario);
+        report.step(QStringLiteral("touch_smoke.unknown_scenario"), false, details);
+    }
+    finalizeSmoke(false);
+}
+
+} // namespace
 
 /**
  * We cannot make the recursion info be a part of KisApplication,
@@ -753,6 +879,17 @@ bool KisApplication::start(const KisApplicationArguments &args)
         Q_FOREACH(QString fileName, d->earlyFileOpenEvents) {
             d->mainWindow->openDocument(fileName, QFlags<KisMainWindow::OpenFlag>());
         }
+    }
+
+    if (d->mainWindow && !args.touchSmokeScenario().isEmpty()) {
+        const QString scenario = args.touchSmokeScenario();
+        const QPointer<KisMainWindow> mainWindow = d->mainWindow;
+        QTimer::singleShot(0, this, [scenario, mainWindow]() {
+            if (!mainWindow) {
+                return;
+            }
+            runTouchSmokeScenario(scenario, mainWindow);
+        });
     }
 
     // not calling this before since the program will quit there.

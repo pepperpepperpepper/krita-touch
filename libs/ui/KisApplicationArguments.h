@@ -37,6 +37,7 @@ public:
     QString windowLayout() const;
     QString session() const;
     QString fileLayer() const;
+    QString touchSmokeScenario() const;
     bool canvasOnly() const;
     bool noSplash() const;
     bool fullScreen() const;
