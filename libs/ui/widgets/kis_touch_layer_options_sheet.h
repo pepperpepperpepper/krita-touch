@@ -14,6 +14,7 @@
 
 class KisKActionCollection;
 class KisSliderSpinBox;
+class QPaintEvent;
 class QToolButton;
 
 /**
@@ -31,6 +32,9 @@ public:
 
     void setActionCollection(KisKActionCollection *actionCollection);
     void openAtGlobalPos(const QPoint &globalPos);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
 
 private:
     void rebuildUi();

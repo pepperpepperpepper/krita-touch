@@ -85,6 +85,7 @@
 #include <kis_touch_quickmenu_config_sheet.h>
 #include <kis_touch_layer_options_sheet.h>
 #include <kis_touch_copypaste_overlay.h>
+#include "widgets/kis_touch_ui_metrics.h"
 #include <KoDocumentInfoDlg.h>
 #include <KoDocumentInfo.h>
 #include <KoFileDialog.h>
@@ -163,9 +164,156 @@
 #include "KisToolBarStateModel.h"
 #include <config-qmdiarea-always-show-subwindow-title.h>
 
+#include <algorithm>
 #include <mutex>
 
 namespace {
+
+bool isExpandingSpacerWidget(const QWidget *widget)
+{
+    if (!widget) {
+        return false;
+    }
+
+    const QSizePolicy policy = widget->sizePolicy();
+    return policy.horizontalPolicy() == QSizePolicy::Expanding;
+}
+
+int countTouchTopBarButtons(QToolBar *toolbar)
+{
+    if (!toolbar) {
+        return 0;
+    }
+
+    int count = 0;
+    const QList<QAction *> actions = toolbar->actions();
+    for (QAction *action : actions) {
+        if (!action || action->isSeparator()) {
+            continue;
+        }
+
+        if (QWidget *w = toolbar->widgetForAction(action)) {
+            if (isExpandingSpacerWidget(w)) {
+                continue;
+            }
+        }
+
+        count++;
+    }
+    return count;
+}
+
+QString touchTopBarStyleSheet(bool themeIsLight,
+                             int spacingPx,
+                             int barPaddingPx,
+                             int toolButtonRadiusPx,
+                             int toolButtonPaddingPx)
+{
+    return themeIsLight
+        ? QStringLiteral(
+              "QToolBar#touchTopBar {"
+              "  background-color: rgba(245, 245, 245, 245);"
+              "  border: 0px;"
+              "  spacing: %1px;"
+              "  padding: %2px;"
+              "}"
+              "QToolButton {"
+              "  border-radius: %3px;"
+              "  padding: %4px;"
+              "}"
+              "QToolButton:pressed {"
+              "  background-color: rgba(0, 0, 0, 22);"
+              "}")
+              .arg(spacingPx)
+              .arg(barPaddingPx)
+              .arg(toolButtonRadiusPx)
+              .arg(toolButtonPaddingPx)
+        : QStringLiteral(
+              "QToolBar#touchTopBar {"
+              "  background-color: rgba(30, 30, 30, 245);"
+              "  border: 0px;"
+              "  spacing: %1px;"
+              "  padding: %2px;"
+              "}"
+              "QToolButton {"
+              "  border-radius: %3px;"
+              "  padding: %4px;"
+              "}"
+              "QToolButton:pressed {"
+              "  background-color: rgba(255, 255, 255, 22);"
+              "}")
+              .arg(spacingPx)
+              .arg(barPaddingPx)
+              .arg(toolButtonRadiusPx)
+              .arg(toolButtonPaddingPx);
+}
+
+void updateTouchTopBarChrome(QToolBar *toolbar, const QScreen *screen, int availableWidthPx, bool themeIsLight)
+{
+    if (!toolbar) {
+        return;
+    }
+
+    const qreal touchScale = KisTouchUiMetrics::scaleForScreen(screen);
+
+    // Baseline metrics (tablet-oriented). We'll adjust down if needed to fit
+    // all buttons into the available width.
+    int iconPx = KisTouchUiMetrics::px(40.0, touchScale, 18);
+    int spacingPx = KisTouchUiMetrics::px(10.0, touchScale, 0);
+    int barPaddingPx = KisTouchUiMetrics::px(6.0, touchScale, 0);
+    int toolButtonPaddingPx = KisTouchUiMetrics::px(8.0, touchScale, 0);
+    const int toolButtonRadiusPx = KisTouchUiMetrics::px(12.0, touchScale, 4);
+
+    const int buttonCount = countTouchTopBarButtons(toolbar);
+    if (availableWidthPx > 0 && buttonCount > 0) {
+        auto requiredWidthFor = [&](int iconCandidatePx,
+                                    int spacingCandidatePx,
+                                    int barPaddingCandidatePx,
+                                    int toolButtonPaddingCandidatePx) -> int {
+            const int perButtonWidth = iconCandidatePx + 2 * toolButtonPaddingCandidatePx;
+            const int gaps = qMax(0, buttonCount - 1);
+            return 2 * barPaddingCandidatePx + buttonCount * perButtonWidth + gaps * spacingCandidatePx;
+        };
+
+        // Try to make everything fit by shrinking icon size first, then spacing and padding.
+        // (In the worst case, QToolBar will fall back to its own overflow behavior.)
+        if (requiredWidthFor(iconPx, spacingPx, barPaddingPx, toolButtonPaddingPx) > availableWidthPx) {
+            const int gaps = qMax(0, buttonCount - 1);
+            const int budgetForIcons =
+                availableWidthPx - 2 * barPaddingPx - gaps * spacingPx - buttonCount * 2 * toolButtonPaddingPx;
+            const int iconFitPx = budgetForIcons / buttonCount;
+            iconPx = std::clamp(iconFitPx, 16, iconPx);
+        }
+
+        if (requiredWidthFor(iconPx, spacingPx, barPaddingPx, toolButtonPaddingPx) > availableWidthPx
+            && buttonCount > 1) {
+            const int budgetForSpacing =
+                availableWidthPx - 2 * barPaddingPx - buttonCount * (iconPx + 2 * toolButtonPaddingPx);
+            const int spacingFitPx = budgetForSpacing / (buttonCount - 1);
+            spacingPx = std::clamp(spacingFitPx, 0, spacingPx);
+        }
+
+        if (requiredWidthFor(iconPx, spacingPx, barPaddingPx, toolButtonPaddingPx) > availableWidthPx) {
+            const int gaps = qMax(0, buttonCount - 1);
+            const int budgetForPadding =
+                availableWidthPx - 2 * barPaddingPx - gaps * spacingPx - buttonCount * iconPx;
+            const int paddingFitPx = budgetForPadding / (2 * buttonCount);
+            toolButtonPaddingPx = std::clamp(paddingFitPx, 0, toolButtonPaddingPx);
+        }
+
+        // Recompute icon one last time in case spacing/padding changed.
+        if (requiredWidthFor(iconPx, spacingPx, barPaddingPx, toolButtonPaddingPx) > availableWidthPx) {
+            const int gaps = qMax(0, buttonCount - 1);
+            const int budgetForIcons =
+                availableWidthPx - 2 * barPaddingPx - gaps * spacingPx - buttonCount * 2 * toolButtonPaddingPx;
+            const int iconFitPx = budgetForIcons / buttonCount;
+            iconPx = std::clamp(iconFitPx, 16, iconPx);
+        }
+    }
+
+    toolbar->setIconSize(QSize(iconPx, iconPx));
+    toolbar->setStyleSheet(touchTopBarStyleSheet(themeIsLight, spacingPx, barPaddingPx, toolButtonRadiusPx, toolButtonPaddingPx));
+}
 
 void applyTouchMdiSubWindowChrome(QMdiSubWindow *subWindow, bool touch)
 {
@@ -1767,6 +1915,17 @@ void KisMainWindow::resizeEvent(QResizeEvent * e)
 {
     d->windowSizeDirty = true;
     KXmlGuiWindow::resizeEvent(e);
+
+    if (d->touchModeActive && d->touchTopBar && d->touchTopBar->isVisible()) {
+        const QString desiredTheme = KisConfig(true).touchThemeName();
+        const QString fallbackTheme = QStringLiteral("Touch Procreate Dark");
+        const QString themeName = desiredTheme.isEmpty() ? fallbackTheme : desiredTheme;
+        const bool themeIsLight = themeName == QLatin1String("Touch Procreate Light");
+
+        const QScreen *touchScreen = screen() ? screen() : QApplication::primaryScreen();
+        const int availableWidthPx = d->touchTopBar->width() > 0 ? d->touchTopBar->width() : width();
+        updateTouchTopBarChrome(d->touchTopBar, touchScreen, availableWidthPx, themeIsLight);
+    }
 }
 
 
@@ -3379,13 +3538,14 @@ void KisMainWindow::applyTouchMode(bool enabled)
         const QString themeName = desiredTheme.isEmpty() ? fallbackTheme : desiredTheme;
         const bool themeIsLight = themeName == QLatin1String("Touch Procreate Light");
 
+        const QScreen *touchScreen = screen() ? screen() : QApplication::primaryScreen();
+
         if (!d->touchTopBar) {
             d->touchTopBar = new QToolBar(i18n("Touch Top Bar"), this);
             d->touchTopBar->setObjectName(QStringLiteral("touchTopBar"));
             d->touchTopBar->setMovable(false);
             d->touchTopBar->setFloatable(false);
             d->touchTopBar->setContextMenuPolicy(Qt::PreventContextMenu);
-            d->touchTopBar->setIconSize(QSize(40, 40));
             d->touchTopBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
             addToolBar(Qt::TopToolBarArea, d->touchTopBar);
 
@@ -3437,36 +3597,10 @@ void KisMainWindow::applyTouchMode(bool enabled)
         }
 
         // The top bar uses a custom style sheet instead of full widget theming so it is
-        // stable across platforms. Update it even when toggling Touch themes at runtime.
-        d->touchTopBar->setStyleSheet(themeIsLight
-            ? QStringLiteral(
-                  "QToolBar#touchTopBar {"
-                  "  background-color: rgba(245, 245, 245, 245);"
-                  "  border: 0px;"
-                  "  spacing: 10px;"
-                  "  padding: 6px;"
-                  "}"
-                  "QToolButton {"
-                  "  border-radius: 12px;"
-                  "  padding: 8px;"
-                  "}"
-                  "QToolButton:pressed {"
-                  "  background-color: rgba(0, 0, 0, 22);"
-                  "}")
-            : QStringLiteral(
-                  "QToolBar#touchTopBar {"
-                  "  background-color: rgba(30, 30, 30, 245);"
-                  "  border: 0px;"
-                  "  spacing: 10px;"
-                  "  padding: 6px;"
-                  "}"
-                  "QToolButton {"
-                  "  border-radius: 12px;"
-                  "  padding: 8px;"
-                  "}"
-                  "QToolButton:pressed {"
-                  "  background-color: rgba(255, 255, 255, 22);"
-                  "}"));
+        // stable across platforms. Update it even when toggling Touch themes at runtime,
+        // and make sure it fits the current window width (phones / split-screen).
+        const int availableWidthPx = d->touchTopBar && d->touchTopBar->width() > 0 ? d->touchTopBar->width() : width();
+        updateTouchTopBarChrome(d->touchTopBar, touchScreen, availableWidthPx, themeIsLight);
 
         d->touchTopBar->show();
 

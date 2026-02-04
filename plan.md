@@ -47,7 +47,7 @@ Status legend:
 Current focus (prioritized): **Android tablet smoke + device validation**
 
 - [x] **Infra** — Android tablet smoke suite on Genymotion (Nexus 10): `./bin/krita-gmsaas-smoke-touch` runs the full touch batch end-to-end (incl. `modify` + `top-bar-light`).
-- [ ] **Infra** — Touch smoke test architecture v2 *(in progress)*: evolve `--touch-smoke` from “stable screenshots” into **assertive, cross-platform tests** (Linux Xvfb + Android/Genymotion) with reusable primitives + machine-readable results (not just pixels/PNG diffs).
+- [x] **Infra** — Touch smoke test architecture v2: evolve `--touch-smoke` from “stable screenshots” into **assertive, cross-platform tests** (Linux Xvfb + Android/Genymotion) with reusable primitives + machine-readable results (not just pixels/PNG diffs).
 - [x] **Infra** — UI smoke artifacts: every scenario run must produce a screenshot, and we should generate a shareable `index.html` gallery that embeds/links all screenshots (Linux + Android) and upload it via `wtf-upload` (in `$PATH`).
 - [x] **P0** — Transform parity v1: pinch/rotate routing works reliably (inside transform box → transform; outside → canvas) on X11 + Android. *(Manual device validation tracked under Meta.)*
 - [x] Smoke: extend `--touch-smoke=transform-tool` to apply a deterministic transform gesture and verify pixels change (with a safe fallback).
@@ -55,7 +55,7 @@ Current focus (prioritized): **Android tablet smoke + device validation**
 - [x] **P1** — ColorDrop v1: drag-fill threshold adjust UI (overlay) + persist chosen threshold to Fill Tool settings.
 - [x] **P1** — Layers panel gestures v1: swipe left → Layer Options sheet; swipe right → multi-select; hold visibility icon → solo visibility.
 - [ ] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
-  - [ ] Document Linux touchscreen device + driver stack (X11): panel model, resolution, input device name.
+  - [ ] Document Linux touchscreen device + driver stack (X11) (in progress): panel model, resolution, input device name(s).
     - Use `touch-infra/collect-validation-device-info.sh --linux-x11` and paste results into **Validation devices** below.
   - [x] Document Android tablet validation device (CI): Genymotion Cloud recipe `krita_tablet_nexus10_api35` (Android 15 / API 35 / 2560×1600 / dpi 320 / arm64). *(No stylus; emulator.)*
   - [ ] Run manual acceptance: Transform parity v1 (P0.3).
@@ -75,6 +75,18 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑01‑30**:
+  - UI: fixed “disabled-looking” / overly translucent touch sheets by painting an opaque sheet background + border in `paintEvent()` (avoid QSS background paint quirks on Android).
+  - Smoke: added a deterministic `.sheet_contrast` assertion (min background alpha + min bg luma + button-vs-bg luma delta) for `actions-sheet`, `gesture-controls`, `layer-options`, `quickmenu-setup`.
+  - Meta: improved `touch-infra/collect-validation-device-info.sh --linux-x11` to print `/proc/bus/input/devices` blocks for detected touchscreen/tablet event nodes (avoid missing devices due to truncation).
+  - Validation: Linux Xvfb sheet-contrast smoke OK: `krita-docker-setup/persistent/smoke-run-20260130-105715-linux-sheet-contrast`.
+  - Validation: Android (Genymotion Nexus 10 recipe) sheet-contrast smoke OK: `krita-docker-setup/persistent/smoke-run-20260130-111231-android-sheet-contrast`.
+- **2026‑01‑29**:
+  - Infra: refactored fork-only touch smoke script runner to keep files ≤1100 LOC (no behavior changes): `libs/ui/KisTouchSmokeScriptRunner*` (commit `e4f63a1eb7`).
+  - Infra: reduced flaky DONE-marker timeouts by enforcing a 60s minimum wait for `top-bar` and `top-bar-light` in `krita-docker-setup/bin/krita-xvfb-smoke-touch`.
+  - Validation: Linux Xvfb `top-bar` + `top-bar-light` scenarios OK with default runner wait: `krita-docker-setup/persistent/smoke-touch-topbar-defaultwait-20260129-061349`.
+  - Meta: ran `touch-infra/collect-validation-device-info.sh --linux-x11` (in sandbox/tty; DISPLAY unset) and pasted the output into the plan; rerun on the real X11 touchscreen host for accurate panel/input names.
+  - Meta: improved `touch-infra/collect-validation-device-info.sh --linux-x11` to include sysfs DRM + EDID decode and udev touchscreen/tablet device summaries (still rerun on the real X11 touchscreen host for meaningful panel/input names).
 - **2026‑01‑25**:
   - Infra: touch-smoke scripts now support **touch hold** overlay assertions (`touch.hold_wait_overlay_visible_with_fallback`, `touch.hold_overlay_no_change`); added script `quickmenu-hold-gating` and wired it into both the Linux and Genymotion smoke batches.
   - Infra: touch-smoke script runner now supports tool-proxy stroke ops (`tool.stroke_path_wait_pixel_alpha_range`, `tool.stroke_path_pixel_alpha_no_change`) plus optional Android fallback paint rects for deterministic CI when synthetic input doesn’t paint.
@@ -171,8 +183,118 @@ This section is the canonical record of the primary touch devices used for manua
 
 Collected output (paste from `touch-infra/collect-validation-device-info.sh --linux-x11`):
 
+Note: the generator outputs Markdown. Paste it verbatim below.
+
+*(Last capture: sandbox container; DISPLAY unset — rerun on the real X11 touchscreen host for accurate panel/input names.)*
+
+### Validation device info (generated)
+
+- Collected at: 2026-01-30T17:11:41+00:00
+- Host: sandbox-server
+- User: arch
+- Kernel: Linux 6.18.6-arch1-1 x86_64 GNU/Linux
+- Session: `XDG_SESSION_TYPE=tty`
+- Desktop: `XDG_CURRENT_DESKTOP=unknown`
+- Display: `DISPLAY=<unset>`
+- OS: Arch Linux
+
+### Linux touchscreen (X11)
+
+Fill these in (manual):
+- Panel model:
+- Resolution:
+- Input device name(s):
+- Driver stack (X11):
+- Notes:
+
+#### `xrandr --listmonitors`
+(skipped: xrandr not found or DISPLAY unset)
+
+#### `xinput list`
+(skipped: xinput not found or DISPLAY unset)
+
+#### `DRM connectors (sysfs: /sys/class/drm)`
 ```text
-<paste here>
+(no connected DRM connectors detected under /sys/class/drm)
+```
+
+#### `EDID decode (sysfs: /sys/class/drm/*/edid)`
+```text
+(no EDID blobs found under connected DRM connectors)
+```
+
+#### `ls -l /dev/input/by-id and /dev/input/by-path`
+```text
+(no /dev/input/by-id)
+
+/dev/input/by-path:
+total 0
+lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-0-event-kbd -> ../event2
+lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-1-event-mouse -> ../event4
+lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-1-mouse -> ../mouse0
+lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-pcspkr-event-spkr -> ../event3
+```
+
+#### `udevadm info (touchscreen/tablet devices)`
+```text
+(no touchscreen/tablet devices detected via udev properties)
+```
+
+#### `/proc/bus/input/devices`
+```text
+I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+N: Name="Power Button"
+P: Phys=LNXPWRBN/button/input0
+S: Sysfs=/devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+U: Uniq=
+H: Handlers=kbd event0 
+B: PROP=0
+B: EV=3
+B: KEY=8000 10000000000000 0
+
+I: Bus=0019 Vendor=0000 Product=0003 Version=0000
+N: Name="Sleep Button"
+P: Phys=LNXSLPBN/button/input0
+S: Sysfs=/devices/LNXSYSTM:00/LNXSLPBN:00/input/input1
+U: Uniq=
+H: Handlers=kbd event1 
+B: PROP=0
+B: EV=3
+B: KEY=4000 0 0
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=abba
+N: Name="AT Translated Set 2 keyboard"
+P: Phys=isa0060/serio0/input0
+S: Sysfs=/devices/platform/i8042/serio0/input/input2
+U: Uniq=
+H: Handlers=sysrq kbd leds event2 
+B: PROP=0
+B: EV=120013
+B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
+B: MSC=10
+B: LED=7
+
+I: Bus=0010 Vendor=001f Product=0001 Version=0100
+N: Name="PC Speaker"
+P: Phys=isa0061/input0
+S: Sysfs=/devices/platform/pcspkr/input/input5
+U: Uniq=
+H: Handlers=kbd event3 
+B: PROP=0
+B: EV=40001
+B: SND=6
+
+I: Bus=0011 Vendor=0002 Product=0005 Version=0000
+N: Name="ImPS/2 Generic Wheel Mouse"
+P: Phys=isa0060/serio1/input0
+S: Sysfs=/devices/platform/i8042/serio1/input/input4
+U: Uniq=
+H: Handlers=event4 mouse0 
+B: PROP=1
+B: EV=7
+B: KEY=70000 0 0 0 0
+B: REL=103
+
 ```
 
 #### Android tablet (CI / smoke)
@@ -195,6 +317,13 @@ Template:
   - P1.4 ColorDrop v1: PASS | FAIL | N/A — notes
   - P1.5 Layers panel gestures v1: PASS | FAIL | N/A — notes
 - Notes:
+
+Legend:
+- PASS: works as intended on this device (include any minor caveats in notes).
+- FAIL: broken or unreliable enough to block the task; include repro steps + screenshots/video if possible.
+- N/A: not applicable or not testable on this device (example: no stylus), or skipped due to constraints (record why).
+
+Note: automated smoke reports use `status=OK|ERROR` and per-step `.ok=true|false`; some viewers call `ERROR` “FAIL”, but that’s separate from the manual checklist above.
 
 ### Two repos (important)
 

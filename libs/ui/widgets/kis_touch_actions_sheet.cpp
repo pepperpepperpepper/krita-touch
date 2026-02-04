@@ -13,6 +13,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
+#include <QPainter>
 #include <QScreen>
 #include <QStackedWidget>
 #include <QStyle>
@@ -22,6 +23,8 @@
 #include <kactioncollection.h>
 #include <klocalizedstring.h>
 
+#include "kis_touch_ui_metrics.h"
+
 namespace {
 
 QString stripAmpersands(QString text)
@@ -29,6 +32,28 @@ QString stripAmpersands(QString text)
     text.remove(QLatin1Char('&'));
     return text.trimmed();
 }
+
+class KisTouchCurrentPageStack final : public QStackedWidget
+{
+public:
+    using QStackedWidget::QStackedWidget;
+
+    QSize sizeHint() const override
+    {
+        if (QWidget *page = currentWidget()) {
+            return page->sizeHint();
+        }
+        return QStackedWidget::sizeHint();
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        if (QWidget *page = currentWidget()) {
+            return page->minimumSizeHint();
+        }
+        return QStackedWidget::minimumSizeHint();
+    }
+};
 
 QRect clampToScreen(const QRect &desired, const QPoint &referencePoint)
 {
@@ -65,15 +90,22 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
     : QFrame(parent)
     , m_actionCollection(actionCollection)
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    constexpr qreal kActionsUiScale = 0.8; // shrink ~20% to match other touch sheets
+
+    const int listItemPaddingV = KisTouchUiMetrics::px(8.0 * kActionsUiScale, scale);
+    const int listItemPaddingH = KisTouchUiMetrics::px(10.0 * kActionsUiScale, scale);
+    const int listItemRadius = KisTouchUiMetrics::px(10.0 * kActionsUiScale, scale);
+    const int toolButtonRadius = KisTouchUiMetrics::px(12.0 * kActionsUiScale, scale);
+    const int toolButtonPadding = KisTouchUiMetrics::px(8.0 * kActionsUiScale, scale);
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchActionsSheet"));
 
     setStyleSheet(QStringLiteral(
         "QFrame#kisTouchActionsSheet {"
-        "  background-color: rgba(30, 30, 30, 255);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 16px;"
+        "  background: transparent;"
         "  color: rgb(240, 240, 240);"
         "}"
         "QLabel {"
@@ -85,29 +117,34 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
         "  color: rgb(240, 240, 240);"
         "}"
         "QListWidget::item {"
-        "  padding: 10px 12px;"
-        "  border-radius: 10px;"
+        "  padding: %1px %2px;"
+        "  border-radius: %3px;"
         "}"
         "QListWidget::item:selected {"
-        "  background-color: rgba(255, 255, 255, 45);"
+        "  background-color: rgba(255, 255, 255, 70);"
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 40);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 12px;"
-        "  padding: 10px;"
+        "  background: rgba(255, 255, 255, 60);"
+        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  border-radius: %4px;"
+        "  padding: %5px;"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 55);"
+        "  background-color: rgba(255, 255, 255, 80);"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 70);"
-        "  border-color: rgba(90, 160, 255, 140);"
+        "  background-color: rgba(90, 160, 255, 110);"
+        "  border-color: rgba(90, 160, 255, 200);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 100);"
-        "}"));
+        "  background-color: rgba(90, 160, 255, 150);"
+        "}")
+                      .arg(listItemPaddingV)
+                      .arg(listItemPaddingH)
+                      .arg(listItemRadius)
+                      .arg(toolButtonRadius)
+                      .arg(toolButtonPadding));
 
     rebuildUi();
 }
@@ -128,29 +165,29 @@ void KisTouchActionsSheet::openAtGlobalPos(const QPoint &globalPos)
 {
     rebuildUi();
 
-    QSize desiredSize(900, 560);
-
-    QScreen *screen = QGuiApplication::screenAt(globalPos);
-    if (!screen) {
-        screen = QGuiApplication::primaryScreen();
-    }
-    if (screen) {
-        const QSize maxSize = screen->availableGeometry().size() - QSize(32, 32);
-        desiredSize = desiredSize.boundedTo(maxSize);
-        desiredSize.setWidth(qMax(desiredSize.width(), 520));
-        desiredSize.setHeight(qMax(desiredSize.height(), 360));
-    }
-
-    resize(desiredSize);
-
-    const QRect desiredRect(
-        QPoint(globalPos.x() - width() / 2, globalPos.y() - height() / 2),
-        size());
-    const QRect finalRect = clampToScreen(desiredRect, globalPos);
-
-    move(finalRect.topLeft());
+    refitToCurrentCategory(globalPos);
     show();
     raise();
+}
+
+void KisTouchActionsSheet::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = KisTouchUiMetrics::px(16.0, scale);
+
+    const QColor bg(30, 30, 30, 255);
+    const QColor border(255, 255, 255, 90);
+
+    p.setPen(QPen(border, 1.0));
+    p.setBrush(bg);
+    p.drawRoundedRect(r, radius, radius);
 }
 
 void KisTouchActionsSheet::setCurrentCategoryRow(int row)
@@ -166,8 +203,61 @@ void KisTouchActionsSheet::setCurrentCategoryRow(int row)
     m_categories->setCurrentRow(row);
 }
 
+void KisTouchActionsSheet::refitToCurrentCategory(const QPoint &referencePoint)
+{
+    if (m_categories && m_pages) {
+        const QWidget *page = m_pages->currentWidget();
+        const int pageHeightPx = page ? page->sizeHint().height() : 0;
+        if (pageHeightPx > 0) {
+            // Keep the popup compact by letting the content page drive the height.
+            // The category list can scroll when it's taller than the current page.
+            m_categories->setMaximumHeight(pageHeightPx);
+        } else {
+            m_categories->setMaximumHeight(QWIDGETSIZE_MAX);
+        }
+    }
+
+    if (layout()) {
+        layout()->activate();
+    }
+
+    adjustSize();
+
+    QScreen *screen = QGuiApplication::screenAt(referencePoint);
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+    const int outerMargin = KisTouchUiMetrics::px(32.0, scale);
+
+    if (screen) {
+        QSize maxSize = screen->availableGeometry().size() - QSize(outerMargin, outerMargin);
+        maxSize = maxSize.expandedTo(QSize(1, 1));
+        resize(size().boundedTo(maxSize));
+    }
+
+    const QRect desiredRect(
+        QPoint(referencePoint.x() - width() / 2, referencePoint.y() - height() / 2),
+        size());
+    const QRect finalRect = clampToScreen(desiredRect, referencePoint);
+    move(finalRect.topLeft());
+}
+
 void KisTouchActionsSheet::rebuildUi()
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    constexpr qreal kActionsUiScale = 0.8; // shrink ~20% to match other touch sheets
+
+    const int sheetMargin = KisTouchUiMetrics::px(12.0 * kActionsUiScale, scale);
+    const int rootSpacing = KisTouchUiMetrics::px(8.0 * kActionsUiScale, scale);
+    const int headerSpacing = KisTouchUiMetrics::px(6.0 * kActionsUiScale, scale);
+    const int bodySpacing = KisTouchUiMetrics::px(10.0 * kActionsUiScale, scale);
+    const int closeButtonPx = KisTouchUiMetrics::px(44.0, scale, 44);
+    const int categoriesIconPx = KisTouchUiMetrics::px(26.0 * kActionsUiScale, scale, 20);
+    const int categoriesWidthPx = KisTouchUiMetrics::px(180.0 * kActionsUiScale, scale, 110);
+    const int categoryRowHeightPx = KisTouchUiMetrics::px(48.0 * kActionsUiScale, scale, 44);
+
     m_closeButton = nullptr;
     m_categories = nullptr;
     m_pages = nullptr;
@@ -185,12 +275,12 @@ void KisTouchActionsSheet::rebuildUi()
     }
 
     QVBoxLayout *root = new QVBoxLayout(this);
-    root->setContentsMargins(14, 14, 14, 14);
-    root->setSpacing(10);
+    root->setContentsMargins(sheetMargin, sheetMargin, sheetMargin, sheetMargin);
+    root->setSpacing(rootSpacing);
 
     QHBoxLayout *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
-    header->setSpacing(8);
+    header->setSpacing(headerSpacing);
 
     QLabel *title = new QLabel(i18n("Actions"), this);
     QFont f = title->font();
@@ -212,7 +302,7 @@ void KisTouchActionsSheet::rebuildUi()
     m_closeButton->setAccessibleName(i18n("Close"));
     m_closeButton->setToolTip(i18n("Close"));
     m_closeButton->setAutoRaise(true);
-    m_closeButton->setFixedSize(QSize(44, 44));
+    m_closeButton->setFixedSize(QSize(closeButtonPx, closeButtonPx));
     connect(m_closeButton, &QToolButton::clicked, this, &QWidget::hide);
     header->addWidget(m_closeButton, 0, Qt::AlignRight);
 
@@ -220,16 +310,17 @@ void KisTouchActionsSheet::rebuildUi()
 
     QHBoxLayout *body = new QHBoxLayout();
     body->setContentsMargins(0, 0, 0, 0);
-    body->setSpacing(12);
+    body->setSpacing(bodySpacing);
 
     m_categories = new QListWidget(this);
-    m_categories->setIconSize(QSize(28, 28));
-    m_categories->setFixedWidth(190);
+    m_categories->setIconSize(QSize(categoriesIconPx, categoriesIconPx));
+    m_categories->setFixedWidth(categoriesWidthPx);
     m_categories->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_categories->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_categories->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_categories->setSelectionMode(QAbstractItemView::SingleSelection);
 
-    m_pages = new QStackedWidget(this);
+    m_pages = new KisTouchCurrentPageStack(this);
 
     body->addWidget(m_categories);
     body->addWidget(m_pages, 1);
@@ -263,7 +354,7 @@ void KisTouchActionsSheet::rebuildUi()
              {QStringLiteral("file_save"), i18n("Save")},
              {QStringLiteral("file_save_as"), i18n("Save As")},
              {QStringLiteral("file_export_file"), i18n("Export")},
-             {QStringLiteral("file_export_advanced"), i18n("Export Advanced")},
+             {QStringLiteral("file_export_advanced"), i18n("Export Adv")},
          }},
         {i18n("Prefs"),
          QStringLiteral("configure"),
@@ -299,17 +390,22 @@ void KisTouchActionsSheet::rebuildUi()
 
     for (const Category &cat : categories) {
         QListWidgetItem *item = new QListWidgetItem(QIcon::fromTheme(cat.iconName), cat.name, m_categories);
-        item->setSizeHint(QSize(190, 52));
+        item->setSizeHint(QSize(categoriesWidthPx, categoryRowHeightPx));
         m_categories->addItem(item);
 
         QWidget *page = buildCategoryPage(cat.entries);
         m_pages->addWidget(page);
     }
 
-    connect(m_categories,
-            &QListWidget::currentRowChanged,
-            m_pages,
-            &QStackedWidget::setCurrentIndex);
+    connect(m_categories, &QListWidget::currentRowChanged, this, [this](int row) {
+        if (m_pages) {
+            m_pages->setCurrentIndex(row);
+        }
+
+        if (isVisible()) {
+            refitToCurrentCategory(geometry().center());
+        }
+    });
 
     if (m_categories->count() > 0) {
         m_categories->setCurrentRow(0);
@@ -318,14 +414,24 @@ void KisTouchActionsSheet::rebuildUi()
 
 QWidget *KisTouchActionsSheet::buildCategoryPage(const QList<QPair<QString, QString>> &entries)
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    constexpr qreal kActionsUiScale = 0.8; // shrink ~20% to match other touch sheets
+
+    const int gridSpacing = KisTouchUiMetrics::px(8.0 * kActionsUiScale, scale);
+    const int buttonIconPx = KisTouchUiMetrics::px(38.0 * kActionsUiScale, scale, 18);
+    const int buttonMinWidthPx = KisTouchUiMetrics::px(140.0 * kActionsUiScale, scale, 80);
+    const int buttonMinHeightPx = KisTouchUiMetrics::px(104.0 * kActionsUiScale, scale, 72);
+    const QSize buttonMinSize(buttonMinWidthPx, buttonMinHeightPx);
+
     QWidget *page = new QWidget(this);
 
     QGridLayout *grid = new QGridLayout(page);
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(10);
-    grid->setVerticalSpacing(10);
+    grid->setHorizontalSpacing(gridSpacing);
+    grid->setVerticalSpacing(gridSpacing);
+    grid->setAlignment(Qt::AlignTop | Qt::AlignLeft);
 
-    const int columns = 2;
+    const int columns = 3;
     int row = 0;
     int col = 0;
 
@@ -336,8 +442,9 @@ QWidget *KisTouchActionsSheet::buildCategoryPage(const QList<QPair<QString, QStr
         QAction *action = m_actionCollection ? m_actionCollection->action(actionId) : nullptr;
         QToolButton *button = new QToolButton(page);
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIconSize(QSize(42, 42));
-        button->setMinimumSize(QSize(160, 120));
+        button->setIconSize(QSize(buttonIconPx, buttonIconPx));
+        button->setMinimumSize(buttonMinSize);
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
         if (action) {
             button->setIcon(action->icon());
@@ -365,9 +472,6 @@ QWidget *KisTouchActionsSheet::buildCategoryPage(const QList<QPair<QString, QStr
             row++;
         }
     }
-
-    grid->setRowStretch(row + 1, 1);
-    grid->setColumnStretch(columns, 1);
 
     return page;
 }

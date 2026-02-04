@@ -8,7 +8,9 @@
 
 #include "KisWelcomePageWidget.h"
 #include "KisRecentDocumentsModelWrapper.h"
+#include <QBoxLayout>
 #include <QDesktopServices>
+#include <QGuiApplication>
 #include <QMimeData>
 #include <QPixmap>
 #include <QMessageBox>
@@ -17,6 +19,8 @@
 #include <QNetworkAccessManager>
 #include <QEventLoop>
 #include <QDomDocument>
+#include <QScreen>
+#include <QWindow>
 
 #include "KisRemoteFileFetcher.h"
 #include "kactioncollection.h"
@@ -51,6 +55,8 @@
 #include <QDir>
 
 #include <array>
+
+#include "widgets/kis_touch_ui_metrics.h"
 
 #include "config-updaters.h"
 
@@ -236,12 +242,20 @@ KisWelcomePageWidget::KisWelcomePageWidget(QWidget *parent)
     newsWidget->setVisible(m_networkIsAllowed);
     versionNotificationLabel->setEnabled(m_networkIsAllowed);
 
+    applyTouchResponsiveLayout();
+
     // Drop area..
     setAcceptDrops(true);
 }
 
 KisWelcomePageWidget::~KisWelcomePageWidget()
 {
+}
+
+void KisWelcomePageWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    applyTouchResponsiveLayout();
 }
 
 void KisWelcomePageWidget::setMainWindow(KisMainWindow* mainWin)
@@ -408,6 +422,10 @@ void KisWelcomePageWidget::slotUpdateThemeColors()
         donationLink->hide();
     }
 #endif
+
+    // Theme updates can reset icon sizes / layouts to desktop defaults. Re-apply
+    // touch/phone responsive sizing after theme-dependent styling.
+    applyTouchResponsiveLayout();
 }
 
 void KisWelcomePageWidget::dragEnterEvent(QDragEnterEvent *event)
@@ -478,6 +496,8 @@ void KisWelcomePageWidget::changeEvent(QEvent *event)
         labelSupportText->setFont(largerFont());
         donationLink->setFont(largerFont());
     }
+
+    applyTouchResponsiveLayout();
 }
 
 bool KisWelcomePageWidget::eventFilter(QObject *watched, QEvent *event)
@@ -486,6 +506,57 @@ bool KisWelcomePageWidget::eventFilter(QObject *watched, QEvent *event)
         recentDocumentsListView->clearSelection();
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void KisWelcomePageWidget::applyTouchResponsiveLayout()
+{
+    const KisConfig cfg(true);
+    if (!cfg.touchModeEnabled()) {
+        return;
+    }
+
+    QScreen *screen = nullptr;
+    if (QWindow *windowHandle = window()->windowHandle()) {
+        screen = windowHandle->screen();
+    }
+    if (!screen) {
+        screen = QGuiApplication::primaryScreen();
+    }
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+    const bool phoneLike = scale < 0.9;
+
+    // The welcome page UI is a 3-column desktop layout (Start / Recent / News).
+    // On phones it overflows horizontally; switch to a single vertical flow.
+    if (horizontalLayout_16) {
+        horizontalLayout_16->setDirection(phoneLike ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    }
+
+    if (verticalLayout_3) {
+        const int marginPx = phoneLike ? KisTouchUiMetrics::px(14.0, scale, 8) : 20;
+        verticalLayout_3->setContentsMargins(marginPx, marginPx, marginPx, marginPx);
+    }
+
+    // Keyboard shortcut affordances waste a lot of horizontal space on touch devices.
+    if (newFileLinkShortcut) {
+        newFileLinkShortcut->setVisible(false);
+    }
+    if (openFileShortcut) {
+        openFileShortcut->setVisible(false);
+    }
+
+    const int startIconPx = KisTouchUiMetrics::px(56.0, scale, 32, 64);
+    if (newFileLink) {
+        newFileLink->setIconSize(QSize(startIconPx, startIconPx));
+    }
+    if (openFileLink) {
+        openFileLink->setIconSize(QSize(startIconPx, startIconPx));
+    }
+
+    if (recentDocumentsListView) {
+        const int recentIconPx = KisTouchUiMetrics::px(64.0, scale, 36, 72);
+        recentDocumentsListView->setIconSize(QSize(recentIconPx, recentIconPx));
+    }
 }
 
 namespace {

@@ -18,6 +18,7 @@
 #include <QStandardItemModel>
 #include <QScopedPointer>
 #include <QFont>
+#include <QResizeEvent>
 
 #include "config-updaters.h"
 class RecentItemDelegate;
@@ -86,6 +87,7 @@ private Q_SLOTS:
 protected:
 
     // QWidget overrides
+    void resizeEvent(QResizeEvent *event) override;
     void dragEnterEvent(QDragEnterEvent * event) override;
     void dropEvent(QDropEvent * event) override;
     void dragMoveEvent(QDragMoveEvent * event) override;
@@ -96,6 +98,7 @@ protected:
 
 
 private:
+    void applyTouchResponsiveLayout();
     void setupNewsLangSelection(QMenu *newsOptionMenu);
     void showDevVersionHighlight();
 

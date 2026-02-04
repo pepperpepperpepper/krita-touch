@@ -14,6 +14,7 @@
 
 class KisKActionCollection;
 class QListWidget;
+class QPaintEvent;
 class QStackedWidget;
 class QToolButton;
 
@@ -34,9 +35,13 @@ public:
     void openAtGlobalPos(const QPoint &globalPos);
     void setCurrentCategoryRow(int row);
 
+protected:
+    void paintEvent(QPaintEvent *event) override;
+
 private:
     void rebuildUi();
     QWidget *buildCategoryPage(const QList<QPair<QString, QString>> &entries);
+    void refitToCurrentCategory(const QPoint &referencePoint);
     void triggerAndClose(const QString &actionId);
 
 private:

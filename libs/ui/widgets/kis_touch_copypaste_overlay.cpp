@@ -22,6 +22,8 @@
 #include <kis_canvas2.h>
 #include <kis_tool_proxy.h>
 
+#include "kis_touch_ui_metrics.h"
+
 namespace {
 
 QString stripAmpersands(QString text)
@@ -73,6 +75,11 @@ KisTouchCopyPasteOverlay::KisTouchCopyPasteOverlay(KisKActionCollection *actionC
     : QFrame(parent)
     , m_actionCollection(actionCollection)
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    const int overlayRadiusPx = KisTouchUiMetrics::px(14.0, scale);
+    const int buttonPaddingPx = KisTouchUiMetrics::px(10.0, scale);
+    const int pressedRadiusPx = KisTouchUiMetrics::px(12.0, scale);
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchCopyPasteOverlay"));
@@ -81,19 +88,22 @@ KisTouchCopyPasteOverlay::KisTouchCopyPasteOverlay(KisKActionCollection *actionC
         "QFrame#kisTouchCopyPasteOverlay {"
         "  background-color: rgba(30, 30, 30, 230);"
         "  border: 1px solid rgba(255, 255, 255, 40);"
-        "  border-radius: 14px;"
+        "  border-radius: %1px;"
         "  color: rgb(240, 240, 240);"
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
         "  background: transparent;"
         "  border: 0px;"
-        "  padding: 10px;"
+        "  padding: %2px;"
         "}"
         "QToolButton:pressed {"
         "  background-color: rgba(255, 255, 255, 30);"
-        "  border-radius: 12px;"
-        "}"));
+        "  border-radius: %3px;"
+        "}")
+                      .arg(overlayRadiusPx)
+                      .arg(buttonPaddingPx)
+                      .arg(pressedRadiusPx));
 
     rebuildUi();
 }
@@ -130,11 +140,13 @@ void KisTouchCopyPasteOverlay::paintEvent(QPaintEvent *event)
 {
     Q_UNUSED(event);
 
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
-    const qreal radius = 14.0;
+    const qreal radius = KisTouchUiMetrics::px(14.0, scale);
 
     const QColor bg(30, 30, 30, 230);
     const QColor border(255, 255, 255, 40);
@@ -146,12 +158,18 @@ void KisTouchCopyPasteOverlay::paintEvent(QPaintEvent *event)
 
 void KisTouchCopyPasteOverlay::rebuildUi()
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    const int layoutMarginPx = KisTouchUiMetrics::px(10.0, scale);
+    const int layoutSpacingPx = KisTouchUiMetrics::px(6.0, scale);
+    const int buttonIconPx = KisTouchUiMetrics::px(36.0, scale, 20);
+    const int buttonMinWidthPx = KisTouchUiMetrics::px(96.0, scale, 48);
+    const int buttonMinHeightPx = KisTouchUiMetrics::px(92.0, scale, 48);
+    const QSize buttonMinSize(buttonMinWidthPx, buttonMinHeightPx);
+
     QHBoxLayout *layout = qobject_cast<QHBoxLayout *>(this->layout());
     if (!layout) {
         // If a layout wasn't set (or got replaced), create a fresh one.
         layout = new QHBoxLayout(this);
-        layout->setContentsMargins(10, 10, 10, 10);
-        layout->setSpacing(6);
     } else {
         // Clear existing items/widgets so repeated calls don't stack overlays.
         QLayoutItem *item = nullptr;
@@ -162,6 +180,9 @@ void KisTouchCopyPasteOverlay::rebuildUi()
             delete item;
         }
     }
+
+    layout->setContentsMargins(layoutMarginPx, layoutMarginPx, layoutMarginPx, layoutMarginPx);
+    layout->setSpacing(layoutSpacingPx);
 
     if (!m_actionCollection) {
         QLabel *label = new QLabel(i18n("No action collection"), this);
@@ -209,12 +230,12 @@ void KisTouchCopyPasteOverlay::rebuildUi()
         QToolButton *button = new QToolButton(this);
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
         button->setIcon(action->icon());
-        button->setIconSize(QSize(36, 36));
+        button->setIconSize(QSize(buttonIconPx, buttonIconPx));
 
         button->setText(i18n(entry.fallbackText));
         button->setToolTip(stripAmpersands(action->text()));
 
-        button->setMinimumSize(QSize(96, 92));
+        button->setMinimumSize(buttonMinSize);
         button->setAutoRaise(true);
 
         if (entry.isDuplicate) {

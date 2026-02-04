@@ -11,6 +11,7 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QSignalBlocker>
 #include <QScreen>
 #include <QStyle>
@@ -25,6 +26,8 @@
 #include <kis_node.h>
 #include <kis_node_manager.h>
 #include <kis_slider_spin_box.h>
+
+#include "kis_touch_ui_metrics.h"
 
 namespace {
 
@@ -69,15 +72,17 @@ KisTouchLayerOptionsSheet::KisTouchLayerOptionsSheet(KisKActionCollection *actio
     : QFrame(parent)
     , m_actionCollection(actionCollection)
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    const int toolButtonRadius = KisTouchUiMetrics::px(12.0, scale);
+    const int toolButtonPadding = KisTouchUiMetrics::px(8.0, scale);
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchLayerOptionsSheet"));
 
     setStyleSheet(QStringLiteral(
         "QFrame#kisTouchLayerOptionsSheet {"
-        "  background-color: rgba(30, 30, 30, 255);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 16px;"
+        "  background: transparent;"
         "  color: rgb(240, 240, 240);"
         "}"
         "QLabel {"
@@ -85,21 +90,23 @@ KisTouchLayerOptionsSheet::KisTouchLayerOptionsSheet(KisKActionCollection *actio
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 40);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 12px;"
-        "  padding: 10px;"
+        "  background: rgba(255, 255, 255, 60);"
+        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  border-radius: %1px;"
+        "  padding: %2px;"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 55);"
+        "  background-color: rgba(255, 255, 255, 80);"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 70);"
-        "  border-color: rgba(90, 160, 255, 140);"
+        "  background-color: rgba(90, 160, 255, 110);"
+        "  border-color: rgba(90, 160, 255, 200);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 100);"
-        "}"));
+        "  background-color: rgba(90, 160, 255, 150);"
+        "}")
+                      .arg(toolButtonRadius)
+                      .arg(toolButtonPadding));
 
     rebuildUi();
 }
@@ -119,17 +126,29 @@ void KisTouchLayerOptionsSheet::openAtGlobalPos(const QPoint &globalPos)
 {
     rebuildUi();
 
-    QSize desiredSize(720, 520);
-
     QScreen *screen = QGuiApplication::screenAt(globalPos);
     if (!screen) {
         screen = QGuiApplication::primaryScreen();
     }
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+    const int outerMargin = KisTouchUiMetrics::px(32.0, scale);
+
+    // Let the layout drive the preferred size; this keeps the sheet compact and avoids
+    // oversized tiles on tablets when the window is wider than the grid.
+    QSize desiredSize = sizeHint();
+
     if (screen) {
-        const QSize maxSize = screen->availableGeometry().size() - QSize(32, 32);
+        const QSize availSize = screen->availableGeometry().size();
+        QSize maxSize = availSize - QSize(outerMargin, outerMargin);
+        maxSize = maxSize.expandedTo(QSize(1, 1));
+
         desiredSize = desiredSize.boundedTo(maxSize);
-        desiredSize.setWidth(qMax(desiredSize.width(), 420));
-        desiredSize.setHeight(qMax(desiredSize.height(), 340));
+
+        const int minWidth = KisTouchUiMetrics::px(360.0, scale);
+        const int minHeight = KisTouchUiMetrics::px(300.0, scale);
+        desiredSize.setWidth(qMin(maxSize.width(), qMax(desiredSize.width(), minWidth)));
+        desiredSize.setHeight(qMin(maxSize.height(), qMax(desiredSize.height(), minHeight)));
     }
 
     resize(desiredSize);
@@ -142,8 +161,43 @@ void KisTouchLayerOptionsSheet::openAtGlobalPos(const QPoint &globalPos)
     raise();
 }
 
+void KisTouchLayerOptionsSheet::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = KisTouchUiMetrics::px(16.0, scale);
+
+    const QColor bg(30, 30, 30, 255);
+    const QColor border(255, 255, 255, 90);
+
+    p.setPen(QPen(border, 1.0));
+    p.setBrush(bg);
+    p.drawRoundedRect(r, radius, radius);
+}
+
 void KisTouchLayerOptionsSheet::rebuildUi()
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    constexpr qreal kLayerOptionsUiScale = 0.8; // shrink ~20% to match the compact Actions sheet
+
+    const int sheetMargin = KisTouchUiMetrics::px(12.0 * kLayerOptionsUiScale, scale);
+    const int rootSpacing = KisTouchUiMetrics::px(8.0 * kLayerOptionsUiScale, scale);
+    const int headerSpacing = KisTouchUiMetrics::px(6.0 * kLayerOptionsUiScale, scale);
+    const int closeButtonPx = KisTouchUiMetrics::px(44.0, scale, 44);
+    const int opacityMinHeightPx = KisTouchUiMetrics::px(48.0, scale, 44);
+    const int rowSpacing = KisTouchUiMetrics::px(8.0 * kLayerOptionsUiScale, scale);
+    const int gridSpacing = KisTouchUiMetrics::px(8.0 * kLayerOptionsUiScale, scale);
+    const int buttonIconPx = KisTouchUiMetrics::px(38.0 * kLayerOptionsUiScale, scale, 18);
+    const int buttonMinWidthPx = KisTouchUiMetrics::px(140.0 * kLayerOptionsUiScale, scale, 80);
+    const int buttonMinHeightPx = KisTouchUiMetrics::px(104.0 * kLayerOptionsUiScale, scale, 72);
+    const QSize buttonMinSize(buttonMinWidthPx, buttonMinHeightPx);
+
     m_opacitySlider = nullptr;
     m_closeButton = nullptr;
 
@@ -159,12 +213,12 @@ void KisTouchLayerOptionsSheet::rebuildUi()
     }
 
     QVBoxLayout *root = new QVBoxLayout(this);
-    root->setContentsMargins(14, 14, 14, 14);
-    root->setSpacing(10);
+    root->setContentsMargins(sheetMargin, sheetMargin, sheetMargin, sheetMargin);
+    root->setSpacing(rootSpacing);
 
     QHBoxLayout *header = new QHBoxLayout();
     header->setContentsMargins(0, 0, 0, 0);
-    header->setSpacing(8);
+    header->setSpacing(headerSpacing);
 
     QLabel *title = new QLabel(i18n("Layer"), this);
     QFont titleFont = title->font();
@@ -186,7 +240,7 @@ void KisTouchLayerOptionsSheet::rebuildUi()
     m_closeButton->setAccessibleName(i18n("Close"));
     m_closeButton->setToolTip(i18n("Close"));
     m_closeButton->setAutoRaise(true);
-    m_closeButton->setFixedSize(QSize(44, 44));
+    m_closeButton->setFixedSize(QSize(closeButtonPx, closeButtonPx));
     connect(m_closeButton, &QToolButton::clicked, this, &QWidget::hide);
     header->addWidget(m_closeButton, 0, Qt::AlignRight);
 
@@ -203,7 +257,7 @@ void KisTouchLayerOptionsSheet::rebuildUi()
     {
         QHBoxLayout *opacityRow = new QHBoxLayout();
         opacityRow->setContentsMargins(0, 0, 0, 0);
-        opacityRow->setSpacing(10);
+        opacityRow->setSpacing(rowSpacing);
 
         QLabel *label = new QLabel(i18n("Opacity"), this);
         opacityRow->addWidget(label, 0, Qt::AlignVCenter);
@@ -212,7 +266,7 @@ void KisTouchLayerOptionsSheet::rebuildUi()
         m_opacitySlider->setRange(0, 100);
         m_opacitySlider->setSingleStep(1);
         m_opacitySlider->setSuffix(QStringLiteral("%"));
-        m_opacitySlider->setMinimumHeight(48);
+        m_opacitySlider->setMinimumHeight(opacityMinHeightPx);
         m_opacitySlider->setToolTip(i18n("Adjust the opacity of the active layer."));
 
         KisNodeSP activeNode = nodeManager ? nodeManager->activeNode() : KisNodeSP();
@@ -249,8 +303,8 @@ void KisTouchLayerOptionsSheet::rebuildUi()
     QWidget *content = new QWidget(this);
     QGridLayout *grid = new QGridLayout(content);
     grid->setContentsMargins(0, 0, 0, 0);
-    grid->setHorizontalSpacing(10);
-    grid->setVerticalSpacing(10);
+    grid->setHorizontalSpacing(gridSpacing);
+    grid->setVerticalSpacing(gridSpacing);
 
     struct Entry {
         QString actionId;
@@ -261,7 +315,7 @@ void KisTouchLayerOptionsSheet::rebuildUi()
     const QList<Entry> entries = {
         {QStringLiteral("RenameCurrentLayer"), i18n("Rename"), QStringLiteral("edit-rename")},
         {QStringLiteral("layer_properties"), i18n("Properties"), QStringLiteral("document-properties")},
-        {QStringLiteral("selectopaque"), i18n("Select Contents"), QStringLiteral("edit-select")},
+        {QStringLiteral("selectopaque"), i18n("Select"), QStringLiteral("edit-select")},
         {QStringLiteral("toggle_layer_alpha_lock"), i18n("Alpha Lock"), QStringLiteral("object-locked")},
         {QStringLiteral("toggle_layer_lock"), i18n("Lock"), QStringLiteral("lock")},
         {QStringLiteral("duplicatelayer"), i18n("Duplicate"), QStringLiteral("edit-copy")},
@@ -270,15 +324,16 @@ void KisTouchLayerOptionsSheet::rebuildUi()
         {QStringLiteral("remove_layer"), i18n("Delete"), QStringLiteral("edit-delete")},
     };
 
-    const int columns = 2;
+    const int columns = 3;
     int row = 0;
     int col = 0;
 
     for (const Entry &entry : entries) {
         QToolButton *button = buildActionButton(content, entry.actionId, entry.label, entry.fallbackIconName);
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIconSize(QSize(42, 42));
-        button->setMinimumSize(QSize(160, 120));
+        button->setIconSize(QSize(buttonIconPx, buttonIconPx));
+        button->setMinimumSize(buttonMinSize);
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 
         grid->addWidget(button, row, col);
 

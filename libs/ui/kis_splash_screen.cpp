@@ -96,15 +96,12 @@ void KisSplashScreen::updateSplashImage()
     constexpr int SPLASH_HEIGHT_LOADING = 480;
     constexpr int SPLASH_HEIGHT_ABOUT = 320;
 
-    int splashHeight;
+    int baseSplashHeight;
     if (m_displayLinks) {
-        splashHeight = SPLASH_HEIGHT_ABOUT;
+        baseSplashHeight = SPLASH_HEIGHT_ABOUT;
     } else {
-        splashHeight = SPLASH_HEIGHT_LOADING;
+        baseSplashHeight = SPLASH_HEIGHT_LOADING;
     }
-    const int bannerHeight = splashHeight * 0.16875;
-    const int marginTop = splashHeight * 0.05;
-    const int marginRight = splashHeight * 0.1;
 
     QString splashName = QStringLiteral(":/splash/0.png");
     QString splashArtist = QStringLiteral("Tyson Tan");
@@ -123,8 +120,35 @@ void KisSplashScreen::updateSplashImage()
     if (img.isNull() || img.height() == 0) return;
 
     // Preserve aspect ratio of splash.
-    const int height = splashHeight;
-    const int width = height * img.width() / img.height();
+    const int baseHeight = baseSplashHeight;
+    const int baseWidth = baseHeight * img.width() / img.height();
+
+    int height = baseHeight;
+    int width = baseWidth;
+
+    // On high-DPI devices (notably Android phones), a fixed logical size can be much
+    // larger than the available screen width, causing the splash to be cropped.
+    // Clamp the splash widget to the available screen geometry (in logical pixels).
+    QScreen *s = screen();
+    if (!s) {
+        s = QGuiApplication::primaryScreen();
+    }
+    if (s) {
+        const QSize availSize = s->availableGeometry().size();
+        const int maxW = availSize.width();
+        const int maxH = availSize.height();
+        if (maxW > 0 && maxH > 0) {
+            const qreal scaleW = qreal(maxW) / qreal(baseWidth);
+            const qreal scaleH = qreal(maxH) / qreal(baseHeight);
+            const qreal scale = qMin<qreal>(qreal(1.0), qMin(scaleW, scaleH));
+            width = qMax(1, int(baseWidth * scale));
+            height = qMax(1, int(baseHeight * scale));
+        }
+    }
+
+    const int bannerHeight = height * 0.16875;
+    const int marginTop = height * 0.05;
+    const int marginRight = height * 0.1;
 
     setFixedWidth(width);
     setFixedHeight(height);

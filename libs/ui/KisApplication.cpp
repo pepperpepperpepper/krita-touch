@@ -45,6 +45,7 @@
 #include <QWidget>
 #include <QDockWidget>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeView>
 #include <QItemSelectionModel>
 #include <QMenu>
@@ -53,6 +54,7 @@
 #include <QJsonObject>
 #include <QImageReader>
 #include <QImageWriter>
+#include <QPixmap>
 #include <QTouchDevice>
 #include <QTouchEvent>
 #include <QThread>
@@ -489,6 +491,225 @@ bool anySampleChangedForTouchSmoke(const QVector<QColor> &before, const QVector<
     }
 
     return false;
+}
+
+QString rgbaToHexForTouchSmoke(const QColor &c)
+{
+    if (!c.isValid()) {
+        return QString();
+    }
+
+    return QStringLiteral("#%1%2%3%4")
+        .arg(c.red(), 2, 16, QLatin1Char('0'))
+        .arg(c.green(), 2, 16, QLatin1Char('0'))
+        .arg(c.blue(), 2, 16, QLatin1Char('0'))
+        .arg(c.alpha(), 2, 16, QLatin1Char('0'));
+}
+
+int lumaForTouchSmoke(const QColor &c)
+{
+    if (!c.isValid()) {
+        return 0;
+    }
+
+    // Use a standard perceptual weighting (sRGB).
+    return qRound(0.2126 * c.red() + 0.7152 * c.green() + 0.0722 * c.blue());
+}
+
+struct TouchSmokeWidgetGrab {
+    QImage image;
+    qreal dpr = 1.0;
+};
+
+TouchSmokeWidgetGrab grabWidgetForTouchSmoke(QWidget *widget)
+{
+    TouchSmokeWidgetGrab grab;
+    if (!widget) {
+        return grab;
+    }
+
+    const QPixmap pixmap = widget->grab();
+    if (pixmap.isNull()) {
+        return grab;
+    }
+
+    grab.dpr = pixmap.devicePixelRatio();
+    grab.image = pixmap.toImage();
+    return grab;
+}
+
+QColor sampleGrabColorForTouchSmoke(const TouchSmokeWidgetGrab &grab, const QPoint &logicalPos)
+{
+    if (grab.image.isNull()) {
+        return QColor();
+    }
+
+    const QPoint pxPos(qRound(logicalPos.x() * grab.dpr), qRound(logicalPos.y() * grab.dpr));
+    if (!grab.image.rect().contains(pxPos)) {
+        return QColor();
+    }
+
+    return grab.image.pixelColor(pxPos);
+}
+
+struct TouchSmokeSheetContrastCheck {
+    bool ok = false;
+    QJsonObject details;
+};
+
+TouchSmokeSheetContrastCheck checkTouchSheetContrastForTouchSmoke(QWidget *sheet)
+{
+    TouchSmokeSheetContrastCheck result;
+    if (!sheet) {
+        result.details.insert(QStringLiteral("error"), QStringLiteral("missing_sheet"));
+        return result;
+    }
+
+    // Give the popup a moment to paint before we grab pixels.
+    QApplication::processEvents();
+    QThread::msleep(80);
+    QApplication::processEvents();
+
+    const TouchSmokeWidgetGrab sheetGrab = grabWidgetForTouchSmoke(sheet);
+    result.details.insert(QStringLiteral("sheet_object_name"), sheet->objectName());
+    result.details.insert(QStringLiteral("sheet_size_w"), sheet->width());
+    result.details.insert(QStringLiteral("sheet_size_h"), sheet->height());
+    result.details.insert(QStringLiteral("grab_dpr"), sheetGrab.dpr);
+    result.details.insert(QStringLiteral("grab_w"), sheetGrab.image.width());
+    result.details.insert(QStringLiteral("grab_h"), sheetGrab.image.height());
+    if (sheetGrab.image.isNull()) {
+        result.details.insert(QStringLiteral("error"), QStringLiteral("grab_failed"));
+        return result;
+    }
+
+    auto clampToWidget = [&](const QPoint &p) -> QPoint {
+        const int x = qBound(0, p.x(), qMax(0, sheet->width() - 1));
+        const int y = qBound(0, p.y(), qMax(0, sheet->height() - 1));
+        return QPoint(x, y);
+    };
+
+    const QPoint bgLeft = clampToWidget(QPoint(7, sheet->height() / 2));
+    const QPoint bgRight = clampToWidget(QPoint(sheet->width() - 8, sheet->height() / 2));
+    const QPoint bgBottom = clampToWidget(QPoint(sheet->width() / 2, sheet->height() - 8));
+    const QVector<QPoint> bgPoints{bgLeft, bgRight, bgBottom};
+
+    int bgMinAlpha = 255;
+    int bgMinLuma = 255;
+    QJsonArray bgSamples;
+    for (const QPoint &p : bgPoints) {
+        const QColor c = sampleGrabColorForTouchSmoke(sheetGrab, p);
+        const int alpha = c.isValid() ? c.alpha() : 0;
+        const int luma = lumaForTouchSmoke(c);
+        bgMinAlpha = qMin(bgMinAlpha, alpha);
+        bgMinLuma = qMin(bgMinLuma, luma);
+
+        QJsonObject sample;
+        sample.insert(QStringLiteral("pos_x"), p.x());
+        sample.insert(QStringLiteral("pos_y"), p.y());
+        sample.insert(QStringLiteral("rgba"), rgbaToHexForTouchSmoke(c));
+        sample.insert(QStringLiteral("alpha"), alpha);
+        sample.insert(QStringLiteral("luma"), luma);
+        bgSamples.append(sample);
+    }
+
+    result.details.insert(QStringLiteral("bg_samples"), bgSamples);
+    result.details.insert(QStringLiteral("bg_min_alpha"), bgMinAlpha);
+    result.details.insert(QStringLiteral("bg_min_luma"), bgMinLuma);
+
+    const QColor bgRefSample = sampleGrabColorForTouchSmoke(sheetGrab, bgBottom);
+    const QColor bgRef = bgRefSample.isValid() ? bgRefSample : QColor(0, 0, 0, 255);
+    result.details.insert(QStringLiteral("bg_ref_rgba"), rgbaToHexForTouchSmoke(bgRef));
+
+    // Find a representative content button to validate button backplate contrast.
+    QToolButton *candidateButton = nullptr;
+    const QList<QToolButton *> buttons = sheet->findChildren<QToolButton *>();
+    for (QToolButton *btn : buttons) {
+        if (!btn || !btn->isVisible()) {
+            continue;
+        }
+        if (btn->autoRaise()) {
+            continue;
+        }
+        if (btn->width() < 70 || btn->height() < 50) {
+            continue;
+        }
+        candidateButton = btn;
+        break;
+    }
+
+    if (!candidateButton) {
+        result.details.insert(QStringLiteral("button_found"), false);
+        return result;
+    }
+
+    result.details.insert(QStringLiteral("button_found"), true);
+    result.details.insert(QStringLiteral("button_w"), candidateButton->width());
+    result.details.insert(QStringLiteral("button_h"), candidateButton->height());
+
+    const TouchSmokeWidgetGrab buttonGrab = grabWidgetForTouchSmoke(candidateButton);
+    result.details.insert(QStringLiteral("button_grab_w"), buttonGrab.image.width());
+    result.details.insert(QStringLiteral("button_grab_h"), buttonGrab.image.height());
+    if (buttonGrab.image.isNull()) {
+        result.details.insert(QStringLiteral("error"), QStringLiteral("button_grab_failed"));
+        return result;
+    }
+
+    auto clampToButton = [&](const QPoint &p) -> QPoint {
+        const int x = qBound(0, p.x(), qMax(0, candidateButton->width() - 1));
+        const int y = qBound(0, p.y(), qMax(0, candidateButton->height() - 1));
+        return QPoint(x, y);
+    };
+
+    const QPoint b0 =
+        clampToButton(QPoint(qRound(candidateButton->width() * 0.20), qRound(candidateButton->height() * 0.20)));
+    const QPoint b1 =
+        clampToButton(QPoint(qRound(candidateButton->width() * 0.80), qRound(candidateButton->height() * 0.20)));
+    const QPoint b2 =
+        clampToButton(QPoint(qRound(candidateButton->width() * 0.20), qRound(candidateButton->height() * 0.50)));
+    const QVector<QPoint> btnPoints{b0, b1, b2};
+
+    int btnMinLuma = 255;
+    QJsonArray btnSamples;
+    for (const QPoint &p : btnPoints) {
+        const QColor c = sampleGrabColorForTouchSmoke(buttonGrab, p);
+        const int alpha = c.isValid() ? c.alpha() : 0;
+        const int invAlpha = 255 - alpha;
+        const QColor blended((c.red() * alpha + bgRef.red() * invAlpha) / 255,
+                             (c.green() * alpha + bgRef.green() * invAlpha) / 255,
+                             (c.blue() * alpha + bgRef.blue() * invAlpha) / 255,
+                             255);
+        const int lumaBlended = lumaForTouchSmoke(blended);
+        btnMinLuma = qMin(btnMinLuma, lumaBlended);
+
+        QJsonObject sample;
+        sample.insert(QStringLiteral("pos_x"), p.x());
+        sample.insert(QStringLiteral("pos_y"), p.y());
+        sample.insert(QStringLiteral("alpha"), alpha);
+        sample.insert(QStringLiteral("rgba"), rgbaToHexForTouchSmoke(c));
+        sample.insert(QStringLiteral("rgba_blended"), rgbaToHexForTouchSmoke(blended));
+        sample.insert(QStringLiteral("luma"), lumaBlended);
+        btnSamples.append(sample);
+    }
+
+    result.details.insert(QStringLiteral("button_samples"), btnSamples);
+    result.details.insert(QStringLiteral("button_min_luma"), btnMinLuma);
+
+    constexpr int minBgAlpha = 200;
+    constexpr int minBgLuma = 15;
+    constexpr int minButtonDeltaLuma = 20;
+    const int deltaLuma = btnMinLuma - bgMinLuma;
+
+    result.details.insert(QStringLiteral("threshold_bg_min_alpha"), minBgAlpha);
+    result.details.insert(QStringLiteral("threshold_bg_min_luma"), minBgLuma);
+    result.details.insert(QStringLiteral("threshold_button_delta_luma"), minButtonDeltaLuma);
+    result.details.insert(QStringLiteral("button_delta_luma"), deltaLuma);
+
+    const bool bgOk = bgMinAlpha >= minBgAlpha && bgMinLuma >= minBgLuma;
+    const bool buttonOk = deltaLuma >= minButtonDeltaLuma;
+    result.ok = bgOk && buttonOk;
+    result.details.insert(QStringLiteral("bg_ok"), bgOk);
+    result.details.insert(QStringLiteral("button_ok"), buttonOk);
+    return result;
 }
 
 bool paintLineForTouchSmoke(KisMainWindow *mainWindow, const QPointF &imgP0, const QPointF &imgP1, const QColor &color)
@@ -2189,6 +2410,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             report.step(QStringLiteral("layer_options.android.open_sheet_for_screenshot"), openedOk, details);
             ok = ok && openedOk;
         }
+        if (optionsSheet && optionsSheet->isVisible()) {
+            const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(optionsSheet);
+            report.step(QStringLiteral("layer_options.sheet_contrast"), contrast.ok, contrast.details);
+            ok = ok && contrast.ok;
+        }
 
         finalizeSmoke(ok);
         return;
@@ -2305,6 +2531,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             report.step(QStringLiteral("layer_options.open_sheet_for_screenshot"), sheetVisible, details);
         }
         ok = ok && sheetVisible;
+        if (sheetVisible) {
+            QWidget *visibleSheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchLayerOptionsSheet"));
+            const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(visibleSheet);
+            report.step(QStringLiteral("layer_options.sheet_contrast"), contrast.ok, contrast.details);
+            ok = ok && contrast.ok;
+        }
         finalizeSmoke(ok);
         return;
     }
@@ -2505,12 +2737,44 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return;
     }
 
-    if (normalizedScenario == "actions-sheet" || normalizedScenario == "actions_sheet") {
+    QString actionsSheetScenarioKey = normalizedScenario;
+    actionsSheetScenarioKey.replace(QLatin1Char('_'), QLatin1Char('-'));
+
+    if (actionsSheetScenarioKey == "actions-sheet" || actionsSheetScenarioKey.startsWith("actions-sheet-")) {
         bool ok = true;
         const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
         report.step(QStringLiteral("actions_sheet.fill_canvas_black_for_screenshot"), filledBlack);
         if (!filledBlack) {
             ok = false;
+        }
+
+        int desiredCategoryRow = -1;
+        if (actionsSheetScenarioKey.startsWith(QStringLiteral("actions-sheet-"))) {
+            const QString suffix = actionsSheetScenarioKey.mid(QStringLiteral("actions-sheet-").size());
+            if (suffix == QLatin1String("add")) {
+                desiredCategoryRow = 0;
+            } else if (suffix == QLatin1String("canvas")) {
+                desiredCategoryRow = 1;
+            } else if (suffix == QLatin1String("share")) {
+                desiredCategoryRow = 2;
+            } else if (suffix == QLatin1String("prefs") || suffix == QLatin1String("settings")) {
+                desiredCategoryRow = 3;
+            } else if (suffix == QLatin1String("gestures")) {
+                desiredCategoryRow = 4;
+            } else if (suffix == QLatin1String("help")) {
+                desiredCategoryRow = 5;
+            } else {
+                QJsonObject details;
+                details.insert(QStringLiteral("suffix"), suffix);
+                report.step(QStringLiteral("actions_sheet.select_category"), false, details);
+                finalizeSmoke(false);
+                return;
+            }
+
+            QJsonObject details;
+            details.insert(QStringLiteral("suffix"), suffix);
+            details.insert(QStringLiteral("row"), desiredCategoryRow);
+            report.step(QStringLiteral("actions_sheet.select_category"), true, details);
         }
 
         if (QAction *action = mainWindow->actionCollection()->action("touch_actions_sheet")) {
@@ -2519,6 +2783,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchActionsSheet"));
                 return sheet && sheet->isVisible();
             });
+            KisTouchActionsSheet *sheet =
+                mainWindow->findChild<KisTouchActionsSheet *>(QStringLiteral("kisTouchActionsSheet"));
             {
                 QJsonObject details;
                 details.insert(QStringLiteral("action_triggered"), true);
@@ -2527,6 +2793,17 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             }
             if (!sheetVisible) {
                 ok = false;
+            }
+
+            if (sheetVisible && sheet && desiredCategoryRow >= 0) {
+                sheet->setCurrentCategoryRow(desiredCategoryRow);
+                QApplication::processEvents();
+            }
+
+            if (sheetVisible && sheet) {
+                const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(sheet);
+                report.step(QStringLiteral("actions_sheet.sheet_contrast"), contrast.ok, contrast.details);
+                ok = ok && contrast.ok;
             }
             finalizeSmoke(ok);
             return;
@@ -3896,6 +4173,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         // Categories are stable and ordered:
         // Add(0), Canvas(1), Share(2), Prefs(3), Gestures(4), Help(5)
         sheet->setCurrentCategoryRow(4);
+        {
+            const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(sheet);
+            report.step(QStringLiteral("gesture_controls.sheet_contrast"), contrast.ok, contrast.details);
+            ok = ok && contrast.ok;
+        }
         finalizeSmoke(ok);
         return;
     }
@@ -4247,6 +4529,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchQuickMenuConfigSheet"));
                 return sheet && sheet->isVisible();
             });
+            QWidget *sheet = mainWindow->findChild<QWidget *>(QStringLiteral("kisTouchQuickMenuConfigSheet"));
             {
                 QJsonObject details;
                 details.insert(QStringLiteral("action_triggered"), true);
@@ -4255,6 +4538,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             }
             if (!sheetVisible) {
                 ok = false;
+            }
+            if (sheetVisible && sheet) {
+                const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(sheet);
+                report.step(QStringLiteral("quickmenu_setup.sheet_contrast"), contrast.ok, contrast.details);
+                ok = ok && contrast.ok;
             }
 
             finalizeSmoke(ok);

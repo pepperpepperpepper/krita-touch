@@ -15,6 +15,7 @@
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPainter>
 #include <QScreen>
 #include <QStyle>
 #include <QToolButton>
@@ -25,12 +26,42 @@
 
 #include <kis_config.h>
 
+#include "kis_touch_ui_metrics.h"
+#include "kis_touch_quickmenu_icon_utils.h"
+
 namespace {
 
 QString stripAmpersands(QString text)
 {
     text.remove(QLatin1Char('&'));
     return text.trimmed();
+}
+
+QString quickMenuSlotLabelForActionId(const QString &actionId, const QAction *action)
+{
+    // Keep slot labels compact so the slot grid stays aligned with the
+    // candidate grid and the sheet doesn't grow to accommodate long action
+    // names (e.g. "Touch Selection Tool").
+    if (actionId == QLatin1String("edit_undo")) {
+        return i18n("Undo");
+    }
+    if (actionId == QLatin1String("edit_redo")) {
+        return i18n("Redo");
+    }
+    if (actionId == QLatin1String("KisToolSelectTouch")) {
+        return i18n("Select");
+    }
+    if (actionId == QLatin1String("KisToolTransform")) {
+        return i18n("Transform");
+    }
+    if (actionId == QLatin1String("deselect")) {
+        return i18n("Deselect");
+    }
+    if (actionId == QLatin1String("view_show_canvas_only")) {
+        return i18n("Canvas Only");
+    }
+
+    return action ? stripAmpersands(action->text()) : i18n("…");
 }
 
 QRect clampToScreen(const QRect &desired, const QPoint &referencePoint)
@@ -94,15 +125,17 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
     : QFrame(parent)
     , m_actionCollection(actionCollection)
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    const int toolButtonRadius = KisTouchUiMetrics::px(12.0, scale);
+    const int toolButtonPadding = KisTouchUiMetrics::px(8.0, scale);
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchQuickMenuConfigSheet"));
 
     setStyleSheet(QStringLiteral(
         "QFrame#kisTouchQuickMenuConfigSheet {"
-        "  background-color: rgba(30, 30, 30, 255);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 16px;"
+        "  background: transparent;"
         "  color: rgb(240, 240, 240);"
         "}"
         "QLabel {"
@@ -110,21 +143,23 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 40);"
-        "  border: 1px solid rgba(255, 255, 255, 60);"
-        "  border-radius: 12px;"
-        "  padding: 10px;"
+        "  background: rgba(255, 255, 255, 60);"
+        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  border-radius: %1px;"
+        "  padding: %2px;"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 70);"
-        "  border-color: rgba(90, 160, 255, 140);"
+        "  background-color: rgba(90, 160, 255, 110);"
+        "  border-color: rgba(90, 160, 255, 200);"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 55);"
+        "  background-color: rgba(255, 255, 255, 80);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 100);"
-        "}"));
+        "  background-color: rgba(90, 160, 255, 150);"
+        "}")
+                      .arg(toolButtonRadius)
+                      .arg(toolButtonPadding));
 
     rebuildUi();
 }
@@ -150,17 +185,24 @@ void KisTouchQuickMenuConfigSheet::openAtGlobalPos(const QPoint &globalPos, int 
         setSelectedSlot(initialSlot);
     }
 
-    QSize desiredSize(980, 640);
-
     QScreen *screen = QGuiApplication::screenAt(globalPos);
     if (!screen) {
         screen = QGuiApplication::primaryScreen();
     }
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+    const int outerMargin = KisTouchUiMetrics::px(32.0, scale);
+
+    // Let the layout drive the preferred size; clamp so we don't overflow the
+    // viewport or become unusably small.
+    QSize desiredSize = sizeHint();
+
     if (screen) {
-        const QSize maxSize = screen->availableGeometry().size() - QSize(32, 32);
+        const QSize availSize = screen->availableGeometry().size();
+        QSize maxSize = availSize - QSize(outerMargin, outerMargin);
+        maxSize = maxSize.expandedTo(QSize(1, 1));
+
         desiredSize = desiredSize.boundedTo(maxSize);
-        desiredSize.setWidth(qMax(desiredSize.width(), 540));
-        desiredSize.setHeight(qMax(desiredSize.height(), 420));
     }
 
     resize(desiredSize);
@@ -175,8 +217,45 @@ void KisTouchQuickMenuConfigSheet::openAtGlobalPos(const QPoint &globalPos, int 
     raise();
 }
 
+void KisTouchQuickMenuConfigSheet::paintEvent(QPaintEvent *event)
+{
+    Q_UNUSED(event);
+
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF r = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    const qreal radius = KisTouchUiMetrics::px(16.0, scale);
+
+    const QColor bg(30, 30, 30, 255);
+    const QColor border(255, 255, 255, 90);
+
+    p.setPen(QPen(border, 1.0));
+    p.setBrush(bg);
+    p.drawRoundedRect(r, radius, radius);
+}
+
 void KisTouchQuickMenuConfigSheet::rebuildUi()
 {
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(QGuiApplication::primaryScreen());
+    constexpr qreal kQuickMenuUiScale = 0.8; // shrink ~20% relative to other touch sheets
+
+    const int sheetMargin = KisTouchUiMetrics::px(12.0 * kQuickMenuUiScale, scale);
+    const int rootSpacing = KisTouchUiMetrics::px(8.0 * kQuickMenuUiScale, scale);
+    const int headerSpacing = KisTouchUiMetrics::px(6.0 * kQuickMenuUiScale, scale);
+    const int headerButtonMinHeightPx = KisTouchUiMetrics::px(44.0, scale, 44);
+    const int headerButtonMinSizePx = KisTouchUiMetrics::px(44.0, scale, 44);
+    const int gridSpacing = KisTouchUiMetrics::px(8.0 * kQuickMenuUiScale, scale);
+    const int slotIconPx = KisTouchUiMetrics::px(38.0 * kQuickMenuUiScale, scale, 18);
+    const int slotMinWidthPx = KisTouchUiMetrics::px(140.0 * kQuickMenuUiScale, scale, 80);
+    const int slotMinHeightPx = KisTouchUiMetrics::px(104.0 * kQuickMenuUiScale, scale, 72);
+    const QSize slotMinSize(slotMinWidthPx, slotMinHeightPx);
+    const int candidateMinWidthPx = KisTouchUiMetrics::px(140.0 * kQuickMenuUiScale, scale, 80);
+    const int candidateMinHeightPx = KisTouchUiMetrics::px(104.0 * kQuickMenuUiScale, scale, 72);
+    const QSize candidateMinSize(candidateMinWidthPx, candidateMinHeightPx);
+
     m_slotButtons.clear();
     m_resetButton = nullptr;
     m_closeButton = nullptr;
@@ -198,14 +277,14 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
     m_slotActionIds = KisConfig(true).touchQuickMenuActionIds();
 
     QVBoxLayout *root = new QVBoxLayout(this);
-    root->setContentsMargins(14, 14, 14, 14);
-    root->setSpacing(10);
+    root->setContentsMargins(sheetMargin, sheetMargin, sheetMargin, sheetMargin);
+    root->setSpacing(rootSpacing);
 
     // Header
     {
         QHBoxLayout *header = new QHBoxLayout();
         header->setContentsMargins(0, 0, 0, 0);
-        header->setSpacing(8);
+        header->setSpacing(headerSpacing);
 
         QLabel *title = new QLabel(i18n("QuickMenu"), this);
         QFont f = title->font();
@@ -218,7 +297,7 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
         m_resetButton->setText(i18n("Reset"));
         m_resetButton->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));
         m_resetButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        m_resetButton->setMinimumHeight(44);
+        m_resetButton->setMinimumHeight(headerButtonMinHeightPx);
         header->addWidget(m_resetButton);
 
         m_closeButton = new QToolButton(this);
@@ -230,7 +309,7 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
             m_closeButton->setText(i18n("Close"));
         }
         m_closeButton->setToolTip(i18n("Close"));
-        m_closeButton->setMinimumSize(QSize(44, 44));
+        m_closeButton->setMinimumSize(QSize(headerButtonMinSizePx, headerButtonMinSizePx));
         header->addWidget(m_closeButton);
 
         root->addLayout(header);
@@ -244,8 +323,8 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
     QWidget *slotsPanel = new QWidget(this);
     QGridLayout *slotsGrid = new QGridLayout(slotsPanel);
     slotsGrid->setContentsMargins(0, 0, 0, 0);
-    slotsGrid->setHorizontalSpacing(10);
-    slotsGrid->setVerticalSpacing(10);
+    slotsGrid->setHorizontalSpacing(gridSpacing);
+    slotsGrid->setVerticalSpacing(gridSpacing);
 
     m_slotGroup = new QButtonGroup(this);
     m_slotGroup->setExclusive(true);
@@ -254,8 +333,9 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
         QToolButton *button = new QToolButton(slotsPanel);
         button->setCheckable(true);
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIconSize(QSize(42, 42));
-        button->setMinimumSize(QSize(160, 110));
+        button->setIconSize(QSize(slotIconPx, slotIconPx));
+        button->setMinimumSize(slotMinSize);
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         button->setAutoRaise(false);
         button->setText(i18n("Slot %1", i + 1));
         button->setToolTip(i18n("QuickMenu slot %1", i + 1));
@@ -265,14 +345,21 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
         slotsGrid->addWidget(button, i / 3, i % 3);
     }
 
+    // Keep the 3x2 grid packed like the candidate actions grid below.
+    // Without an explicit "stretch" column/row, QGridLayout distributes extra
+    // space between the real columns/rows, making the top slot tiles look
+    // misaligned vs the candidate grid and unnecessarily large.
+    slotsGrid->setRowStretch(2, 1);
+    slotsGrid->setColumnStretch(3, 1);
+
     root->addWidget(slotsPanel);
 
     // Candidate actions
     QWidget *actionsPanel = new QWidget(this);
     QGridLayout *actionsGrid = new QGridLayout(actionsPanel);
     actionsGrid->setContentsMargins(0, 0, 0, 0);
-    actionsGrid->setHorizontalSpacing(10);
-    actionsGrid->setVerticalSpacing(10);
+    actionsGrid->setHorizontalSpacing(gridSpacing);
+    actionsGrid->setVerticalSpacing(gridSpacing);
 
     const QList<CandidateAction> candidates = defaultCandidates();
     const int columns = 3;
@@ -282,8 +369,9 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
     for (const CandidateAction &candidate : candidates) {
         QToolButton *button = new QToolButton(actionsPanel);
         button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        button->setIconSize(QSize(42, 42));
-        button->setMinimumSize(QSize(160, 120));
+        button->setIconSize(QSize(slotIconPx, slotIconPx));
+        button->setMinimumSize(candidateMinSize);
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         button->setAutoRaise(true);
 
         if (candidate.id.isEmpty()) {
@@ -300,7 +388,7 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
         } else {
             QAction *action = m_actionCollection ? m_actionCollection->action(candidate.id) : nullptr;
             if (action) {
-                button->setIcon(action->icon());
+                button->setIcon(KisTouchQuickMenuIconUtils::iconForActionId(candidate.id, action, QSize(slotIconPx, slotIconPx)));
                 button->setText(candidate.labelOverride.isEmpty() ? stripAmpersands(action->text()) : candidate.labelOverride);
                 button->setToolTip(stripAmpersands(action->text()));
                 connect(button, &QToolButton::clicked, this, [this, id = candidate.id]() {
@@ -378,12 +466,13 @@ void KisTouchQuickMenuConfigSheet::updateSlotButtons()
             continue;
         }
 
+        const QSize iconSize = button->iconSize();
         const QString actionId = m_slotActionIds.at(i);
         QAction *action = (!actionId.isEmpty() && m_actionCollection) ? m_actionCollection->action(actionId) : nullptr;
 
         if (action) {
-            button->setIcon(action->icon());
-            button->setText(stripAmpersands(action->text()));
+            button->setIcon(KisTouchQuickMenuIconUtils::iconForActionId(actionId, action, iconSize));
+            button->setText(quickMenuSlotLabelForActionId(actionId, action));
         } else if (actionId.isEmpty()) {
             button->setIcon(QIcon::fromTheme(QStringLiteral("edit-clear")));
             button->setText(i18n("Empty"));

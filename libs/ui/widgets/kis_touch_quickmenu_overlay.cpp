@@ -19,6 +19,9 @@
 #include <kactioncollection.h>
 #include <klocalizedstring.h>
 
+#include "kis_touch_ui_metrics.h"
+#include "kis_touch_quickmenu_icon_utils.h"
+
 namespace {
 
 QString stripAmpersands(QString text)
@@ -105,26 +108,6 @@ KisTouchQuickMenuOverlay::KisTouchQuickMenuOverlay(KisKActionCollection *actionC
     setAttribute(Qt::WA_ShowWithoutActivating);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchQuickMenuOverlay"));
-
-    setFixedSize(QSize(360, 360));
-
-    setStyleSheet(QStringLiteral(
-        "QFrame#kisTouchQuickMenuOverlay {"
-        "  background-color: rgba(30, 30, 30, 230);"
-        "  border: 1px solid rgba(255, 255, 255, 40);"
-        "  border-radius: 180px;"
-        "  color: rgb(240, 240, 240);"
-        "}"
-        "QToolButton {"
-        "  color: rgb(240, 240, 240);"
-        "  background: transparent;"
-        "  border: 0px;"
-        "  padding: 6px;"
-        "}"
-        "QToolButton:checked {"
-        "  background-color: rgba(255, 255, 255, 30);"
-        "  border-radius: 12px;"
-        "}"));
 
     m_slotActionIds = defaultQuickMenuActionIds();
     rebuildUi();
@@ -240,17 +223,67 @@ void KisTouchQuickMenuOverlay::resizeEvent(QResizeEvent *event)
 
 void KisTouchQuickMenuOverlay::rebuildUi()
 {
+    const QScreen *screen = QGuiApplication::primaryScreen();
+    const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+    constexpr qreal kQuickMenuUiScale = 0.8; // shrink ~20% relative to the rest of the touch UI
+
+    const int buttonMinPx = KisTouchUiMetrics::px(92.0 * kQuickMenuUiScale, scale, 48);
+
+    int overlayPx = KisTouchUiMetrics::px(360.0 * kQuickMenuUiScale, scale);
+    // Keep enough room for 6 buttons without overlap even when buttonMinPx is
+    // clamped by the minimum touch target size.
+    overlayPx = qMax(overlayPx, buttonMinPx * 3);
+
+    const int overlayRadiusPx = overlayPx / 2;
+    const int buttonIconPx = KisTouchUiMetrics::px(40.0 * kQuickMenuUiScale, scale, 20);
+    const int buttonPaddingPx = KisTouchUiMetrics::px(6.0 * kQuickMenuUiScale, scale);
+    const int highlightRadiusPx = KisTouchUiMetrics::px(12.0 * kQuickMenuUiScale, scale);
+    // At smaller sizes the text gets elided (e.g. "Tra...orm"), which looks
+    // worse than a clean icon-only QuickMenu.
+    const bool showLabels = buttonMinPx >= 84;
+
+    setFixedSize(QSize(overlayPx, overlayPx));
+    setStyleSheet(QStringLiteral(
+        "QFrame#kisTouchQuickMenuOverlay {"
+        "  background-color: rgba(30, 30, 30, 230);"
+        "  border: 1px solid rgba(255, 255, 255, 40);"
+        "  border-radius: %1px;"
+        "  color: rgb(240, 240, 240);"
+        "}"
+        "QToolButton {"
+        "  color: rgb(240, 240, 240);"
+        "  background: transparent;"
+        "  border: 0px;"
+        "  padding: %2px;"
+        "}"
+        "QToolButton:checked {"
+        "  background-color: rgba(255, 255, 255, 30);"
+        "  border-radius: %3px;"
+        "}")
+                      .arg(overlayRadiusPx)
+                      .arg(buttonPaddingPx)
+                      .arg(highlightRadiusPx));
+
     if (m_slotButtons.isEmpty()) {
         // Create the buttons once and only update their labels/icons.
         for (int i = 0; i < 6; ++i) {
             QToolButton *button = new QToolButton(this);
-            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            button->setIconSize(QSize(40, 40));
-            button->setMinimumSize(QSize(92, 92));
+            button->setToolButtonStyle(showLabels ? Qt::ToolButtonTextUnderIcon : Qt::ToolButtonIconOnly);
+            button->setIconSize(QSize(buttonIconPx, buttonIconPx));
+            button->setMinimumSize(QSize(buttonMinPx, buttonMinPx));
             button->setCheckable(true);
             button->setAutoRaise(true);
             button->setFocusPolicy(Qt::NoFocus);
             m_slotButtons.append(button);
+        }
+    } else {
+        for (QToolButton *button : m_slotButtons) {
+            if (!button) {
+                continue;
+            }
+            button->setToolButtonStyle(showLabels ? Qt::ToolButtonTextUnderIcon : Qt::ToolButtonIconOnly);
+            button->setIconSize(QSize(buttonIconPx, buttonIconPx));
+            button->setMinimumSize(QSize(buttonMinPx, buttonMinPx));
         }
     }
 
@@ -271,7 +304,7 @@ void KisTouchQuickMenuOverlay::rebuildUi()
         QAction *action = m_actionCollection->action(actionId);
 
         if (action) {
-            button->setIcon(action->icon());
+            button->setIcon(KisTouchQuickMenuIconUtils::iconForActionId(actionId, action, QSize(buttonIconPx, buttonIconPx)));
             button->setText(quickMenuSlotLabel(actionId, action));
             button->setToolTip(stripAmpersands(action->text()));
         } else {
@@ -290,7 +323,7 @@ void KisTouchQuickMenuOverlay::positionButtons()
         return;
     }
 
-    constexpr qreal kRadius = 120.0;
+    const qreal kRadius = qMin(width(), height()) / 3.0;
     constexpr qreal kPi = 3.14159265358979323846;
     const QPoint center = rect().center();
 
