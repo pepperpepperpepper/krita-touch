@@ -53,6 +53,7 @@
 #include <kdesktopfile.h>
 #include <kconfig.h>
 #include <kconfiggroup.h>
+#include <kactioncollection.h>
 
 #include <KoDockRegistry.h>
 #include <KoToolRegistry.h>
