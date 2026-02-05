@@ -2122,6 +2122,211 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return;
     }
 
+    if (normalizedScenario == "hold-sample" || normalizedScenario == "hold_sample" ||
+        normalizedScenario == "hold-to-sample" || normalizedScenario == "hold_to_sample" ||
+        normalizedScenario == "hold-sample-color" || normalizedScenario == "hold_sample_color") {
+        bool ok = true;
+        KisView *view = mainWindow->activeView();
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+        if (!view || !view->canvasBase() || !image) {
+            qWarning() << "Touch smoke: no active view/image for hold-sample";
+            finalizeSmoke(false);
+            return;
+        }
+
+        QWidget *canvasWidget = view->canvasBase()->canvasWidget();
+        if (!canvasWidget) {
+            qWarning() << "Touch smoke: no canvas widget for hold-sample";
+            finalizeSmoke(false);
+            return;
+        }
+
+        // Ensure deterministic touch shortcut mapping for smoke. Fresh configs default to
+        // "Krita Default", which may not have our touch-first OneFingerHold bindings.
+        {
+            const QString profileName = QStringLiteral("Touch Gestures Only");
+            KisInputProfileManager *profileManager = KisInputProfileManager::instance();
+            KisInputProfile *profile = profileManager ? profileManager->profile(profileName) : nullptr;
+            const bool profileOk = bool(profile);
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("profile"), profileName);
+                report.step(QStringLiteral("hold_sample.set_input_profile"), profileOk, details);
+            }
+            if (profileManager && profile) {
+                profileManager->setCurrentProfile(profile);
+                QApplication::processEvents();
+            } else {
+                ok = false;
+            }
+        }
+
+        KoToolManager *toolManager = KoToolManager::instance();
+        if (!toolManager) {
+            qWarning() << "Touch smoke: no tool manager for hold-sample";
+            finalizeSmoke(false);
+            return;
+        }
+
+        // Make sampling deterministic.
+        const QColor expectedSampledColor(0xff, 0x00, 0x00);
+        const bool filledRed = fillCanvasForTouchSmoke(mainWindow, expectedSampledColor);
+        report.step(QStringLiteral("hold_sample.fill_canvas_red"), filledRed);
+        if (!filledRed) {
+            qWarning() << "Touch smoke: failed to fill canvas for hold-sample";
+            ok = false;
+        }
+
+        // Ensure the starting foreground color differs from the sampled color.
+        KoCanvasResourceProvider *resourceManager =
+            mainWindow->viewManager() && mainWindow->viewManager()->canvasResourceProvider()
+                ? mainWindow->viewManager()->canvasResourceProvider()->resourceManager()
+                : nullptr;
+        if (resourceManager) {
+            resourceManager->setResource(KoCanvasResource::ForegroundColor,
+                                         KoColor(QColor(0x00, 0xff, 0x00), image->colorSpace()));
+        }
+
+        toolManager->switchToolRequested(QStringLiteral("KritaShape/KisToolBrush"));
+        QApplication::processEvents();
+
+        const QString brushToolId = QStringLiteral("KritaShape/KisToolBrush");
+        const bool brushActive = toolManager->activeToolId() == brushToolId;
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("expected_tool"), brushToolId);
+            details.insert(QStringLiteral("active_tool"), toolManager->activeToolId());
+            report.step(QStringLiteral("hold_sample.switch_to_brush_tool"), brushActive, details);
+        }
+        if (!brushActive) {
+            ok = false;
+        }
+
+        const QColor fgBefore =
+            resourceManager ? resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor()
+                            : QColor();
+
+        canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+#ifdef Q_OS_ANDROID
+        static QTouchDevice *device = nullptr;
+        if (!device) {
+            device = new QTouchDevice();
+            device->setType(QTouchDevice::TouchScreen);
+            device->setCapabilities(QTouchDevice::Position | QTouchDevice::Pressure);
+            device->setMaximumTouchPoints(10);
+        }
+#else
+        static QTouchDevice *device = nullptr;
+        if (!device) {
+            device = new QTouchDevice();
+            device->setType(QTouchDevice::TouchScreen);
+            device->setCapabilities(QTouchDevice::Position | QTouchDevice::Pressure);
+            device->setMaximumTouchPoints(10);
+        }
+#endif
+
+        const QPointF imgPos(image->bounds().center());
+        const QPointF widgetPos = view->canvasBase()->coordinatesConverter()->imageToWidget(imgPos);
+        const QPointF screenPos(canvasWidget->mapToGlobal(widgetPos.toPoint()));
+
+        QList<QTouchEvent::TouchPoint> beginPoints;
+        {
+            QTouchEvent::TouchPoint tp(0);
+            tp.setState(Qt::TouchPointPressed);
+            tp.setPos(widgetPos);
+            tp.setScreenPos(screenPos);
+            tp.setStartPos(widgetPos);
+            tp.setStartScreenPos(screenPos);
+            tp.setLastPos(widgetPos);
+            tp.setLastScreenPos(screenPos);
+            tp.setPressure(1.0);
+            beginPoints.append(tp);
+        }
+        QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+        QApplication::sendEvent(canvasWidget, &beginEvent);
+        QApplication::processEvents();
+
+        // Give the touch-hold gesture time to trigger (see TOUCH_HOLD_DELAY_MS in KisInputManager).
+        waitForUiCondition(600, [&]() { return false; });
+
+        // Nudge slightly (within the touch-hold slop) to ensure the sampler updates on platforms/tools
+        // that apply sampling on move rather than initial press.
+        const QPointF widgetPos2 = widgetPos + QPointF(4.0, 0.0);
+        const QPointF screenPos2(canvasWidget->mapToGlobal(widgetPos2.toPoint()));
+        QList<QTouchEvent::TouchPoint> updatePoints;
+        {
+            QTouchEvent::TouchPoint tp(0);
+            tp.setState(Qt::TouchPointMoved);
+            tp.setPos(widgetPos2);
+            tp.setScreenPos(screenPos2);
+            tp.setStartPos(widgetPos);
+            tp.setStartScreenPos(screenPos);
+            tp.setLastPos(widgetPos);
+            tp.setLastScreenPos(screenPos);
+            tp.setPressure(1.0);
+            updatePoints.append(tp);
+        }
+        QTouchEvent updateEvent(QEvent::TouchUpdate, device, Qt::NoModifier, Qt::TouchPointMoved, updatePoints);
+        QApplication::sendEvent(canvasWidget, &updateEvent);
+        QApplication::processEvents();
+
+        bool sampled = false;
+        QColor fgAfter;
+        if (resourceManager) {
+            const bool fgUpdated = waitForUiCondition(1400, [&]() {
+                fgAfter = resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
+                return fgAfter.isValid() && !colorsEqualForTouchSmoke(fgBefore, fgAfter, 3);
+            });
+            if (!fgUpdated) {
+                fgAfter = resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
+            }
+
+            const bool matchedExpected = fgAfter.isValid() && colorsEqualForTouchSmoke(fgAfter, expectedSampledColor, 5);
+            sampled = fgBefore.isValid() && fgAfter.isValid() && matchedExpected;
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("updated_fg"), fgUpdated);
+                details.insert(QStringLiteral("expected_rgba"), QStringLiteral("#ff0000ff"));
+                if (fgBefore.isValid()) {
+                    details.insert(QStringLiteral("before_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(fgBefore.red(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.green(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgBefore.alpha(), 2, 16, QLatin1Char('0')));
+                }
+                if (fgAfter.isValid()) {
+                    details.insert(QStringLiteral("after_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(fgAfter.red(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.green(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(fgAfter.alpha(), 2, 16, QLatin1Char('0')));
+                }
+                report.step(QStringLiteral("hold_sample.sampled_fg_matches_canvas"), sampled, details);
+            }
+            if (!sampled) {
+                qWarning() << "Touch smoke: hold-sample did not update foreground color via sampling";
+#ifndef Q_OS_ANDROID
+                ok = false;
+#endif
+            }
+        } else {
+            qWarning() << "Touch smoke: hold-sample cannot validate sampling; missing resource manager";
+            report.step(QStringLiteral("hold_sample.sampled_fg_matches_canvas"), false);
+#ifndef Q_OS_ANDROID
+            ok = false;
+#endif
+        }
+
+        // Intentionally do not send TouchEnd: keep the hold-sampling session visible for the screenshot.
+        // The smoke runner terminates the process / force-stops the app after capturing artifacts.
+        Q_UNUSED(sampled);
+        finalizeSmoke(ok);
+        return;
+    }
+
     if (normalizedScenario == "layers-panel" || normalizedScenario == "layers_panel") {
         showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
         populateLayersForTouchSmoke(mainWindow, 6);
