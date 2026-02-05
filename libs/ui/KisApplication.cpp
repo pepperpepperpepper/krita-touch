@@ -25,6 +25,8 @@
 
 #include <QStandardPaths>
 #include <QDesktopWidget>
+#include <QAction>
+#include <QColor>
 #include <QDir>
 #include <QDockWidget>
 #include <QElapsedTimer>
@@ -33,6 +35,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QMenu>
+#include <QMenuBar>
 #include <QMessageBox>
 #include <QProcessEnvironment>
 #include <QStringList>
@@ -52,6 +56,7 @@
 
 #include <KoDockRegistry.h>
 #include <KoToolRegistry.h>
+#include <KoColor.h>
 #include <KoColorSpaceRegistry.h>
 #include <KoPluginLoader.h>
 #include <KoShapeRegistry.h>
@@ -197,6 +202,175 @@ private:
     QJsonArray m_steps;
 };
 
+QString stripAmpersands(QString text)
+{
+    text.remove(QLatin1Char('&'));
+    return text.trimmed();
+}
+
+bool ensureDocumentForTouchSmoke(KisMainWindow *mainWindow)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    if (mainWindow->viewManager() && mainWindow->viewManager()->image()) {
+        return true;
+    }
+
+    KisDocument *doc = KisPart::instance()->createDocument();
+    if (!doc) {
+        qWarning() << "Touch smoke: failed to create document";
+        return false;
+    }
+
+    const KoColorSpace *cs = KoColorSpaceRegistry::instance()->colorSpace("RGBA", "U8", "");
+    if (!cs) {
+        qWarning() << "Touch smoke: failed to create RGBA/U8 colorspace";
+        return false;
+    }
+
+    doc->newImage(i18n("Touch smoke"),
+                  512,
+                  512,
+                  cs,
+                  KoColor(QColor(Qt::white), cs),
+                  KisConfig::CANVAS_COLOR,
+                  1,
+                  "",
+                  100.0);
+
+    KisPart::instance()->addDocument(doc);
+    mainWindow->showWelcomeScreen(false);
+    mainWindow->addViewAndNotifyLoadingCompleted(doc);
+    return true;
+}
+
+QAction *actionByIdForTouchSmoke(KisMainWindow *mainWindow, const QString &actionId)
+{
+    if (!mainWindow || !mainWindow->actionCollection()) {
+        return nullptr;
+    }
+    return mainWindow->actionCollection()->action(actionId);
+}
+
+bool triggerActionForTouchSmoke(KisMainWindow *mainWindow, TouchSmokeReport &report, const QString &actionId)
+{
+    QAction *action = actionByIdForTouchSmoke(mainWindow, actionId);
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("action_id"), actionId);
+        report.step(QStringLiteral("action.found"), action != nullptr, details);
+    }
+    if (!action) {
+        return false;
+    }
+
+    action->trigger();
+    QApplication::processEvents();
+    return true;
+}
+
+bool showDockerForTouchSmoke(KisMainWindow *mainWindow, TouchSmokeReport &report, const QString &dockerId)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    QDockWidget *dock = mainWindow->dockWidget(dockerId);
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("docker_id"), dockerId);
+        report.step(QStringLiteral("docker.found"), dock != nullptr, details);
+    }
+    if (!dock) {
+        return false;
+    }
+
+    dock->show();
+    dock->raise();
+    QApplication::processEvents();
+
+    bool visible = false;
+    for (int i = 0; i < 100; ++i) {
+        QApplication::processEvents();
+        if (dock->isVisible()) {
+            visible = true;
+            break;
+        }
+        QThread::msleep(20);
+    }
+
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("visible"), dock->isVisible());
+        details.insert(QStringLiteral("floating"), dock->isFloating());
+        report.step(QStringLiteral("docker.visible"), dock->isVisible(), details);
+    }
+    return visible;
+}
+
+bool popupMenuForTouchSmoke(KisMainWindow *mainWindow, TouchSmokeReport &report, const QString &menuKey)
+{
+    if (!mainWindow) {
+        return false;
+    }
+
+    QMenuBar *menuBar = mainWindow->menuBar();
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("menu_key"), menuKey);
+        report.step(QStringLiteral("menu.menubar_found"), menuBar != nullptr, details);
+    }
+    if (!menuBar) {
+        return false;
+    }
+
+    QAction *menuAction = nullptr;
+    Q_FOREACH (QAction *action, menuBar->actions()) {
+        if (!action) {
+            continue;
+        }
+        if (stripAmpersands(action->text()).compare(menuKey, Qt::CaseInsensitive) == 0) {
+            menuAction = action;
+            break;
+        }
+    }
+
+    {
+        QJsonObject details;
+        details.insert(QStringLiteral("menu_key"), menuKey);
+        details.insert(QStringLiteral("found"), menuAction != nullptr);
+        report.step(QStringLiteral("menu.action_found"), menuAction != nullptr, details);
+    }
+    if (!menuAction) {
+        return false;
+    }
+
+    QMenu *menu = menuAction->menu();
+    report.step(QStringLiteral("menu.has_menu"), menu != nullptr);
+    if (!menu) {
+        return false;
+    }
+
+    const QRect actionRect = menuBar->actionGeometry(menuAction);
+    const QPoint globalPos = menuBar->mapToGlobal(actionRect.bottomLeft());
+    menu->popup(globalPos);
+    QApplication::processEvents();
+
+    bool visible = false;
+    for (int i = 0; i < 100; ++i) {
+        QApplication::processEvents();
+        if (menu->isVisible()) {
+            visible = true;
+            break;
+        }
+        QThread::msleep(20);
+    }
+    report.step(QStringLiteral("menu.visible"), visible);
+    return visible;
+}
+
 void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 {
     if (!mainWindow) {
@@ -230,43 +404,60 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     mainWindow->activateWindow();
     QApplication::processEvents();
 
+    if (normalizedScenario == QLatin1String("welcome") || normalizedScenario == QLatin1String("start") ||
+        normalizedScenario == QLatin1String("start-screen") || normalizedScenario == QLatin1String("start_screen") ||
+        normalizedScenario == QLatin1String("welcome-screen") || normalizedScenario == QLatin1String("welcome_screen")) {
+        mainWindow->showWelcomeScreen(true);
+        report.step(QStringLiteral("welcome.show"), true);
+        finalizeSmoke(true);
+        return;
+    }
+
+    if (normalizedScenario == QLatin1String("canvas") || normalizedScenario == QLatin1String("document") ||
+        normalizedScenario == QLatin1String("new-document") || normalizedScenario == QLatin1String("new_document")) {
+        const bool ok = ensureDocumentForTouchSmoke(mainWindow);
+        report.step(QStringLiteral("document.opened"), ok);
+        finalizeSmoke(ok);
+        return;
+    }
+
+    if (scenarioTrimmed.startsWith(QStringLiteral("action:"), Qt::CaseInsensitive)) {
+        const QString actionId = scenarioTrimmed.mid(QStringLiteral("action:").size()).trimmed();
+        const bool ok = !actionId.isEmpty() && triggerActionForTouchSmoke(mainWindow, report, actionId);
+        finalizeSmoke(ok);
+        return;
+    }
+
+    if (scenarioTrimmed.startsWith(QStringLiteral("menu:"), Qt::CaseInsensitive)) {
+        const QString menuKey = scenarioTrimmed.mid(QStringLiteral("menu:").size()).trimmed();
+        const bool docOk = ensureDocumentForTouchSmoke(mainWindow);
+        report.step(QStringLiteral("document.opened"), docOk);
+        const bool ok = docOk && !menuKey.isEmpty() && popupMenuForTouchSmoke(mainWindow, report, menuKey);
+        finalizeSmoke(ok);
+        return;
+    }
+
+    if (scenarioTrimmed.startsWith(QStringLiteral("docker:"), Qt::CaseInsensitive) ||
+        scenarioTrimmed.startsWith(QStringLiteral("dock:"), Qt::CaseInsensitive)) {
+        const QString prefix = scenarioTrimmed.startsWith(QStringLiteral("dock:"), Qt::CaseInsensitive)
+            ? QStringLiteral("dock:")
+            : QStringLiteral("docker:");
+        const QString dockerId = scenarioTrimmed.mid(prefix.size()).trimmed();
+        const bool docOk = ensureDocumentForTouchSmoke(mainWindow);
+        report.step(QStringLiteral("document.opened"), docOk);
+        const bool ok = docOk && !dockerId.isEmpty() && showDockerForTouchSmoke(mainWindow, report, dockerId);
+        finalizeSmoke(ok);
+        return;
+    }
+
     if (normalizedScenario == QLatin1String("touch-sidebar") || normalizedScenario == QLatin1String("touch_sidebar") ||
         normalizedScenario == QLatin1String("touchdocker") || normalizedScenario == QLatin1String("touch_docker") ||
         normalizedScenario == QLatin1String("touch-docker")) {
+        const bool docOk = ensureDocumentForTouchSmoke(mainWindow);
+        report.step(QStringLiteral("document.opened"), docOk);
         const QString dockerId = QStringLiteral("TouchDocker");
-        QDockWidget *dock = mainWindow->dockWidget(dockerId);
-        {
-            QJsonObject details;
-            details.insert(QStringLiteral("docker_id"), dockerId);
-            report.step(QStringLiteral("touch_sidebar.docker_found"), dock != nullptr, details);
-        }
-        if (!dock) {
-            finalizeSmoke(false);
-            return;
-        }
-
-        dock->show();
-        dock->raise();
-        QApplication::processEvents();
-
-        bool visible = false;
-        for (int i = 0; i < 100; ++i) {
-            QApplication::processEvents();
-            if (dock->isVisible()) {
-                visible = true;
-                break;
-            }
-            QThread::msleep(20);
-        }
-
-        {
-            QJsonObject details;
-            details.insert(QStringLiteral("visible"), dock->isVisible());
-            details.insert(QStringLiteral("floating"), dock->isFloating());
-            report.step(QStringLiteral("touch_sidebar.docker_visible"), dock->isVisible(), details);
-        }
-
-        finalizeSmoke(visible);
+        const bool ok = docOk && showDockerForTouchSmoke(mainWindow, report, dockerId);
+        finalizeSmoke(ok);
         return;
     }
 
