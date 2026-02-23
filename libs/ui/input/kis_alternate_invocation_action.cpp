@@ -7,6 +7,7 @@
 #include "kis_alternate_invocation_action.h"
 
 #include <QApplication>
+#include <QInputEvent>
 #include <QMouseEvent>
 
 #include <klocalizedstring.h>
@@ -101,7 +102,9 @@ void KisAlternateInvocationAction::begin(int shortcut, QEvent *event)
 
     KisAbstractInputAction::begin(shortcut, event);
 
-    QMouseEvent targetEvent(QEvent::MouseButtonPress, eventPosF(event), Qt::LeftButton, Qt::LeftButton, Qt::ControlModifier); // There must be a better way
+    const QInputEvent *inputEvent = dynamic_cast<const QInputEvent *>(event);
+    const Qt::KeyboardModifiers modifiers = inputEvent ? inputEvent->modifiers() : Qt::NoModifier;
+    QMouseEvent targetEvent(QEvent::MouseButtonPress, eventPosF(event), Qt::LeftButton, Qt::LeftButton, modifiers);
 
     m_d->savedAction = shortcutToToolAction(shortcut);
 
@@ -112,20 +115,9 @@ void KisAlternateInvocationAction::end(QEvent *event)
 {
     if (!event) return;
 
-    Qt::KeyboardModifiers modifiers;
-
-    switch (m_d->savedAction) {
-    case KisTool::AlternateSampleFgNode:
-        modifiers = Qt::ControlModifier;
-        break;
-    case KisTool::AlternateThird:
-        modifiers = Qt::ControlModifier | Qt::AltModifier;
-        break;
-    default:
-        ;
-    }
-
-    QMouseEvent targetEvent = QMouseEvent(QEvent::MouseButtonRelease, eventPosF(event), Qt::LeftButton, Qt::LeftButton, modifiers);
+    const QInputEvent *inputEvent = dynamic_cast<const QInputEvent *>(event);
+    const Qt::KeyboardModifiers modifiers = inputEvent ? inputEvent->modifiers() : Qt::NoModifier;
+    QMouseEvent targetEvent(QEvent::MouseButtonRelease, eventPosF(event), Qt::LeftButton, Qt::LeftButton, modifiers);
     inputManager()->toolProxy()->forwardEvent(KisToolProxy::END, m_d->savedAction, &targetEvent, event);
 
     KisAbstractInputAction::end(event);
@@ -136,17 +128,8 @@ void KisAlternateInvocationAction::inputEvent(QEvent* event)
     if (event
         && ((event->type() == QEvent::MouseMove) || (event->type() == QEvent::TabletMove)
             || (event->type() == QEvent::TouchUpdate))) {
-        Qt::KeyboardModifiers modifiers;
-        switch (m_d->savedAction) {
-        case KisTool::AlternateSampleFgNode:
-            modifiers =  Qt::ControlModifier;
-            break;
-        case KisTool::AlternateThird:
-            modifiers = Qt::ControlModifier | Qt::AltModifier;
-            break;
-        default:
-            modifiers = Qt::ShiftModifier;
-        }
+        const QInputEvent *inputEvent = dynamic_cast<const QInputEvent *>(event);
+        const Qt::KeyboardModifiers modifiers = inputEvent ? inputEvent->modifiers() : Qt::NoModifier;
 
         QMouseEvent targetEvent(QEvent::MouseMove, eventPosF(event), Qt::LeftButton, Qt::LeftButton, modifiers);
         inputManager()->toolProxy()->forwardEvent(KisToolProxy::CONTINUE, m_d->savedAction, &targetEvent, event);
