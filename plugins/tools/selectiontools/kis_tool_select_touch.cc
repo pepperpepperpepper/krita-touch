@@ -47,8 +47,10 @@
 namespace {
 
 constexpr qreal kOutlinePaddingPx = 6.0;
-constexpr qreal kTapMaxDistancePx = 6.0;
-constexpr qreal kClosePolygonDistancePx = 12.0;
+// Touch slop is measured in view pixels (screen), so tap detection remains
+// usable regardless of zoom level.
+constexpr qreal kTapMaxDistanceViewPx = 16.0;
+constexpr qreal kClosePolygonDistanceViewPx = 32.0;
 
 QString stripAmpersands(QString text)
 {
@@ -67,7 +69,7 @@ KisToolSelectTouch::KisToolSelectTouch(KoCanvasBase *canvas)
     : KisToolSelect(
         canvas,
         KisCursor::load("tool_outline_selection_cursor.png", 5, 5),
-        i18n("Touch Selection Tool"))
+        i18n("Selection Tool"))
 {
     setObjectName("tool_select_touch");
 }
@@ -79,6 +81,14 @@ void KisToolSelectTouch::activate(const QSet<KoShape *> &shapes)
     KisToolSelect::activate(shapes);
     m_configGroup = KSharedConfig::openConfig()->group(toolId());
     loadSettings();
+    if (m_buttonToggleFeather) {
+        QSignalBlocker blocker(m_buttonToggleFeather);
+        m_buttonToggleFeather->setChecked(false);
+    }
+    if (m_buttonToggleSaveLoad) {
+        QSignalBlocker blocker(m_buttonToggleSaveLoad);
+        m_buttonToggleSaveLoad->setChecked(false);
+    }
     updateMethodUi();
     updateMethodDependentUi();
     updateSelectionActionUi();
@@ -207,8 +217,6 @@ QWidget *KisToolSelectTouch::createOptionWidget()
 
     selectionWidget->insertWidget(0, "sectionSelectionMethod", sectionSelectionMethod);
     selectionWidget->insertWidget(1, "sectionSelectionAction", m_sectionSelectionAction);
-    selectionWidget->insertWidget(2, "sectionFeather", m_sectionFeather);
-    selectionWidget->insertWidget(3, "sectionAutomatic", m_sectionAutomatic);
 
     // Procreate-like operations (invert, fill, clear, copy/cut to new layer)
     {
@@ -223,13 +231,20 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                 actions = viewManager->actionCollection();
             }
         }
+        if (actions) {
+            if (QAction *deselectAction = actions->action(QStringLiteral("deselect"))) {
+                connect(deselectAction, &QAction::triggered, this, [this]() {
+                    cancelInFlightInteraction();
+                });
+            }
+        }
 
         QWidget *operationsWidget = new QWidget(sectionOperations);
         QVBoxLayout *layout = new QVBoxLayout(operationsWidget);
         layout->setContentsMargins(0, 0, 0, 0);
         layout->setSpacing(8);
 
-        const auto configureStripButton = [](KoGroupButton *button) {
+        const auto configureActionStripButton = [](KoGroupButton *button) {
             if (!button) {
                 return;
             }
@@ -238,6 +253,15 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             button->setMinimumSize(QSize(56, 56));
             button->setCheckable(false);
         };
+        const auto configureToggleStripButton = [](KoGroupButton *button) {
+            if (!button) {
+                return;
+            }
+            button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+            button->setIconSize(QSize(32, 32));
+            button->setMinimumSize(QSize(56, 56));
+            button->setCheckable(true);
+        };
 
         auto addActionButton = [&](KisOptionButtonStrip *strip,
                                    const QString &actionId,
@@ -245,7 +269,7 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                                    const QString &fallbackIconName) {
             QAction *action = actions ? actions->action(actionId) : nullptr;
             KoGroupButton *button = strip->addButton(QIcon(), labelOverride);
-            configureStripButton(button);
+            configureActionStripButton(button);
 
             if (action) {
                 if (!action->icon().isNull()) {
@@ -266,6 +290,16 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             }
         };
 
+        auto addToggleButton = [&](KisOptionButtonStrip *strip,
+                                   const QIcon &icon,
+                                   const QString &label,
+                                   const QString &toolTip) {
+            KoGroupButton *button = strip->addButton(icon, label);
+            configureToggleStripButton(button);
+            button->setToolTip(toolTip);
+            return button;
+        };
+
         KisOptionButtonStrip *row1 = new KisOptionButtonStrip(operationsWidget);
         row1->setExclusive(false);
         addActionButton(row1, QStringLiteral("invert_selection"), i18n("Invert"), QStringLiteral("select-invert"));
@@ -274,6 +308,10 @@ QWidget *KisToolSelectTouch::createOptionWidget()
                         QStringLiteral("fill_selection_foreground_color"),
                         i18n("Fill"),
                         QStringLiteral("krita_tool_color_fill"));
+        m_buttonToggleFeather = addToggleButton(row1,
+                                                KisIconUtils::loadIcon("view-filter"),
+                                                i18nc("@action:button", "Feather"),
+                                                i18nc("@info:tooltip", "Feather"));
         layout->addWidget(row1);
 
         KisOptionButtonStrip *row2 = new KisOptionButtonStrip(operationsWidget);
@@ -281,13 +319,18 @@ QWidget *KisToolSelectTouch::createOptionWidget()
         addActionButton(row2, QStringLiteral("clear"), i18n("Clear"), QStringLiteral("edit-clear"));
         addActionButton(row2, QStringLiteral("copy_selection_to_new_layer"), i18n("Copy"), QStringLiteral("edit-copy"));
         addActionButton(row2, QStringLiteral("cut_selection_to_new_layer"), i18n("Cut"), QStringLiteral("edit-cut"));
+        m_buttonToggleSaveLoad = addToggleButton(row2,
+                                                 KisIconUtils::loadIcon("document-open"),
+                                                 i18nc("@action:button", "Save & Load"),
+                                                 i18nc("@info:tooltip", "Save & Load"));
         layout->addWidget(row2);
 
-        layout->addStretch(1);
-
         sectionOperations->setPrimaryWidget(operationsWidget);
-        selectionWidget->insertWidget(4, "sectionTouchOperations", sectionOperations);
+        selectionWidget->insertWidget(2, "sectionTouchOperations", sectionOperations);
     }
+
+    selectionWidget->insertWidget(3, "sectionAutomatic", m_sectionAutomatic);
+    selectionWidget->insertWidget(4, "sectionFeather", m_sectionFeather);
 
     // Procreate-like Save & Load (v2: single-slot, in-memory)
     {
@@ -352,6 +395,12 @@ QWidget *KisToolSelectTouch::createOptionWidget()
             SIGNAL(buttonToggled(KoGroupButton*, bool)),
             this,
             SLOT(slot_actionButtonToggled(KoGroupButton*, bool)));
+    if (m_buttonToggleFeather) {
+        connect(m_buttonToggleFeather, &QToolButton::toggled, this, &KisToolSelectTouch::slot_toggleFeatherPanel);
+    }
+    if (m_buttonToggleSaveLoad) {
+        connect(m_buttonToggleSaveLoad, &QToolButton::toggled, this, &KisToolSelectTouch::slot_toggleSaveLoadPanel);
+    }
     connect(m_sliderThreshold,
             SIGNAL(valueChanged(int)),
             this,
@@ -442,9 +491,23 @@ void KisToolSelectTouch::updateMethodUi()
 
 void KisToolSelectTouch::updateMethodDependentUi()
 {
-    if (selectionOptionWidget() && m_sectionAutomatic) {
-        const bool showAutomatic = m_method == SelectionMethod::Automatic;
-        selectionOptionWidget()->setWidgetVisible("sectionAutomatic", showAutomatic);
+    KisSelectionOptions *selectionWidget = selectionOptionWidget();
+    if (!selectionWidget) {
+        return;
+    }
+
+    const bool showFeather = m_buttonToggleFeather && m_buttonToggleFeather->isChecked();
+    const bool showSavedSelection = m_buttonToggleSaveLoad && m_buttonToggleSaveLoad->isChecked();
+    const bool showAutomatic = m_method == SelectionMethod::Automatic && !showFeather && !showSavedSelection;
+
+    if (m_sectionAutomatic) {
+        selectionWidget->setWidgetVisible("sectionAutomatic", showAutomatic);
+    }
+    if (m_sectionFeather) {
+        selectionWidget->setWidgetVisible("sectionFeather", showFeather);
+    }
+    if (m_sectionSavedSelection) {
+        selectionWidget->setWidgetVisible("sectionSavedSelection", showSavedSelection);
     }
 }
 
@@ -547,6 +610,32 @@ void KisToolSelectTouch::slot_actionButtonToggled(KoGroupButton *button, bool ch
     }
 }
 
+void KisToolSelectTouch::slot_toggleFeatherPanel(bool checked)
+{
+    Q_UNUSED(checked);
+
+    if (m_buttonToggleFeather && m_buttonToggleFeather->isChecked() && m_buttonToggleSaveLoad &&
+        m_buttonToggleSaveLoad->isChecked()) {
+        QSignalBlocker blocker(m_buttonToggleSaveLoad);
+        m_buttonToggleSaveLoad->setChecked(false);
+    }
+
+    updateMethodDependentUi();
+}
+
+void KisToolSelectTouch::slot_toggleSaveLoadPanel(bool checked)
+{
+    Q_UNUSED(checked);
+
+    if (m_buttonToggleSaveLoad && m_buttonToggleSaveLoad->isChecked() && m_buttonToggleFeather &&
+        m_buttonToggleFeather->isChecked()) {
+        QSignalBlocker blocker(m_buttonToggleFeather);
+        m_buttonToggleFeather->setChecked(false);
+    }
+
+    updateMethodDependentUi();
+}
+
 void KisToolSelectTouch::slot_thresholdChanged(int value)
 {
     value = std::clamp(value, 1, 100);
@@ -615,13 +704,60 @@ void KisToolSelectTouch::slot_loadSelectionClicked()
     helper.selectPixelSelection(selectionCopy, SELECTION_REPLACE);
 }
 
-void KisToolSelectTouch::beginPrimaryAction(KoPointerEvent *event)
+bool KisToolSelectTouch::primaryActionSupportsHiResEvents() const
 {
-    KisToolSelect::beginPrimaryAction(event);
-    if (isMovingSelection()) {
+    // Freehand selection needs reasonably dense input for smooth outlines,
+    // especially on touch devices where move events are often compressed.
+    return true;
+}
+
+void KisToolSelectTouch::cancelInFlightInteraction()
+{
+    if (!m_draggingShape && !m_draggingFreehand && !m_polygonActive && !m_autoAdjustingThreshold) {
         return;
     }
 
+    QRectF dirtyRect;
+    bool hasDirtyRect = false;
+    const auto uniteDirtyRect = [&](const QRectF &rc) {
+        if (!hasDirtyRect) {
+            dirtyRect = rc;
+            hasDirtyRect = true;
+        } else {
+            dirtyRect = dirtyRect.united(rc);
+        }
+    };
+
+    if (m_draggingShape) {
+        uniteDirtyRect(QRectF(m_shapeStart, m_shapeCurrent).normalized());
+    }
+    if (m_draggingFreehand && !m_freehandPoints.isEmpty()) {
+        uniteDirtyRect(KisAlgebra2D::accumulateBounds(m_freehandPoints));
+    }
+    if (m_polygonActive && !m_polygonPoints.isEmpty()) {
+        uniteDirtyRect(KisAlgebra2D::accumulateBounds(m_polygonPoints));
+        if (!m_polygonPoints.isEmpty()) {
+            uniteDirtyRect(QRectF(m_polygonPoints.last(), m_lastCursorPos));
+        }
+    }
+
+    m_draggingShape = false;
+    m_draggingFreehand = false;
+    m_polygonActive = false;
+    m_autoAdjustingThreshold = false;
+    m_freehandPoints.clear();
+    m_polygonPoints.clear();
+    endSelectInteraction();
+
+    if (hasDirtyRect) {
+        updateCanvasPixelRect(paddedRect(dirtyRect, kOutlinePaddingPx));
+    } else if (image()) {
+        updateCanvasPixelRect(image()->bounds());
+    }
+}
+
+void KisToolSelectTouch::beginPrimaryAction(KoPointerEvent *event)
+{
     if (!currentNode() || !selectionEditable()) {
         event->ignore();
         return;
@@ -656,11 +792,6 @@ void KisToolSelectTouch::beginPrimaryAction(KoPointerEvent *event)
 
 void KisToolSelectTouch::continuePrimaryAction(KoPointerEvent *event)
 {
-    if (isMovingSelection()) {
-        KisToolSelect::continuePrimaryAction(event);
-        return;
-    }
-
     if (m_method == SelectionMethod::Automatic && m_autoAdjustingThreshold) {
         const QPointF current = convertToPixelCoord(event->point);
         const qreal deltaX = current.x() - m_autoDragStart.x();
@@ -696,11 +827,6 @@ void KisToolSelectTouch::continuePrimaryAction(KoPointerEvent *event)
 
 void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
 {
-    if (isMovingSelection()) {
-        KisToolSelect::endPrimaryAction(event);
-        return;
-    }
-
     if (m_method == SelectionMethod::Automatic && m_autoAdjustingThreshold) {
         m_autoAdjustingThreshold = false;
         applyAutomaticSelection(m_autoImagePos, m_threshold);
@@ -724,31 +850,46 @@ void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
             return;
         }
 
-        const QRectF bounds = KisAlgebra2D::accumulateBounds(m_freehandPoints);
-        const bool isTap =
-            KisAlgebra2D::maxDimension(bounds) <= kTapMaxDistancePx ||
-            m_freehandPoints.size() < 3;
+        const QRectF strokeBoundsPx = KisAlgebra2D::accumulateBounds(m_freehandPoints);
+        const QRectF strokeBoundsView = pixelToView(strokeBoundsPx);
+        const bool isTap = KisAlgebra2D::maxDimension(strokeBoundsView) <= kTapMaxDistanceViewPx;
 
-        if (!isTap) {
-            // Treat as lasso: commit immediately.
-            applyFreehandSelection(m_freehandPoints);
-            m_polygonActive = false;
-            m_polygonPoints.clear();
-            endSelectInteraction();
-            return;
-        }
+        auto viewDistanceSquared = [&](const QPointF &aPx, const QPointF &bPx) -> qreal {
+            const QPointF aView = pixelToView(aPx);
+            const QPointF bView = pixelToView(bPx);
+            const QPointF delta = aView - bView;
+            return delta.x() * delta.x() + delta.y() * delta.y();
+        };
 
-        // Tap-to-polygon: build polygon points; finish by tapping near the first point.
-        const QPointF tapPoint = m_freehandPoints.last();
+        auto canClosePolygonWith = [&](const QPointF &pPx) -> bool {
+            if (m_polygonPoints.size() < 3) {
+                return false;
+            }
+            return viewDistanceSquared(pPx, m_polygonPoints.first()) <=
+                kClosePolygonDistanceViewPx * kClosePolygonDistanceViewPx;
+        };
+
+        const auto appendPointIfNew = [&](const QPointF &p) {
+            if (m_polygonPoints.isEmpty() || m_polygonPoints.last() != p) {
+                m_polygonPoints.append(p);
+            }
+        };
+
+        // Procreate-style unified freehand selection:
+        // - taps add polygon anchors
+        // - drags add freehand segments
+        // - both can be mixed until the user closes the selection
         if (!m_polygonActive) {
             m_polygonActive = true;
             m_polygonPoints.clear();
-            m_polygonPoints.append(tapPoint);
-            m_lastCursorPos = tapPoint;
-            m_polygonLastUpdateRect = QRectF(tapPoint, tapPoint);
-        } else {
-            if (m_polygonPoints.size() >= 3 &&
-                kisSquareDistance(tapPoint, m_polygonPoints.first()) <= kClosePolygonDistancePx * kClosePolygonDistancePx) {
+            m_polygonLastUpdateRect = QRectF();
+        }
+
+        if (isTap) {
+            const QPointF tapPoint = m_freehandPoints.last();
+            m_freehandPoints.clear();
+
+            if (canClosePolygonWith(tapPoint)) {
                 applyFreehandSelection(m_polygonPoints);
                 m_polygonActive = false;
                 m_polygonPoints.clear();
@@ -756,14 +897,45 @@ void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
                 return;
             }
 
-            const QRectF oldBounds = KisAlgebra2D::accumulateBounds(m_polygonPoints);
-            m_polygonPoints.append(tapPoint);
+            const QRectF oldBounds = m_polygonPoints.isEmpty()
+                ? QRectF(tapPoint, tapPoint)
+                : KisAlgebra2D::accumulateBounds(m_polygonPoints);
+            appendPointIfNew(tapPoint);
+            m_lastCursorPos = tapPoint;
             const QRectF newBounds = KisAlgebra2D::accumulateBounds(m_polygonPoints);
             updateCanvasPixelRect(paddedRect(oldBounds.united(newBounds), kOutlinePaddingPx));
             m_polygonLastUpdateRect = newBounds;
+            return;
         }
 
-        // Keep interaction open until polygon is finished.
+        // Drag segment: append the freehand stroke to the in-flight polygon.
+        const QRectF oldBounds = m_polygonPoints.isEmpty()
+            ? strokeBoundsPx
+            : KisAlgebra2D::accumulateBounds(m_polygonPoints);
+
+        for (const QPointF &p : m_freehandPoints) {
+            appendPointIfNew(p);
+        }
+        m_freehandPoints.clear();
+
+        if (!m_polygonPoints.isEmpty()) {
+            m_lastCursorPos = m_polygonPoints.last();
+        }
+
+        const QRectF newBounds = KisAlgebra2D::accumulateBounds(m_polygonPoints);
+        updateCanvasPixelRect(paddedRect(oldBounds.united(newBounds), kOutlinePaddingPx));
+        m_polygonLastUpdateRect = newBounds;
+
+        // If the user ended the drag near the first anchor, auto-close.
+        if (!m_polygonPoints.isEmpty() && canClosePolygonWith(m_polygonPoints.last())) {
+            applyFreehandSelection(m_polygonPoints);
+            m_polygonActive = false;
+            m_polygonPoints.clear();
+            endSelectInteraction();
+            return;
+        }
+
+        // Keep interaction open until the polygon is explicitly closed.
         return;
     }
 
@@ -931,13 +1103,6 @@ void KisToolSelectTouch::applyFreehandSelection(const QVector<QPointF> &points)
 
     KisSelectionToolHelper helper(kisCanvas, kundo2_i18n("Freehand Selection"));
 
-    const QRectF boundingRect = KisAlgebra2D::accumulateBounds(points);
-    const QRectF boundingViewRect = pixelToView(boundingRect);
-
-    if (helper.tryDeselectCurrentSelection(boundingViewRect, selectionAction())) {
-        return;
-    }
-
     KisCursorOverrideLock cursorLock(KisCursor::waitCursor());
 
     KisProcessingApplicator applicator(currentImage(),
@@ -1002,10 +1167,6 @@ void KisToolSelectTouch::applyRectSelection(const QRectF &rect, bool elliptical)
     KIS_SAFE_ASSERT_RECOVER_RETURN(kisCanvas);
 
     KisSelectionToolHelper helper(kisCanvas, elliptical ? kundo2_i18n("Select Ellipse") : kundo2_i18n("Select Rectangle"));
-
-    if (helper.tryDeselectCurrentSelection(pixelToView(rect), selectionAction())) {
-        return;
-    }
 
     const QRect rc = rect.normalized().toRect();
 

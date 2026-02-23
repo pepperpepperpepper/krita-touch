@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "layer_ops.add_paint_layer",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "layer_ops.undo_layer_add",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "edit_undo",
+      "delta": -1,
+      "timeout_ms": 5000
+    },
+    {
+      "name": "layer_ops.redo_layer_add",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "edit_redo",
+      "delta": 1,
+      "timeout_ms": 5000
+    }
+  ]
+}

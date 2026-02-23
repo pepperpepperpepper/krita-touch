@@ -54,6 +54,8 @@ public:
     void continuePrimaryAction(KoPointerEvent *event) override;
     void endPrimaryAction(KoPointerEvent *event) override;
 
+    bool primaryActionSupportsHiResEvents() const override;
+
     void mouseMoveEvent(KoPointerEvent *event) override;
 
     void resetCursorStyle() override;
@@ -65,6 +67,8 @@ public Q_SLOTS:
 private Q_SLOTS:
     void slot_methodButtonToggled(KoGroupButton *button, bool checked);
     void slot_actionButtonToggled(KoGroupButton *button, bool checked);
+    void slot_toggleFeatherPanel(bool checked);
+    void slot_toggleSaveLoadPanel(bool checked);
     void slot_thresholdChanged(int value);
     void slot_featherChanged(int value);
     void slot_saveSelectionClicked();
@@ -75,6 +79,7 @@ private:
 
     void setMethod(SelectionMethod method, bool persist);
     void loadSettings();
+    void cancelInFlightInteraction();
 
     void updateMethodUi();
     void updateMethodDependentUi();
@@ -101,6 +106,9 @@ private:
     KoGroupButton *m_buttonActionSubtract {nullptr};
     KoGroupButton *m_buttonActionIntersect {nullptr};
     KoGroupButton *m_buttonActionSymmetricDifference {nullptr};
+
+    KoGroupButton *m_buttonToggleFeather {nullptr};
+    KoGroupButton *m_buttonToggleSaveLoad {nullptr};
 
     KisOptionCollectionWidgetWithHeader *m_sectionFeather {nullptr};
     KisSliderSpinBox *m_sliderFeather {nullptr};
@@ -142,11 +150,17 @@ public:
     KisToolSelectTouchFactory()
         : KisSelectionToolFactoryBase("KisToolSelectTouch")
     {
-        setToolTip(i18n("Touch Selection Tool"));
+        // Procreate-style unified selection tool (Automatic/Freehand/Rect/Ellipse).
+        // Keep the tooltip/name generic so it reads naturally in the toolbox.
+        setToolTip(i18n("Selection Tool"));
         setSection(ToolBoxSection::Select);
         setActivationShapeId(KRITA_TOOL_ACTIVATION_ID);
-        setIconName(koIconNameCStr("tool_outline_selection"));
-        setPriority(7);
+        // Prefer a selection-specific (but method-agnostic) icon so this tool
+        // stands out from the legacy lasso/rect/ellipse tools in the Select section.
+        setIconName(koIconNameCStr("tool_touch_selection"));
+        // Show early in the Select section so it is easy to find in touch-first
+        // workflows (and can act as the default selection entry point).
+        setPriority(-1);
     }
 
     ~KisToolSelectTouchFactory() override {}

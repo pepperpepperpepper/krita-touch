@@ -65,6 +65,15 @@ bool actionTriggerWaitLayerCountDelta(KisMainWindow *mainWindow,
                                       QJsonObject *details,
                                       QString *errorOut);
 
+bool waitCanvasEraserMode(KisMainWindow *mainWindow, bool expected, int timeoutMs, QJsonObject *details, QString *errorOut);
+
+bool waitCanvasEffectiveCompositeOp(KisMainWindow *mainWindow,
+                                    const QString &expectedId,
+                                    bool negate,
+                                    int timeoutMs,
+                                    QJsonObject *details,
+                                    QString *errorOut);
+
 struct TouchDragPathPoints {
     QVector<QVector<QPointF>> localPoints; // [step][finger]
     QVector<QVector<QPointF>> globalPoints; // [step][finger]

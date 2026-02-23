@@ -345,10 +345,36 @@ if [[ -f "$PYKRITA_SO" ]]; then
   EXTRA_PLUGINS_LIST="$EXTRA_PLUGINS_LIST,$PYKRITA_SO"
 fi
 
-if [ -f $DEPS_INSTALL_PREFIX/plugins/platforms/libqwayland-generic.so ]; then
-  EXTRA_PLATFORM_PLUGINS="platforms/libqwayland-generic.so,wayland-shell-integration/libxdg-shell.so,wayland-graphics-integration-client/libqt-plugin-wayland-egl.so"
-  EXTRA_PLUGINS_LIST="$EXTRA_PLUGINS_LIST,$EXTRA_PLATFORM_PLUGINS"
-fi
+append_qt_plugin_if_present() {
+  local rel_path="$1"
+  if [ -f "$DEPS_INSTALL_PREFIX/plugins/$rel_path" ]; then
+    EXTRA_PLUGINS_LIST="$EXTRA_PLUGINS_LIST,$rel_path"
+  fi
+}
+
+# Wayland: portal theme for crisp file dialogs on Wayland compositors.
+append_qt_plugin_if_present platformthemes/libqxdgdesktopportal.so
+
+# Wayland: ship QtWayland platform + integration plugins when available.
+append_qt_plugin_if_present platforms/libqwayland-egl.so
+append_qt_plugin_if_present platforms/libqwayland-generic.so
+append_qt_plugin_if_present platforms/libqwayland-xcomposite-egl.so
+append_qt_plugin_if_present platforms/libqwayland-xcomposite-glx.so
+
+append_qt_plugin_if_present wayland-shell-integration/libxdg-shell.so
+append_qt_plugin_if_present wayland-shell-integration/libxdg-shell-v5.so
+append_qt_plugin_if_present wayland-shell-integration/libxdg-shell-v6.so
+append_qt_plugin_if_present wayland-shell-integration/libwl-shell.so
+append_qt_plugin_if_present wayland-shell-integration/libivi-shell.so
+append_qt_plugin_if_present wayland-shell-integration/libfullscreen-shell-v1.so
+
+append_qt_plugin_if_present wayland-graphics-integration-client/libqt-plugin-wayland-egl.so
+append_qt_plugin_if_present wayland-graphics-integration-client/libxcomposite-egl.so
+append_qt_plugin_if_present wayland-graphics-integration-client/libxcomposite-glx.so
+append_qt_plugin_if_present wayland-graphics-integration-client/libdrm-egl-server.so
+append_qt_plugin_if_present wayland-graphics-integration-client/libshm-emulation-server.so
+
+append_qt_plugin_if_present wayland-decoration-client/libbradient.so
 
 EXTRA_RUNTIME_ARGUMENT=
 

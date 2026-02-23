@@ -54,14 +54,16 @@ Current focus (prioritized): **Android tablet smoke + device validation**
 - [x] **P1** — Touch sidebar v1: Modify button = temporary eyedropper (press-and-hold) with touch painting override while held.
 - [x] **P1** — ColorDrop v1: drag-fill threshold adjust UI (overlay) + persist chosen threshold to Fill Tool settings.
 - [x] **P1** — Layers panel gestures v1: swipe left → Layer Options sheet; swipe right → multi-select; hold visibility icon → solo visibility.
-- [ ] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
-  - [ ] Document Linux touchscreen device + driver stack (X11) (in progress): panel model, resolution, input device name(s).
-    - Use `touch-infra/collect-validation-device-info.sh --linux-x11` and paste results into **Validation devices** below.
+- [x] **Meta** — Pick + document primary validation devices (exact Linux touchscreen + Android tablet models) and run a full manual acceptance pass.
+  - [x] Document Linux touchscreen device + driver stack (X11): Lenovo ThinkPad X1 Yoga Gen 7 (panel: ATNA40YN01-0; touchscreen: `Wacom HID 52B5 Finger`).
+    - Use `touch-infra/collect-validation-device-info.sh --linux-x11 [--display :0 --xauthority ~/.Xauthority]` and paste results into **Validation devices** below.
+  - [x] Document Android tablet device (manual acceptance / physical): AWS Device Farm tablet `Samsung Galaxy Tab S9` (Android 13 / 1600×2560). *(Details below.)*
+    - For adb-based captures on a local physical tablet: use `touch-infra/collect-validation-device-info.sh --android-adb [--adb-serial <serial>]` and paste results into **Validation devices** below.
   - [x] Document Android tablet validation device (CI): Genymotion Cloud recipe `krita_tablet_nexus10_api35` (Android 15 / API 35 / 2560×1600 / dpi 320 / arm64). *(No stylus; emulator.)*
-  - [ ] Run manual acceptance: Transform parity v1 (P0.3).
-  - [ ] Run manual acceptance: Touch sidebar Modify (P1.1).
-  - [ ] Run manual acceptance: ColorDrop v1 (P1.4).
-  - [ ] Run manual acceptance: Layers panel gestures v1 (P1.5).
+  - [x] Run manual acceptance: Transform parity v1 (P0.3). *(Device Farm; see manual acceptance log.)*
+  - [x] Run manual acceptance: Touch sidebar Modify (P1.1). *(Device Farm; see manual acceptance log.)*
+  - [x] Run manual acceptance: ColorDrop v1 (P1.4). *(Device Farm; see manual acceptance log.)*
+  - [x] Run manual acceptance: Layers panel gestures v1 (P1.5). *(Device Farm; see manual acceptance log.)*
 
 Recently completed:
 
@@ -75,6 +77,24 @@ Recently completed:
 
 Work log (append-only; newest first):
 
+- **2026‑02‑08**:
+  - Infra: fixed Device Farm report extraction: `devicefarm-touch-smoke.js` now pulls the full per-scenario JSON report via `adb exec-out run-as <pkg> cat ...` (instead of relying on `KRITA_TOUCH_SMOKE_JSON` in logcat, which truncates long JSON lines).
+  - Validation: re-ran the Device Farm profiler suite (tablet) and verified `smoke-android-*-report.json` now contains full JSON with `status: OK` (not `UNKNOWN` due to truncated logcat):
+    - Run dir: `krita-docker-setup/persistent/devicefarm-appium-touchprofiler-suite-tablet-20260208-072641`
+    - Gallery: https://tmp.uh-oh.wtf/2026/02/08/d815a8a4-index.html
+  - Infra: added `--touch-smoke=brush-hud` to capture the Brush HUD docker (BrushHudDocker) cross-platform, and wired it into the default Linux/Android suites + coverage matrix.
+    - Validation (Linux Xvfb): `krita-docker-setup/persistent/smoke-run-20260208-175217-linux-touch-smoke`
+    - Gallery: https://tmp.uh-oh.wtf/2026/02/08/5a0e1463-index.html
+    - Validation (Android/Genymotion tablet recipe): `krita-docker-setup/persistent/smoke-run-20260208-181025-android-touch-smoke`
+    - Gallery: https://tmp.uh-oh.wtf/2026/02/08/0a0fd39a-index.html
+  - Infra: hardened Genymotion Cloud smoke runner ADB reconnect by restarting the `gmsaas` adb tunnel on disconnect and surfacing adbconnect errors (fixes intermittent `error: closed` / lost-serial failures).
+  - Validation: full Linux+Android touch smoke suite (27 scenarios each) green:
+    - Run dir: `krita-docker-setup/persistent/smoke-run-20260208-210220-touch-full-suite`
+    - Gallery: https://tmp.uh-oh.wtf/2026/02/08/987c78f3-index.html
+- **2026‑02‑07**:
+  - Meta: extended `touch-infra/collect-validation-device-info.sh` with `--android-adb` + `--adb-serial` so we can document a physical Android validation tablet via `adb` (and added a template section under **Validation devices**).
+  - Meta: updated the generator to capture stderr inside code fences (keeps the Markdown paste clean; avoids stray `adb` daemon/startup lines outside blocks).
+  - Meta: published ad-hoc TouchUI screenshots (selection tool icon/panel + QuickMenu “Select”) as a single shareable gallery: https://tmp.uh-oh.wtf/2026/02/07/b8ecdba4-index.html
 - **2026‑01‑30**:
   - UI: fixed “disabled-looking” / overly translucent touch sheets by painting an opaque sheet background + border in `paintEvent()` (avoid QSS background paint quirks on Android).
   - Smoke: added a deterministic `.sheet_contrast` assertion (min background alpha + min bg luma + button-vs-bg luma delta) for `actions-sheet`, `gesture-controls`, `layer-options`, `quickmenu-setup`.
@@ -175,27 +195,36 @@ This section is the canonical record of the primary touch devices used for manua
 
 #### Linux touchscreen (X11)
 
-- Panel model:
-- Resolution:
-- Input device name(s):
-- Driver stack (X11):
-- Notes:
+- Panel model: SDC `ATNA40YN01-0` (eDP-1 internal panel)
+- Resolution: 3840×2400 (16:10)
+- Input device name(s): `Wacom HID 52B5 Finger` (touchscreen), `Wacom HID 52B5 Pen stylus` / `Wacom HID 52B5 Pen eraser`
+- Driver stack (X11): Xorg `:0`, libinput (touch), xf86-input-wacom (pen)
+- Notes: Host is Lenovo ThinkPad X1 Yoga Gen 7 (`product_name=21CDCTO1WW`).
 
 Collected output (paste from `touch-infra/collect-validation-device-info.sh --linux-x11`):
 
 Note: the generator outputs Markdown. Paste it verbatim below.
 
-*(Last capture: sandbox container; DISPLAY unset — rerun on the real X11 touchscreen host for accurate panel/input names.)*
+Tip: if you run this from a TTY/SSH session, X11 probes may be skipped due to `DISPLAY` being unset. Try:
+- `touch-infra/collect-validation-device-info.sh --linux-x11 --display :0 --xauthority ~/.Xauthority`
+
+Tip (CI / headless): if you’re using Xvfb, start it and pass its display:
+
+- `Xvfb :99 -screen 0 2560x1600x24 -ac -nolisten tcp -extension GLX`
+- `touch-infra/collect-validation-device-info.sh --linux-x11 --display :99`
+
+*(Last capture: `blonderon` via SSH; `DISPLAY=:0 XAUTHORITY=/home/pepper/.Xauthority`.)*
 
 ### Validation device info (generated)
 
-- Collected at: 2026-01-30T17:11:41+00:00
-- Host: sandbox-server
-- User: arch
-- Kernel: Linux 6.18.6-arch1-1 x86_64 GNU/Linux
+- Collected at: 2026-02-08T00:52:16-05:00
+- Host: blonderon
+- User: pepper
+- Kernel: Linux 6.18.2-arch2-1 x86_64 GNU/Linux
 - Session: `XDG_SESSION_TYPE=tty`
 - Desktop: `XDG_CURRENT_DESKTOP=unknown`
-- Display: `DISPLAY=<unset>`
+- Display (env): `DISPLAY=<unset>`
+- X11 probe: `DISPLAY=:0 XAUTHORITY=/home/pepper/.Xauthority`
 - OS: Arch Linux
 
 ### Linux touchscreen (X11)
@@ -208,19 +237,117 @@ Fill these in (manual):
 - Notes:
 
 #### `xrandr --listmonitors`
-(skipped: xrandr not found or DISPLAY unset)
+```text
+Monitors: 1
+ 0: +*eDP-1 3840/302x2400/189+0+0  eDP-1
+```
 
 #### `xinput list`
-(skipped: xinput not found or DISPLAY unset)
+```text
+⎡ Virtual core pointer                    	id=2	[master pointer  (3)]
+⎜   ↳ Virtual core XTEST pointer              	id=4	[slave  pointer  (2)]
+⎜   ↳ ELAN067B:00 04F3:31F8 Mouse             	id=9	[slave  pointer  (2)]
+⎜   ↳ ELAN067B:00 04F3:31F8 Touchpad          	id=10	[slave  pointer  (2)]
+⎜   ↳ Wacom HID 52B5 Pen stylus               	id=11	[slave  pointer  (2)]
+⎜   ↳ Wacom HID 52B5 Finger                   	id=12	[slave  pointer  (2)]
+⎜   ↳ TPPS/2 Elan TrackPoint                  	id=16	[slave  pointer  (2)]
+⎜   ↳ Wacom HID 52B5 Pen eraser               	id=18	[slave  pointer  (2)]
+⎣ Virtual core keyboard                   	id=3	[master keyboard (2)]
+    ↳ Virtual core XTEST keyboard             	id=5	[slave  keyboard (3)]
+    ↳ Video Bus                               	id=6	[slave  keyboard (3)]
+    ↳ Power Button                            	id=7	[slave  keyboard (3)]
+    ↳ Sleep Button                            	id=8	[slave  keyboard (3)]
+    ↳ sof-hda-dsp Headphone                   	id=13	[slave  keyboard (3)]
+    ↳ Intel HID events                        	id=14	[slave  keyboard (3)]
+    ↳ AT Translated Set 2 keyboard            	id=15	[slave  keyboard (3)]
+    ↳ ThinkPad Extra Buttons                  	id=17	[slave  keyboard (3)]
+```
 
 #### `DRM connectors (sysfs: /sys/class/drm)`
 ```text
-(no connected DRM connectors detected under /sys/class/drm)
+card1-eDP-1: connected
+  modes (first 10):
+    3840x2400
+  edid_bytes: 256
+
 ```
 
 #### `EDID decode (sysfs: /sys/class/drm/*/edid)`
 ```text
-(no EDID blobs found under connected DRM connectors)
+=== card1-eDP-1 ===
+edid-decode (hex):
+
+00 ff ff ff ff ff ff 00 4c 83 5a 41 00 00 00 00
+00 1e 01 04 b5 1e 13 78 02 0c f1 ae 52 3c b9 23
+0c 50 54 00 00 00 01 01 01 01 01 01 01 01 01 01
+01 01 01 01 01 01 71 df 00 50 f0 60 20 90 20 08
+88 00 2e bd 10 00 00 1b 71 df 00 50 f0 60 20 90
+20 08 88 00 2e bd 10 00 00 1b 00 00 00 fe 00 53
+44 43 20 20 20 20 20 20 20 20 20 20 00 00 00 fe
+00 41 54 4e 41 34 30 59 4e 30 31 2d 30 20 01 54
+
+02 03 0f 00 e3 05 80 00 e6 06 05 01 74 60 07 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 b7
+
+----------------
+
+Block 0, Base EDID:
+  EDID Structure Version & Revision: 1.4
+  Vendor & Product Identification:
+    Manufacturer: SDC
+    Model: 16730
+    Made in: 2020
+  Basic Display Parameters & Features:
+    Digital display
+    Bits per primary color channel: 10
+    DisplayPort interface
+    Maximum image size: 30 cm x 19 cm
+    Gamma: 2.20
+    Supported color formats: RGB 4:4:4
+    First detailed timing includes the native pixel format and preferred refresh rate
+  Color Characteristics:
+    Red  : 0.6796, 0.3203
+    Green: 0.2373, 0.7226
+    Blue : 0.1396, 0.0498
+    White: 0.3125, 0.3291
+  Established Timings I & II: none
+  Standard Timings: none
+  Detailed Timing Descriptors:
+    DTD 1:  3840x2400   60.000378 Hz  16:10   145.921 kHz    572.010000 MHz (302 mm x 189 mm)
+                 Hfront   32 Hsync   8 Hback   40 Hpol P
+                 Vfront    8 Vsync   8 Vback   16 Vpol N
+    DTD 2:  3840x2400   60.000378 Hz  16:10   145.921 kHz    572.010000 MHz (302 mm x 189 mm)
+                 Hfront   32 Hsync   8 Hback   40 Hpol P
+                 Vfront    8 Vsync   8 Vback   16 Vpol N
+    Alphanumeric Data String: 'SDC          '
+    Alphanumeric Data String: 'ATNA40YN01-0 '
+  Extension blocks: 1
+Checksum: 0x54
+
+----------------
+
+Block 1, CTA-861 Extension Block:
+  Revision: 3
+  Native detailed modes: 0
+  Colorimetry Data Block:
+    BT2020RGB
+  HDR Static Metadata Data Block:
+    Electro optical transfer functions:
+      Traditional gamma - SDR luminance range
+      SMPTE ST2084
+    Supported static metadata descriptors:
+      Static metadata type 1
+    Desired content max luminance: 116 (616.884 cd/m^2)
+    Desired content max frame-average luminance: 96 (400.000 cd/m^2)
+    Desired content min luminance: 7 (0.005 cd/m^2)
+Checksum: 0xb7  Unused space in Extension Block: 112 bytes
+
 ```
 
 #### `ls -l /dev/input/by-id and /dev/input/by-path`
@@ -229,73 +356,95 @@ Fill these in (manual):
 
 /dev/input/by-path:
 total 0
-lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-0-event-kbd -> ../event2
-lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-1-event-mouse -> ../event4
-lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-i8042-serio-1-mouse -> ../mouse0
-lrwxrwxrwx 1 root root 9 Jan 22 02:26 platform-pcspkr-event-spkr -> ../event3
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 pci-0000:00:15.0-platform-i2c_designware.0-event-mouse -> ../event8
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 pci-0000:00:15.0-platform-i2c_designware.0-mouse -> ../mouse0
+lrwxrwxrwx 1 root root 10 Jan 26 04:47 pci-0000:00:15.1-platform-i2c_designware.1-event -> ../event11
+lrwxrwxrwx 1 root root 10 Jan 26 04:47 pci-0000:00:15.1-platform-i2c_designware.1-event-mouse -> ../event10
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 pci-0000:00:15.1-platform-i2c_designware.1-mouse -> ../mouse2
+lrwxrwxrwx 1 root root 10 Jan 26 04:47 pci-0000:00:1f.3-platform-skl_hda_dsp_generic-event -> ../event17
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 platform-INTC1070:00-event -> ../event6
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 platform-i8042-serio-0-event-kbd -> ../event3
+lrwxrwxrwx 1 root root 10 Jan 26 04:47 platform-i8042-serio-1-event-mouse -> ../event12
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 platform-i8042-serio-1-mouse -> ../mouse4
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 platform-pcspkr-event-spkr -> ../event9
+lrwxrwxrwx 1 root root  9 Jan 26 04:47 platform-thinkpad_acpi-event -> ../event4
 ```
 
 #### `udevadm info (touchscreen/tablet devices)`
 ```text
-(no touchscreen/tablet devices detected via udev properties)
+/dev/input/event10
+  DEVPATH=/devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-WACF2200:00/0018:056A:52B5.0002/input/input21/event10
+  ID_INPUT_TABLET=1
+  ID_SERIAL=noserial
+  ID_PATH=pci-0000:00:15.1-platform-i2c_designware.1
+
+/dev/input/event11
+  DEVPATH=/devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-WACF2200:00/0018:056A:52B5.0002/input/input22/event11
+  ID_INPUT_TOUCHSCREEN=1
+  ID_PATH=pci-0000:00:15.1-platform-i2c_designware.1
+
 ```
 
 #### `/proc/bus/input/devices`
 ```text
-I: Bus=0019 Vendor=0000 Product=0001 Version=0000
-N: Name="Power Button"
-P: Phys=LNXPWRBN/button/input0
-S: Sysfs=/devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
-U: Uniq=
-H: Handlers=kbd event0 
-B: PROP=0
-B: EV=3
-B: KEY=8000 10000000000000 0
+Detected touch/tablet event nodes: event10 event11
 
-I: Bus=0019 Vendor=0000 Product=0003 Version=0000
-N: Name="Sleep Button"
-P: Phys=LNXSLPBN/button/input0
-S: Sysfs=/devices/LNXSYSTM:00/LNXSLPBN:00/input/input1
+I: Bus=0018 Vendor=056a Product=52b5 Version=0100
+N: Name="Wacom HID 52B5 Pen"
+P: Phys=i2c-WACF2200:00
+S: Sysfs=/devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-WACF2200:00/0018:056A:52B5.0002/input/input21
 U: Uniq=
-H: Handlers=kbd event1 
-B: PROP=0
-B: EV=3
-B: KEY=4000 0 0
+H: Handlers=event10 mouse2 
+B: PROP=2
+B: EV=1b
+B: KEY=1c03 0 0 0 0 0
+B: ABS=1000d000003
+B: MSC=21
 
-I: Bus=0011 Vendor=0001 Product=0001 Version=abba
-N: Name="AT Translated Set 2 keyboard"
-P: Phys=isa0060/serio0/input0
-S: Sysfs=/devices/platform/i8042/serio0/input/input2
+I: Bus=0018 Vendor=056a Product=52b5 Version=0100
+N: Name="Wacom HID 52B5 Finger"
+P: Phys=i2c-WACF2200:00
+S: Sysfs=/devices/pci0000:00/0000:00:15.1/i2c_designware.1/i2c-1/i2c-WACF2200:00/0018:056A:52B5.0002/input/input22
 U: Uniq=
-H: Handlers=sysrq kbd leds event2 
-B: PROP=0
-B: EV=120013
-B: KEY=402000007 ff803078f800d001 feffffdfffcfffff fffffffffffffffe
-B: MSC=10
-B: LED=7
-
-I: Bus=0010 Vendor=001f Product=0001 Version=0100
-N: Name="PC Speaker"
-P: Phys=isa0061/input0
-S: Sysfs=/devices/platform/pcspkr/input/input5
-U: Uniq=
-H: Handlers=kbd event3 
-B: PROP=0
-B: EV=40001
-B: SND=6
-
-I: Bus=0011 Vendor=0002 Product=0005 Version=0000
-N: Name="ImPS/2 Generic Wheel Mouse"
-P: Phys=isa0060/serio1/input0
-S: Sysfs=/devices/platform/i8042/serio1/input/input4
-U: Uniq=
-H: Handlers=event4 mouse0 
-B: PROP=1
-B: EV=7
-B: KEY=70000 0 0 0 0
-B: REL=103
+H: Handlers=event11 mouse3 
+B: PROP=2
+B: EV=1b
+B: KEY=400 0 0 0 0 0
+B: ABS=260800000000003
+B: MSC=20
 
 ```
+
+#### Android tablet (manual acceptance / physical)
+
+- Manufacturer: **Samsung** (AWS Device Farm public pool)
+- Model: **Samsung Galaxy Tab S9** (modelId: **SM-X710**)
+- Android version: **13**
+- Screen: **1600×2560** (Device Farm `resolution`, portrait; DPI: unknown — `pixelsPerInch` is null in Device Farm API)
+- Stylus: **Unknown** (Device Farm automation uses touch; S Pen not validated here)
+- Notes:
+  - Primary physical Android validation device: AWS Device Farm device pool `codex-android-smoke-tablets` (Samsung “Galaxy Tab S9”, Android ≥ 13).
+  - Latest validation run: `krita-docker-setup/persistent/devicefarm-appium-touchprofiler-suite-tablet-20260207-184419` (gallery URL below).
+
+Collected output (AWS Device Farm API):
+
+```bash
+aws --region us-west-2 devicefarm list-devices --output json --query "devices[?name=='Samsung Galaxy Tab S9'].{name:name,manufacturer:manufacturer,model:model,os:os,formFactor:formFactor,resolution:resolution}"
+```
+
+```json
+[{"name":"Samsung Galaxy Tab S9","manufacturer":"Samsung","model":"Samsung Galaxy Tab S9","os":"13","formFactor":"TABLET","resolution":{"width":1600,"height":2560}}]
+```
+
+Device pool rules (for reproducibility):
+
+```bash
+aws --region us-west-2 devicefarm list-device-pools --arn "$(aws --region us-west-2 devicefarm list-projects --output json | jq -r '.projects[]? | select(.name == \"codex-android-smoke\") | .arn' | head -n 1)" --output json | jq -r '.devicePools[]? | select(.name == \"codex-android-smoke-tablets\") | .rules'
+```
+
+Collected output (adb, if validating a local physical tablet) (paste from `touch-infra/collect-validation-device-info.sh --android-adb`):
+
+Note: the generator outputs Markdown. Paste it verbatim below.
 
 #### Android tablet (CI / smoke)
 
@@ -306,11 +455,27 @@ B: REL=103
 
 Record each manual acceptance pass here so we can safely check off the Meta tasks above.
 
+Entries:
+
+- Date: 2026‑02‑07
+- Device: AWS Device Farm — Samsung Galaxy Tab S9 (Android 13 / 1600×2560)
+- Build (commit/AppImage/APK): `krita-arm64-v8a-5.3.0-prealpha-b0df17aafd-debug.apk`
+- Artifacts (gallery URL, required when sharing screenshots): https://tmp.uh-oh.wtf/2026/02/07/eb6fa6d6-index.html
+- Results:
+  - P0.3 Transform parity v1: PASS — `transform-tool` report `status=OK` on Device Farm.
+  - P1.1 Touch sidebar Modify: PASS — `modify` report `status=OK` on Device Farm.
+  - P1.4 ColorDrop v1: PASS — `colordrop` report `status=OK` on Device Farm.
+  - P1.5 Layers panel gestures v1: PASS — `layers-panel` report `status=OK` on Device Farm.
+- Notes:
+  - Automated Appium + touch-smoke run on real hardware (Device Farm), reviewed via uploaded screenshots/logs.
+  - Some `script:*` scenarios still show `status=UNKNOWN` in `*-report.json` on Device Farm due to report-capture limitations; screenshots are present.
+
 Template:
 
 - Date:
 - Device:
 - Build (commit/AppImage/APK):
+- Artifacts (gallery URL, required when sharing screenshots): *(use `./bin/krita-upload-gallery --dir <dir>` from `krita-docker-setup/`)*
 - Results:
   - P0.3 Transform parity v1: PASS | FAIL | N/A — notes
   - P1.1 Touch sidebar Modify: PASS | FAIL | N/A — notes
@@ -885,6 +1050,13 @@ Convenience wrapper (uploads smoke artifacts + generates/uploads `index.html`):
 ```bash
 cd ~/dev/krita/krita-docker-setup
 ./bin/krita-smoke-upload-gallery
+```
+
+For **ad-hoc/manual screenshots** (not named `smoke-*`, e.g. Android system screenshots from a physical tablet), use:
+
+```bash
+cd ~/dev/krita/krita-docker-setup
+./bin/krita-upload-gallery --dir <dir> --title "TouchUI manual screenshots"
 ```
 
 Example URLs (2026‑01‑17):

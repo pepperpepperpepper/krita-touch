@@ -12,6 +12,7 @@
 #include <QTouchEvent>
 #include <QWidget>
 
+#include <KoCanvasResourcesIds.h>
 #include <KoToolBase.h>
 #include <KoToolManager.h>
 
@@ -23,6 +24,7 @@
 #include "canvas/kis_canvas2.h"
 #include "canvas/kis_coordinates_converter.h"
 #include "input/KisTouchQuickMenuAction.h"
+#include "kis_canvas_resource_provider.h"
 #include "kis_group_layer.h"
 #include "kis_image.h"
 
@@ -254,6 +256,103 @@ bool actionEnsureChecked(KisMainWindow *mainWindow, const QString &actionId, boo
         details->insert(QStringLiteral("after_checked"), action->isChecked());
         details->insert(QStringLiteral("timeout_ms"), timeoutMs);
         details->insert(QStringLiteral("triggered"), true);
+    }
+
+    return ok;
+}
+
+static bool getCanvasResourceProvider(KisMainWindow *mainWindow, KisCanvasResourceProvider **providerOut, QString *errorOut)
+{
+    if (!mainWindow || !mainWindow->viewManager()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing view manager");
+        }
+        return false;
+    }
+
+    KisCanvasResourceProvider *provider = mainWindow->viewManager()->canvasResourceProvider();
+    if (!provider) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing canvas resource provider");
+        }
+        return false;
+    }
+
+    if (!provider->resourceManager()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing canvas resource manager");
+        }
+        return false;
+    }
+
+    if (providerOut) {
+        *providerOut = provider;
+    }
+    return true;
+}
+
+bool waitCanvasEraserMode(KisMainWindow *mainWindow, bool expected, int timeoutMs, QJsonObject *details, QString *errorOut)
+{
+    KisCanvasResourceProvider *provider = nullptr;
+    if (!getCanvasResourceProvider(mainWindow, &provider, errorOut)) {
+        return false;
+    }
+
+    bool actual = provider->eraserMode();
+    const bool ok = waitForUiCondition(timeoutMs, [&]() {
+        actual = provider->eraserMode();
+        return actual == expected;
+    });
+
+    if (details) {
+        details->insert(QStringLiteral("expected"), expected);
+        details->insert(QStringLiteral("actual"), actual);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Timed out waiting for eraser mode %1").arg(expected);
+    }
+
+    return ok;
+}
+
+bool waitCanvasEffectiveCompositeOp(KisMainWindow *mainWindow,
+                                    const QString &expectedId,
+                                    bool negate,
+                                    int timeoutMs,
+                                    QJsonObject *details,
+                                    QString *errorOut)
+{
+    if (expectedId.trimmed().isEmpty()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing expected composite op id");
+        }
+        return false;
+    }
+
+    KisCanvasResourceProvider *provider = nullptr;
+    if (!getCanvasResourceProvider(mainWindow, &provider, errorOut)) {
+        return false;
+    }
+
+    QString actual = provider->resourceManager()->resource(KoCanvasResource::CurrentEffectiveCompositeOp).toString();
+    const bool ok = waitForUiCondition(timeoutMs, [&]() {
+        actual = provider->resourceManager()->resource(KoCanvasResource::CurrentEffectiveCompositeOp).toString();
+        return negate ? (actual != expectedId) : (actual == expectedId);
+    });
+
+    if (details) {
+        details->insert(QStringLiteral("expected"), expectedId);
+        details->insert(QStringLiteral("negate"), negate);
+        details->insert(QStringLiteral("actual"), actual);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Timed out waiting for effective composite op (expected '%1', negate=%2)")
+                        .arg(expectedId)
+                        .arg(negate);
     }
 
     return ok;

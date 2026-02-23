@@ -3,23 +3,32 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: touch-infra/collect-validation-device-info.sh [--linux-x11] [--output <path>]
+Usage: touch-infra/collect-validation-device-info.sh [--linux-x11] [--android-adb] [--adb-serial <serial>] [--output <path>]
 
 Collects basic host/display/input info that is useful for documenting the
 primary manual-validation device in plan.md.
 
 Notes:
   - This is best-effort and will skip commands that are unavailable.
+  - For X11 probes (xrandr/xinput), you may need to set DISPLAY/XAUTHORITY if
+    you run this from a TTY/SSH session. Use --display/--xauthority or env vars.
   - Some sections (like libinput) may require sudo on some distros.
 
 Examples:
   touch-infra/collect-validation-device-info.sh --linux-x11
+  touch-infra/collect-validation-device-info.sh --linux-x11 --display :0 --xauthority ~/.Xauthority
   touch-infra/collect-validation-device-info.sh --linux-x11 --output /tmp/device.md
+  touch-infra/collect-validation-device-info.sh --android-adb
+  touch-infra/collect-validation-device-info.sh --android-adb --adb-serial emulator-5554
 EOF
 }
 
 MODE_LINUX_X11=0
+MODE_ANDROID_ADB=0
 OUTPUT_PATH=""
+ADB_SERIAL=""
+X11_DISPLAY_OVERRIDE=""
+X11_XAUTHORITY_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +38,21 @@ while [[ $# -gt 0 ]]; do
       ;;
     --linux-x11)
       MODE_LINUX_X11=1
+      ;;
+    --android-adb)
+      MODE_ANDROID_ADB=1
+      ;;
+    --adb-serial)
+      shift
+      ADB_SERIAL="${1:-}"
+      ;;
+    --display)
+      shift
+      X11_DISPLAY_OVERRIDE="${1:-}"
+      ;;
+    --xauthority)
+      shift
+      X11_XAUTHORITY_OVERRIDE="${1:-}"
       ;;
     --output)
       shift
@@ -43,7 +67,7 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-if [[ ${MODE_LINUX_X11} -eq 0 ]]; then
+if [[ ${MODE_LINUX_X11} -eq 0 && ${MODE_ANDROID_ADB} -eq 0 ]]; then
   MODE_LINUX_X11=1
 fi
 
@@ -55,6 +79,80 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 UDEV_TOUCH_EVENT_HANDLERS=()
 
+adb_cmd() {
+  if [[ -n "${ADB_SERIAL}" ]]; then
+    adb -s "${ADB_SERIAL}" "$@"
+  else
+    adb "$@"
+  fi
+}
+
+ADB_SELECT_MSG=""
+select_adb_device() {
+  ADB_SELECT_MSG=""
+
+  if ! have adb; then
+    ADB_SELECT_MSG="adb not found; install Android platform-tools"
+    return 1
+  fi
+
+  mapfile -t adb_rows < <(adb devices 2>/dev/null | awk 'NR>1 && $1 != "" {print $1 "\t" $2}')
+
+  if [[ ${#adb_rows[@]} -eq 0 ]]; then
+    ADB_SELECT_MSG="No adb devices found. Plug in a tablet (USB) or start an emulator, then re-run."
+    return 1
+  fi
+
+  if [[ -n "${ADB_SERIAL}" ]]; then
+    local row
+    for row in "${adb_rows[@]}"; do
+      local serial="${row%%$'\t'*}"
+      local state="${row#*$'\t'}"
+      if [[ "${serial}" == "${ADB_SERIAL}" ]]; then
+        if [[ "${state}" == "device" ]]; then
+          ADB_SELECT_MSG="Using adb serial: ${ADB_SERIAL}"
+          return 0
+        fi
+
+        ADB_SELECT_MSG="Requested adb serial '${ADB_SERIAL}' is present but not usable (state=${state}).\n- If unauthorized: unlock tablet and accept the USB debugging prompt.\n- If offline: reconnect cable or restart adb server.\nThen re-run."
+        return 1
+      fi
+    done
+
+    local available=""
+    for row in "${adb_rows[@]}"; do
+      local serial="${row%%$'\t'*}"
+      local state="${row#*$'\t'}"
+      available+="- ${serial} (state=${state})\n"
+    done
+    ADB_SELECT_MSG="Requested adb serial '${ADB_SERIAL}' not found. Available devices:\n${available%\\n}"
+    return 1
+  fi
+
+  if [[ ${#adb_rows[@]} -gt 1 ]]; then
+    local available=""
+    for row in "${adb_rows[@]}"; do
+      local serial="${row%%$'\t'*}"
+      local state="${row#*$'\t'}"
+      available+="- ${serial} (state=${state})\n"
+    done
+    ADB_SELECT_MSG="Multiple adb devices detected. Re-run with: --adb-serial <serial>\nAvailable devices:\n${available%\\n}"
+    return 1
+  fi
+
+  local only_serial="${adb_rows[0]%%$'\t'*}"
+  local only_state="${adb_rows[0]#*$'\t'}"
+  ADB_SERIAL="${only_serial}"
+
+  if [[ "${only_state}" != "device" ]]; then
+    ADB_SELECT_MSG="Found adb device '${ADB_SERIAL}' but it is not usable (state=${only_state}).\n- If unauthorized: unlock tablet and accept the USB debugging prompt.\n- If offline: reconnect cable or restart adb server.\nThen re-run."
+    return 1
+  fi
+
+  ADB_SELECT_MSG="Using adb serial: ${ADB_SERIAL} (auto-selected)"
+  return 0
+}
+
 print_cmd_block() {
   local cmd_label="$1"
   shift
@@ -62,12 +160,60 @@ print_cmd_block() {
   echo
   echo "#### \`${cmd_label}\`"
   echo '```text'
-  if "$@"; then
+  if "$@" 2>&1; then
     :
   else
     echo "(command failed)"
   fi
   echo '```'
+}
+
+dump_android_summary() {
+  if ! have adb; then
+    echo "(skipped: adb not found; install Android platform-tools)"
+    return 0
+  fi
+
+  if [[ -n "${ADB_SERIAL}" ]]; then
+    echo "adb_serial: ${ADB_SERIAL}"
+  else
+    echo "adb_serial: (default)"
+  fi
+
+  echo
+  echo "manufacturer: $(adb_cmd shell getprop ro.product.manufacturer 2>/dev/null | tr -d '\r' || true)"
+  echo "model: $(adb_cmd shell getprop ro.product.model 2>/dev/null | tr -d '\r' || true)"
+  echo "device: $(adb_cmd shell getprop ro.product.device 2>/dev/null | tr -d '\r' || true)"
+  echo "android_release: $(adb_cmd shell getprop ro.build.version.release 2>/dev/null | tr -d '\r' || true)"
+  echo "android_sdk: $(adb_cmd shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r' || true)"
+
+  echo
+  echo "wm_size:"
+  adb_cmd shell wm size 2>/dev/null | tr -d '\r' | sed 's/^/  /' || true
+  echo "wm_density:"
+  adb_cmd shell wm density 2>/dev/null | tr -d '\r' | sed 's/^/  /' || true
+}
+
+dump_android_props() {
+  if ! have adb; then
+    echo "(skipped: adb not found; install Android platform-tools)"
+    return 0
+  fi
+
+  adb_cmd shell getprop 2>/dev/null | tr -d '\r' || true
+}
+
+dump_android_dumpsys_input_head() {
+  if ! have adb; then
+    echo "(skipped: adb not found; install Android platform-tools)"
+    return 0
+  fi
+
+  if have sed; then
+    adb_cmd shell dumpsys input 2>/dev/null | tr -d '\r' | sed -n '1,200p' || true
+  else
+    adb_cmd shell dumpsys input 2>/dev/null | tr -d '\r' || true
+  fi
 }
 
 dump_drm_connectors() {
@@ -226,6 +372,9 @@ dump_proc_bus_input_devices() {
   fi
 }
 
+X11_DISPLAY_EFFECTIVE="${X11_DISPLAY_OVERRIDE:-${DISPLAY:-}}"
+X11_XAUTHORITY_EFFECTIVE="${X11_XAUTHORITY_OVERRIDE:-${XAUTHORITY:-}}"
+
 echo "### Validation device info (generated)"
 echo
 echo "- Collected at: $(date -Iseconds)"
@@ -234,7 +383,8 @@ echo "- User: $(id -un 2>/dev/null || echo unknown)"
 echo "- Kernel: $(uname -srmo 2>/dev/null || uname -a)"
 echo "- Session: \`XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown}\`"
 echo "- Desktop: \`XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-unknown}\`"
-echo "- Display: \`DISPLAY=${DISPLAY:-<unset>}\`"
+echo "- Display (env): \`DISPLAY=${DISPLAY:-<unset>}\`"
+echo "- X11 probe: \`DISPLAY=${X11_DISPLAY_EFFECTIVE:-<unset>} XAUTHORITY=${X11_XAUTHORITY_EFFECTIVE:-<unset>}\`"
 
 if [[ -r /etc/os-release ]]; then
   os_pretty="$(. /etc/os-release && echo "${PRETTY_NAME:-}")" || os_pretty=""
@@ -254,20 +404,28 @@ if [[ ${MODE_LINUX_X11} -eq 1 ]]; then
   echo "- Driver stack (X11):"
   echo "- Notes:"
 
-  if have xrandr && [[ -n "${DISPLAY:-}" ]]; then
-    print_cmd_block "xrandr --listmonitors" xrandr --listmonitors
+  x11_env=()
+  if [[ -n "${X11_DISPLAY_EFFECTIVE}" ]]; then
+    x11_env+=(DISPLAY="${X11_DISPLAY_EFFECTIVE}")
+  fi
+  if [[ -n "${X11_XAUTHORITY_EFFECTIVE}" ]]; then
+    x11_env+=(XAUTHORITY="${X11_XAUTHORITY_EFFECTIVE}")
+  fi
+
+  if have xrandr && [[ -n "${X11_DISPLAY_EFFECTIVE}" ]]; then
+    print_cmd_block "xrandr --listmonitors" env "${x11_env[@]}" xrandr --listmonitors
   else
     echo
     echo "#### \`xrandr --listmonitors\`"
-    echo "(skipped: xrandr not found or DISPLAY unset)"
+    echo "(skipped: xrandr not found or DISPLAY unset; try: --display :0 --xauthority ~/.Xauthority)"
   fi
 
-  if have xinput && [[ -n "${DISPLAY:-}" ]]; then
-    print_cmd_block "xinput list" xinput list
+  if have xinput && [[ -n "${X11_DISPLAY_EFFECTIVE}" ]]; then
+    print_cmd_block "xinput list" env "${x11_env[@]}" xinput list
   else
     echo
     echo "#### \`xinput list\`"
-    echo "(skipped: xinput not found or DISPLAY unset)"
+    echo "(skipped: xinput not found or DISPLAY unset; try: --display :0 --xauthority ~/.Xauthority)"
   fi
 
   print_cmd_block "DRM connectors (sysfs: /sys/class/drm)" dump_drm_connectors
@@ -295,5 +453,47 @@ if [[ ${MODE_LINUX_X11} -eq 1 ]]; then
       echo "#### \`libinput list-devices\`"
       echo "(skipped: libinput needs permissions; try: sudo libinput list-devices)"
     fi
+  fi
+fi
+
+if [[ ${MODE_ANDROID_ADB} -eq 1 ]]; then
+  echo
+  echo "### Android tablet (adb)"
+  echo
+  echo "Fill these in (manual):"
+  echo "- Manufacturer:"
+  echo "- Model:"
+  echo "- Android version:"
+  echo "- Screen: (resolution / dpi)"
+  echo "- Stylus: (yes/no + model)"
+  echo "- Notes:"
+
+  if have adb; then
+    print_cmd_block "adb version" adb version
+    print_cmd_block "adb devices -l" adb devices -l
+  else
+    echo
+    echo "#### \`adb\`"
+    echo "(skipped: adb not found; install Android platform-tools)"
+  fi
+
+  if select_adb_device; then
+    echo
+    echo "#### adb device selection"
+    echo '```text'
+    printf "%b\n" "${ADB_SELECT_MSG}"
+    echo '```'
+
+    print_cmd_block "adb device summary (getprop + wm)" dump_android_summary
+    print_cmd_block "adb shell getprop (full)" dump_android_props
+    print_cmd_block "adb shell dumpsys input (head -n 200)" dump_android_dumpsys_input_head
+  else
+    echo
+    echo "#### adb device selection"
+    echo '```text'
+    printf "%b\n" "${ADB_SELECT_MSG}"
+    echo '```'
+    echo
+    echo "(skipped: adb shell dumps; no usable device selected)"
   fi
 fi

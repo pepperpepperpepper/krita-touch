@@ -239,13 +239,46 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
 
     bool runningInKDE = !qgetenv("KDE_FULL_SESSION").isEmpty();
 
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    const bool isWaylandSession =
+        !qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") ||
+        qEnvironmentVariable("XDG_SESSION_TYPE") == "wayland";
+#endif
+
 #if defined HAVE_X11
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+        if (isWaylandSession) {
+            // Prefer native Wayland to avoid XWayland scaling pixelation on HiDPI
+            // compositors (e.g. sway) and to get proper touch event delivery.
+            // Fall back to X11 if the Wayland platform plugin isn't available.
+            qputenv("QT_QPA_PLATFORM", "wayland-egl;wayland;xcb");
+        } else {
+            qputenv("QT_QPA_PLATFORM", "xcb");
+        }
+#else
         qputenv("QT_QPA_PLATFORM", "xcb");
+#endif
     }
 #elif defined Q_OS_WIN
     if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
         qputenv("QT_QPA_PLATFORM", "windows:darkmode=1");
+    }
+#endif
+
+#if defined(Q_OS_LINUX) && !defined(Q_OS_ANDROID)
+    /**
+     * Krita Touch is often tested from an AppImage on Wayland compositors (e.g. sway).
+     * When running under XWayland, Qt may fall back to the widget-based file dialog,
+     * which can look blurry/pixelated depending on compositor scaling.
+     *
+     * Prefer the xdg-desktop-portal backed file dialog when available, unless the
+     * user explicitly chose a different Qt platform theme.
+     */
+    if (isWaylandSession &&
+        qEnvironmentVariableIsSet("APPIMAGE") &&
+        !qEnvironmentVariableIsSet("QT_QPA_PLATFORMTHEME")) {
+        qputenv("QT_QPA_PLATFORMTHEME", "xdgdesktopportal");
     }
 #endif
 

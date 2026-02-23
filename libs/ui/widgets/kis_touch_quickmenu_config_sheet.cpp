@@ -25,6 +25,7 @@
 #include <klocalizedstring.h>
 
 #include <kis_config.h>
+#include <kis_icon_utils.h>
 
 #include "kis_touch_ui_metrics.h"
 #include "kis_touch_quickmenu_icon_utils.h"
@@ -129,6 +130,22 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
     const int toolButtonRadius = KisTouchUiMetrics::px(12.0, scale);
     const int toolButtonPadding = KisTouchUiMetrics::px(8.0, scale);
 
+#ifdef Q_OS_ANDROID
+    constexpr int toolButtonBgAlpha = 95;
+    constexpr int toolButtonBorderAlpha = 150;
+    constexpr int toolButtonPressedBgAlpha = 125;
+    constexpr int toolButtonCheckedBgAlpha = 160;
+    constexpr int toolButtonCheckedBorderAlpha = 230;
+    constexpr int toolButtonCheckedPressedBgAlpha = 200;
+#else
+    constexpr int toolButtonBgAlpha = 60;
+    constexpr int toolButtonBorderAlpha = 90;
+    constexpr int toolButtonPressedBgAlpha = 80;
+    constexpr int toolButtonCheckedBgAlpha = 110;
+    constexpr int toolButtonCheckedBorderAlpha = 200;
+    constexpr int toolButtonCheckedPressedBgAlpha = 150;
+#endif
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchQuickMenuConfigSheet"));
@@ -143,23 +160,29 @@ KisTouchQuickMenuConfigSheet::KisTouchQuickMenuConfigSheet(KisKActionCollection 
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 60);"
-        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  background: rgba(255, 255, 255, %3);"
+        "  border: 1px solid rgba(255, 255, 255, %4);"
         "  border-radius: %1px;"
         "  padding: %2px;"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 110);"
-        "  border-color: rgba(90, 160, 255, 200);"
+        "  background-color: rgba(90, 160, 255, %6);"
+        "  border-color: rgba(90, 160, 255, %7);"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 80);"
+        "  background-color: rgba(255, 255, 255, %5);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 150);"
+        "  background-color: rgba(90, 160, 255, %8);"
         "}")
                       .arg(toolButtonRadius)
-                      .arg(toolButtonPadding));
+                      .arg(toolButtonPadding)
+                      .arg(toolButtonBgAlpha)
+                      .arg(toolButtonBorderAlpha)
+                      .arg(toolButtonPressedBgAlpha)
+                      .arg(toolButtonCheckedBgAlpha)
+                      .arg(toolButtonCheckedBorderAlpha)
+                      .arg(toolButtonCheckedPressedBgAlpha));
 
     rebuildUi();
 }
@@ -295,7 +318,7 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
 
         m_resetButton = new QToolButton(this);
         m_resetButton->setText(i18n("Reset"));
-        m_resetButton->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));
+        m_resetButton->setIcon(KisIconUtils::loadIcon(QStringLiteral("view-refresh")));
         m_resetButton->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
         m_resetButton->setMinimumHeight(headerButtonMinHeightPx);
         header->addWidget(m_resetButton);
@@ -375,7 +398,7 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
         button->setAutoRaise(true);
 
         if (candidate.id.isEmpty()) {
-            button->setIcon(QIcon::fromTheme(QStringLiteral("edit-clear")));
+            button->setIcon(KisIconUtils::loadIcon(QStringLiteral("edit-clear")));
             button->setText(candidate.labelOverride);
             connect(button, &QToolButton::clicked, this, [this]() {
                 if (m_selectedSlot < 0 || m_selectedSlot >= m_slotActionIds.size()) {
@@ -474,7 +497,7 @@ void KisTouchQuickMenuConfigSheet::updateSlotButtons()
             button->setIcon(KisTouchQuickMenuIconUtils::iconForActionId(actionId, action, iconSize));
             button->setText(quickMenuSlotLabelForActionId(actionId, action));
         } else if (actionId.isEmpty()) {
-            button->setIcon(QIcon::fromTheme(QStringLiteral("edit-clear")));
+            button->setIcon(KisIconUtils::loadIcon(QStringLiteral("edit-clear")));
             button->setText(i18n("Empty"));
         } else {
             button->setIcon(QIcon());

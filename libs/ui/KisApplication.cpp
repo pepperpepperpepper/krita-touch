@@ -25,6 +25,7 @@
 
 #include <QStandardPaths>
 #include <QScreen>
+#include <QWindow>
 #include <QDir>
 #include <QFile>
 #include <QLocale>
@@ -84,6 +85,7 @@
 #include "thememanager.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
+#include "widgets/kis_touch_ui_metrics.h"
 #include "KisView.h"
 #include "KisAutoSaveRecoveryDialog.h"
 #include "KisPart.h"
@@ -110,6 +112,7 @@
 #include "kis_spin_box_unit_manager.h"
 #include "kis_document_aware_spin_box_unit_manager.h"
 #include "KisViewManager.h"
+#include <kis_node_manager.h>
 #include <canvas/kis_canvas2.h>
 #include <canvas/kis_canvas_controller.h>
 #include <kis_canvas_resource_provider.h>
@@ -119,6 +122,7 @@
 #include <kis_paint_layer.h>
 #include <kis_fill_painter.h>
 #include <kis_painter.h>
+#include <kis_slider_spin_box.h>
 #include <input/kis_zoom_and_rotate_action.h>
 #include "input/KisTouchGestureAction.h"
 #include "input/KisTouchQuickMenuAction.h"
@@ -157,6 +161,8 @@
 #include <kis_image_animation_interface.h>
 #include "kis_file_layer.h"
 #include "kis_group_layer.h"
+#include "kis_node_filter_proxy_model.h"
+#include "kis_node_model.h"
 #include "kis_node_commands_adapter.h"
 #include "KisSynchronizedConnection.h"
 #include <QThreadStorage>
@@ -229,6 +235,45 @@ void showDockerForTouchSmoke(KisMainWindow *mainWindow, const QString &dockerId)
         return;
     }
 
+    auto findActiveCanvas = [&]() -> KoCanvasBase * {
+        if (!mainWindow) {
+            return nullptr;
+        }
+
+        if (mainWindow->viewManager()) {
+            if (KoCanvasBase *canvas = mainWindow->viewManager()->canvasBase()) {
+                return canvas;
+            }
+        }
+
+        if (KisView *view = mainWindow->activeView()) {
+            return view->canvasBase();
+        }
+
+        return nullptr;
+    };
+
+    KoCanvasBase *activeCanvas = findActiveCanvas();
+    if (!activeCanvas) {
+        // Some startup paths set the view asynchronously. Allow a short grace period
+        // so dockers can be hooked up deterministically.
+#ifdef Q_OS_ANDROID
+        constexpr int maxCanvasWaitMs = 15000;
+#else
+        constexpr int maxCanvasWaitMs = 2500;
+#endif
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < maxCanvasWaitMs) {
+            QApplication::processEvents();
+            activeCanvas = findActiveCanvas();
+            if (activeCanvas) {
+                break;
+            }
+            QThread::msleep(20);
+        }
+    }
+
     QDockWidget *dock = mainWindow->dockWidget(dockerId);
     if (!dock) {
         qWarning() << "Touch smoke: docker not found:" << dockerId;
@@ -254,10 +299,91 @@ void showDockerForTouchSmoke(KisMainWindow *mainWindow, const QString &dockerId)
         mainWindow->resizeDocks(QList<QDockWidget*>{dock}, QList<int>{320}, Qt::Horizontal);
     }
 
+    if (dockerId == QStringLiteral("BrushHudDocker")) {
+        // Ensure deterministic placement for screenshots. In Touch Mode this docker is expected to
+        // live on the right side as a compact brush control panel.
+        dock->setFloating(false);
+        mainWindow->addDockWidget(Qt::RightDockWidgetArea, dock);
+        mainWindow->resizeDocks(QList<QDockWidget*>{dock}, QList<int>{240}, Qt::Horizontal);
+    }
+
     dock->show();
     dock->raise();
 
+    // Some dockers are created lazily and can miss the initial KoCanvasController "set observed canvas"
+    // notification if they didn't exist yet when the active canvas was set. Ensure the docker is
+    // connected to the current canvas so its model/view is populated for deterministic screenshots.
+    if (KoCanvasObserverBase *observer = dynamic_cast<KoCanvasObserverBase *>(dock)) {
+        if (!activeCanvas) {
+            // Some platforms create the view/canvas late. When the docker is shown explicitly
+            // for a smoke scenario, keep waiting a bit longer for the canvas so the docker can
+            // populate deterministically.
+#ifdef Q_OS_ANDROID
+            constexpr int maxCanvasWaitMs = 20000;
+#else
+            constexpr int maxCanvasWaitMs = 2500;
+#endif
+            QElapsedTimer timer;
+            timer.start();
+            while (timer.elapsed() < maxCanvasWaitMs) {
+                QApplication::processEvents();
+                activeCanvas = findActiveCanvas();
+                if (activeCanvas) {
+                    break;
+                }
+                QThread::msleep(20);
+            }
+        }
+
+        if (activeCanvas) {
+            observer->setObservedCanvas(activeCanvas);
+        }
+    }
+
 }
+
+QTreeView *findNodeViewInDockForTouchSmoke(QDockWidget *dock)
+{
+    if (!dock) {
+        return nullptr;
+    }
+
+    const QList<QTreeView *> views = dock->findChildren<QTreeView *>();
+    QTreeView *fallbackNodeView = nullptr;
+
+    for (QTreeView *view : views) {
+        if (!view) {
+            continue;
+        }
+
+        const QString className = QString::fromLatin1(view->metaObject()->className());
+        const bool isNodeView = className == QStringLiteral("NodeView") || className.endsWith(QStringLiteral("NodeView"));
+        if (!isNodeView) {
+            continue;
+        }
+
+        if (!fallbackNodeView) {
+            fallbackNodeView = view;
+        }
+
+        QWidget *vp = view->viewport();
+        if (view->isVisible() && vp && vp->isVisible() && vp->width() > 0 && vp->height() > 0) {
+            return view;
+        }
+    }
+
+    if (fallbackNodeView) {
+        return fallbackNodeView;
+    }
+
+    if (!views.isEmpty()) {
+        return views.first();
+    }
+
+    return nullptr;
+}
+
+bool waitForImageIdleForTouchSmoke(KisImageWSP img, int timeoutMs);
 
 void populateLayersForTouchSmoke(KisMainWindow *mainWindow, int extraPaintLayers)
 {
@@ -275,8 +401,74 @@ void populateLayersForTouchSmoke(KisMainWindow *mainWindow, int extraPaintLayers
         return;
     }
 
+    auto childCountInImageRoot = [&]() -> int {
+        KisViewManager *vm = mainWindow ? mainWindow->viewManager() : nullptr;
+        KisImageWSP image = vm ? vm->image() : KisImageWSP();
+        KisGroupLayerSP rootLayer = image ? image->rootLayer() : KisGroupLayerSP();
+        return rootLayer ? rootLayer->childCount() : 0;
+    };
+
+    // On cold starts (fresh HOME) Krita may still be finishing setup work (resource DB/cache).
+    // Wait until the action becomes enabled so triggers actually create layers.
+    {
+        constexpr int stepMs = 20;
+#ifdef Q_OS_ANDROID
+        constexpr int maxWaitMs = 20000;
+#else
+        constexpr int maxWaitMs = 15000;
+#endif
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < maxWaitMs) {
+            QApplication::processEvents();
+            if (action->isEnabled()) {
+                break;
+            }
+            QThread::msleep(stepMs);
+        }
+    }
+
+    const int beforeCount = childCountInImageRoot();
     for (int i = 0; i < extraPaintLayers; ++i) {
         action->trigger();
+        QApplication::processEvents();
+        QThread::msleep(5);
+    }
+
+    KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+    if (image) {
+        // Wait for the image to settle so the layers docker model has time to reflect the inserts.
+        waitForImageIdleForTouchSmoke(image, 15000);
+    }
+
+    // Ensure we have at least 2 layers (needed by layers-panel assertions), even if not all
+    // requested layers were created in time.
+    const int expectedMinCount = qMax(2, beforeCount + 1);
+    {
+        constexpr int stepMs = 20;
+#ifdef Q_OS_ANDROID
+        constexpr int maxWaitMs = 20000;
+#else
+        constexpr int maxWaitMs = 15000;
+#endif
+        QElapsedTimer timer;
+        timer.start();
+        while (timer.elapsed() < maxWaitMs) {
+            QApplication::processEvents();
+            if (childCountInImageRoot() >= expectedMinCount) {
+                break;
+            }
+            QThread::msleep(stepMs);
+        }
+
+        const int afterCount = childCountInImageRoot();
+        if (afterCount < expectedMinCount) {
+            qWarning() << "Touch smoke: populateLayersForTouchSmoke did not reach expected layer count"
+                       << "before=" << beforeCount
+                       << "after=" << afterCount
+                       << "expectedMin=" << expectedMinCount
+                       << "actionEnabled=" << action->isEnabled();
+        }
     }
 }
 
@@ -377,7 +569,26 @@ bool pickNodeViewRowForSwipeForTouchSmoke(QTreeView *nodeView, QModelIndex *outI
             continue;
         }
 
-        const QModelIndex scanRootIndex = rootRows > 0 ? rootIndex : QModelIndex();
+        QModelIndex scanRootIndex = rootRows > 0 ? rootIndex : QModelIndex();
+        // Some node models expose a single top-level "root" item (e.g. image root group),
+        // with the actual layer rows living as its children. Prefer scanning the children
+        // when available so swipe/hold gestures target a real layer row.
+        if (!scanRootIndex.isValid() && modelRows == 1) {
+            const QModelIndex onlyTop = model->index(0, 0, QModelIndex());
+            if (onlyTop.isValid()) {
+                nodeView->expand(onlyTop);
+                QApplication::processEvents();
+                if (model->canFetchMore(onlyTop)) {
+                    model->fetchMore(onlyTop);
+                    QApplication::processEvents();
+                }
+
+                if (model->rowCount(onlyTop) > 0) {
+                    scanRootIndex = onlyTop;
+                }
+            }
+        }
+
         const int rowCount = model->rowCount(scanRootIndex);
         for (int row = 0; row < rowCount; ++row) {
             QModelIndex idx = model->index(row, 0, scanRootIndex);
@@ -557,6 +768,14 @@ struct TouchSmokeSheetContrastCheck {
     QJsonObject details;
 };
 
+struct TouchSmokeButtonContrastStats {
+    bool ok = false;
+    QJsonObject details;
+    int minAlpha = 0;
+    int minLuma = 0;
+    int deltaLuma = 0;
+};
+
 TouchSmokeSheetContrastCheck checkTouchSheetContrastForTouchSmoke(QWidget *sheet)
 {
     TouchSmokeSheetContrastCheck result;
@@ -620,8 +839,22 @@ TouchSmokeSheetContrastCheck checkTouchSheetContrastForTouchSmoke(QWidget *sheet
     const QColor bgRef = bgRefSample.isValid() ? bgRefSample : QColor(0, 0, 0, 255);
     result.details.insert(QStringLiteral("bg_ref_rgba"), rgbaToHexForTouchSmoke(bgRef));
 
-    // Find a representative content button to validate button backplate contrast.
-    QToolButton *candidateButton = nullptr;
+    constexpr int minBgAlpha = 200;
+    constexpr int minBgLuma = 15;
+    constexpr int minButtonDeltaLuma = 20;
+
+#ifdef Q_OS_ANDROID
+    // Android compositing can make low-alpha button backplates look "disabled" even
+    // when the luma delta is technically high; enforce a minimum effective alpha.
+    constexpr int minButtonMinAlpha = 130;
+#else
+    constexpr int minButtonMinAlpha = 0;
+#endif
+
+    // Find representative content buttons to validate button backplate contrast.
+    QToolButton *anyButton = nullptr;
+    QToolButton *uncheckedButton = nullptr;
+    QToolButton *checkedButton = nullptr;
     const QList<QToolButton *> buttons = sheet->findChildren<QToolButton *>();
     for (QToolButton *btn : buttons) {
         if (!btn || !btn->isVisible()) {
@@ -630,82 +863,126 @@ TouchSmokeSheetContrastCheck checkTouchSheetContrastForTouchSmoke(QWidget *sheet
         if (btn->autoRaise()) {
             continue;
         }
+        if (!btn->isEnabled()) {
+            continue;
+        }
         if (btn->width() < 70 || btn->height() < 50) {
             continue;
         }
-        candidateButton = btn;
-        break;
+
+        if (!anyButton) {
+            anyButton = btn;
+        }
+        if (!uncheckedButton && (!btn->isCheckable() || !btn->isChecked())) {
+            uncheckedButton = btn;
+        }
+        if (!checkedButton && btn->isCheckable() && btn->isChecked()) {
+            checkedButton = btn;
+        }
     }
 
-    if (!candidateButton) {
+    QToolButton *primaryButton = uncheckedButton ? uncheckedButton : anyButton;
+    if (!primaryButton) {
         result.details.insert(QStringLiteral("button_found"), false);
         return result;
     }
 
-    result.details.insert(QStringLiteral("button_found"), true);
-    result.details.insert(QStringLiteral("button_w"), candidateButton->width());
-    result.details.insert(QStringLiteral("button_h"), candidateButton->height());
+    auto computeButtonStats = [&](QToolButton *button, const QString &label) -> TouchSmokeButtonContrastStats {
+        TouchSmokeButtonContrastStats stats;
+        stats.details.insert(QStringLiteral("label"), label);
+        stats.details.insert(QStringLiteral("button_w"), button->width());
+        stats.details.insert(QStringLiteral("button_h"), button->height());
+        stats.details.insert(QStringLiteral("button_checkable"), button->isCheckable());
+        stats.details.insert(QStringLiteral("button_checked"), button->isCheckable() ? button->isChecked() : false);
 
-    const TouchSmokeWidgetGrab buttonGrab = grabWidgetForTouchSmoke(candidateButton);
-    result.details.insert(QStringLiteral("button_grab_w"), buttonGrab.image.width());
-    result.details.insert(QStringLiteral("button_grab_h"), buttonGrab.image.height());
-    if (buttonGrab.image.isNull()) {
-        result.details.insert(QStringLiteral("error"), QStringLiteral("button_grab_failed"));
-        return result;
-    }
+        const TouchSmokeWidgetGrab buttonGrab = grabWidgetForTouchSmoke(button);
+        stats.details.insert(QStringLiteral("grab_w"), buttonGrab.image.width());
+        stats.details.insert(QStringLiteral("grab_h"), buttonGrab.image.height());
+        stats.details.insert(QStringLiteral("grab_dpr"), buttonGrab.dpr);
 
-    auto clampToButton = [&](const QPoint &p) -> QPoint {
-        const int x = qBound(0, p.x(), qMax(0, candidateButton->width() - 1));
-        const int y = qBound(0, p.y(), qMax(0, candidateButton->height() - 1));
-        return QPoint(x, y);
+        if (buttonGrab.image.isNull()) {
+            stats.details.insert(QStringLiteral("error"), QStringLiteral("button_grab_failed"));
+            return stats;
+        }
+
+        auto clampToButton = [&](const QPoint &p) -> QPoint {
+            const int x = qBound(0, p.x(), qMax(0, button->width() - 1));
+            const int y = qBound(0, p.y(), qMax(0, button->height() - 1));
+            return QPoint(x, y);
+        };
+
+        const QPoint b0 = clampToButton(QPoint(qRound(button->width() * 0.20), qRound(button->height() * 0.20)));
+        const QPoint b1 = clampToButton(QPoint(qRound(button->width() * 0.80), qRound(button->height() * 0.20)));
+        const QPoint b2 = clampToButton(QPoint(qRound(button->width() * 0.20), qRound(button->height() * 0.50)));
+        const QVector<QPoint> btnPoints{b0, b1, b2};
+
+        int btnMinLuma = 255;
+        int btnMinAlpha = 255;
+        QJsonArray btnSamples;
+        for (const QPoint &p : btnPoints) {
+            const QColor c = sampleGrabColorForTouchSmoke(buttonGrab, p);
+            const int alpha = c.isValid() ? c.alpha() : 0;
+            const int invAlpha = 255 - alpha;
+            const QColor blended((c.red() * alpha + bgRef.red() * invAlpha) / 255,
+                                 (c.green() * alpha + bgRef.green() * invAlpha) / 255,
+                                 (c.blue() * alpha + bgRef.blue() * invAlpha) / 255,
+                                 255);
+            const int lumaBlended = lumaForTouchSmoke(blended);
+            btnMinLuma = qMin(btnMinLuma, lumaBlended);
+            btnMinAlpha = qMin(btnMinAlpha, alpha);
+
+            QJsonObject sample;
+            sample.insert(QStringLiteral("pos_x"), p.x());
+            sample.insert(QStringLiteral("pos_y"), p.y());
+            sample.insert(QStringLiteral("alpha"), alpha);
+            sample.insert(QStringLiteral("rgba"), rgbaToHexForTouchSmoke(c));
+            sample.insert(QStringLiteral("rgba_blended"), rgbaToHexForTouchSmoke(blended));
+            sample.insert(QStringLiteral("luma"), lumaBlended);
+            btnSamples.append(sample);
+        }
+
+        stats.minAlpha = btnMinAlpha;
+        stats.minLuma = btnMinLuma;
+        stats.deltaLuma = btnMinLuma - bgMinLuma;
+        stats.details.insert(QStringLiteral("samples"), btnSamples);
+        stats.details.insert(QStringLiteral("min_alpha"), btnMinAlpha);
+        stats.details.insert(QStringLiteral("min_luma"), btnMinLuma);
+        stats.details.insert(QStringLiteral("delta_luma"), stats.deltaLuma);
+
+        const bool okAlpha = btnMinAlpha >= minButtonMinAlpha;
+        const bool okDelta = stats.deltaLuma >= minButtonDeltaLuma;
+        stats.ok = okAlpha && okDelta;
+        stats.details.insert(QStringLiteral("ok_alpha"), okAlpha);
+        stats.details.insert(QStringLiteral("ok_delta"), okDelta);
+        return stats;
     };
 
-    const QPoint b0 =
-        clampToButton(QPoint(qRound(candidateButton->width() * 0.20), qRound(candidateButton->height() * 0.20)));
-    const QPoint b1 =
-        clampToButton(QPoint(qRound(candidateButton->width() * 0.80), qRound(candidateButton->height() * 0.20)));
-    const QPoint b2 =
-        clampToButton(QPoint(qRound(candidateButton->width() * 0.20), qRound(candidateButton->height() * 0.50)));
-    const QVector<QPoint> btnPoints{b0, b1, b2};
+    const TouchSmokeButtonContrastStats primaryStats = computeButtonStats(primaryButton, QStringLiteral("primary"));
+    const TouchSmokeButtonContrastStats checkedStats =
+        (checkedButton && checkedButton != primaryButton) ? computeButtonStats(checkedButton, QStringLiteral("checked")) : TouchSmokeButtonContrastStats();
 
-    int btnMinLuma = 255;
-    QJsonArray btnSamples;
-    for (const QPoint &p : btnPoints) {
-        const QColor c = sampleGrabColorForTouchSmoke(buttonGrab, p);
-        const int alpha = c.isValid() ? c.alpha() : 0;
-        const int invAlpha = 255 - alpha;
-        const QColor blended((c.red() * alpha + bgRef.red() * invAlpha) / 255,
-                             (c.green() * alpha + bgRef.green() * invAlpha) / 255,
-                             (c.blue() * alpha + bgRef.blue() * invAlpha) / 255,
-                             255);
-        const int lumaBlended = lumaForTouchSmoke(blended);
-        btnMinLuma = qMin(btnMinLuma, lumaBlended);
+    result.details.insert(QStringLiteral("button_found"), true);
+    result.details.insert(QStringLiteral("button_preferred_unchecked"), bool(uncheckedButton));
+    result.details.insert(QStringLiteral("threshold_button_min_alpha"), minButtonMinAlpha);
+    result.details.insert(QStringLiteral("threshold_button_delta_luma"), minButtonDeltaLuma);
+    result.details.insert(QStringLiteral("button_min_alpha"), primaryStats.minAlpha);
+    result.details.insert(QStringLiteral("button_min_luma"), primaryStats.minLuma);
+    result.details.insert(QStringLiteral("button_delta_luma"), primaryStats.deltaLuma);
+    result.details.insert(QStringLiteral("button_samples"), primaryStats.details.value(QStringLiteral("samples")));
+    result.details.insert(QStringLiteral("primary_button"), primaryStats.details);
 
-        QJsonObject sample;
-        sample.insert(QStringLiteral("pos_x"), p.x());
-        sample.insert(QStringLiteral("pos_y"), p.y());
-        sample.insert(QStringLiteral("alpha"), alpha);
-        sample.insert(QStringLiteral("rgba"), rgbaToHexForTouchSmoke(c));
-        sample.insert(QStringLiteral("rgba_blended"), rgbaToHexForTouchSmoke(blended));
-        sample.insert(QStringLiteral("luma"), lumaBlended);
-        btnSamples.append(sample);
+    const bool checkedButtonFound = bool(checkedButton && checkedButton != primaryButton);
+    result.details.insert(QStringLiteral("checked_button_found"), checkedButtonFound);
+    if (checkedButtonFound) {
+        result.details.insert(QStringLiteral("checked_button"), checkedStats.details);
     }
 
-    result.details.insert(QStringLiteral("button_samples"), btnSamples);
-    result.details.insert(QStringLiteral("button_min_luma"), btnMinLuma);
-
-    constexpr int minBgAlpha = 200;
-    constexpr int minBgLuma = 15;
-    constexpr int minButtonDeltaLuma = 20;
-    const int deltaLuma = btnMinLuma - bgMinLuma;
+    const bool buttonOk = primaryStats.ok && (!checkedButtonFound || checkedStats.ok);
 
     result.details.insert(QStringLiteral("threshold_bg_min_alpha"), minBgAlpha);
     result.details.insert(QStringLiteral("threshold_bg_min_luma"), minBgLuma);
-    result.details.insert(QStringLiteral("threshold_button_delta_luma"), minButtonDeltaLuma);
-    result.details.insert(QStringLiteral("button_delta_luma"), deltaLuma);
 
     const bool bgOk = bgMinAlpha >= minBgAlpha && bgMinLuma >= minBgLuma;
-    const bool buttonOk = deltaLuma >= minButtonDeltaLuma;
     result.ok = bgOk && buttonOk;
     result.details.insert(QStringLiteral("bg_ok"), bgOk);
     result.details.insert(QStringLiteral("button_ok"), buttonOk);
@@ -1009,6 +1286,11 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             m_steps.append(obj);
         }
 
+        void setUiState(const QJsonObject &state)
+        {
+            m_uiState = state;
+        }
+
         QByteArray toJson(const QString &status) const
         {
             QJsonObject root;
@@ -1016,6 +1298,9 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             root.insert(QStringLiteral("status"), status);
             root.insert(QStringLiteral("duration_ms"), qint64(m_timer.elapsed()));
             root.insert(QStringLiteral("steps"), m_steps);
+            if (!m_uiState.isEmpty()) {
+                root.insert(QStringLiteral("ui_state"), m_uiState);
+            }
             return QJsonDocument(root).toJson(QJsonDocument::Compact);
         }
 
@@ -1023,9 +1308,222 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         QString m_scenario;
         QElapsedTimer m_timer;
         QJsonArray m_steps;
+        QJsonObject m_uiState;
     };
 
     TouchSmokeReport report(normalizedScenario);
+
+    auto rectToJson = [](const QRect &r) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("x"), r.x());
+        obj.insert(QStringLiteral("y"), r.y());
+        obj.insert(QStringLiteral("w"), r.width());
+        obj.insert(QStringLiteral("h"), r.height());
+        return obj;
+    };
+
+    auto widgetToJson = [&](QWidget *w) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("exists"), w != nullptr);
+        if (!w) {
+            return obj;
+        }
+        obj.insert(QStringLiteral("class_name"), QString::fromLatin1(w->metaObject()->className()));
+        obj.insert(QStringLiteral("object_name"), w->objectName());
+        obj.insert(QStringLiteral("visible"), w->isVisible());
+        obj.insert(QStringLiteral("enabled"), w->isEnabled());
+        obj.insert(QStringLiteral("geometry"), rectToJson(w->geometry()));
+        obj.insert(QStringLiteral("global_geometry"),
+                   rectToJson(QRect(w->mapToGlobal(QPoint(0, 0)), w->size())));
+        return obj;
+    };
+
+    auto dockAreaToString = [](Qt::DockWidgetArea area) {
+        switch (area) {
+        case Qt::LeftDockWidgetArea:
+            return QStringLiteral("left");
+        case Qt::RightDockWidgetArea:
+            return QStringLiteral("right");
+        case Qt::TopDockWidgetArea:
+            return QStringLiteral("top");
+        case Qt::BottomDockWidgetArea:
+            return QStringLiteral("bottom");
+        default:
+            return QStringLiteral("unknown");
+        }
+    };
+
+    auto dockToJson = [&](const QString &dockerId, QDockWidget *dock) {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("docker_id"), dockerId);
+        obj.insert(QStringLiteral("exists"), dock != nullptr);
+        if (!dock) {
+            return obj;
+        }
+        obj.insert(QStringLiteral("class_name"), QString::fromLatin1(dock->metaObject()->className()));
+        obj.insert(QStringLiteral("object_name"), dock->objectName());
+        obj.insert(QStringLiteral("visible"), dock->isVisible());
+        obj.insert(QStringLiteral("enabled"), dock->isEnabled());
+        obj.insert(QStringLiteral("floating"), dock->isFloating());
+        obj.insert(QStringLiteral("dock_area"), dockAreaToString(mainWindow->dockWidgetArea(dock)));
+        obj.insert(QStringLiteral("geometry"), rectToJson(dock->geometry()));
+        obj.insert(QStringLiteral("global_geometry"),
+                   rectToJson(QRect(dock->mapToGlobal(QPoint(0, 0)), dock->size())));
+        return obj;
+    };
+
+    auto findWidgetByObjectName = [&](const QString &objectName) -> QWidget * {
+        if (objectName.isEmpty()) {
+            return nullptr;
+        }
+        if (QWidget *w = mainWindow->findChild<QWidget *>(objectName)) {
+            return w;
+        }
+        const auto all = QApplication::allWidgets();
+        for (QWidget *w : all) {
+            if (w && w->objectName() == objectName) {
+                return w;
+            }
+        }
+        return nullptr;
+    };
+
+    auto countWidgetsByObjectName = [&](const QString &objectName, int *outVisible) {
+        int count = 0;
+        int visibleCount = 0;
+        if (!objectName.isEmpty()) {
+            const auto all = QApplication::allWidgets();
+            for (QWidget *w : all) {
+                if (!w || w->objectName() != objectName) {
+                    continue;
+                }
+                count++;
+                if (w->isVisible()) {
+                    visibleCount++;
+                }
+            }
+        }
+        if (outVisible) {
+            *outVisible = visibleCount;
+        }
+        return count;
+    };
+
+    auto buildUiState = [&]() {
+        QJsonObject ui;
+#ifdef Q_OS_ANDROID
+        ui.insert(QStringLiteral("platform"), QStringLiteral("android"));
+#else
+        ui.insert(QStringLiteral("platform"), QStringLiteral("desktop"));
+#endif
+        ui.insert(QStringLiteral("qt_version"), QString::fromLatin1(qVersion()));
+
+        {
+            QJsonObject mw;
+            mw.insert(QStringLiteral("visible"), mainWindow->isVisible());
+            mw.insert(QStringLiteral("active"), mainWindow->isActiveWindow());
+            mw.insert(QStringLiteral("geometry"), rectToJson(mainWindow->geometry()));
+            ui.insert(QStringLiteral("main_window"), mw);
+        }
+
+        if (KoToolManager *toolManager = KoToolManager::instance()) {
+            ui.insert(QStringLiteral("active_tool_id"), toolManager->activeToolId());
+        }
+
+        KisView *view = mainWindow->activeView();
+        KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+
+        ui.insert(QStringLiteral("has_image"), bool(image));
+        if (image) {
+            QJsonObject img;
+            img.insert(QStringLiteral("w"), int(image->width()));
+            img.insert(QStringLiteral("h"), int(image->height()));
+            if (image->colorSpace()) {
+                img.insert(QStringLiteral("color_space"), image->colorSpace()->colorModelId().id());
+            }
+            ui.insert(QStringLiteral("image"), img);
+        }
+
+        if (view && view->canvasBase()) {
+            if (KisCanvas2 *canvas2 = dynamic_cast<KisCanvas2 *>(view->canvasBase())) {
+                ui.insert(QStringLiteral("canvas_rotation_degrees"), canvas2->rotationAngle());
+            }
+            ui.insert(QStringLiteral("canvas_widget"), widgetToJson(view->canvasBase()->canvasWidget()));
+        }
+
+        {
+            const QList<const QTouchDevice *> devices = QTouchDevice::devices();
+            QJsonObject touch;
+            touch.insert(QStringLiteral("exists"), !devices.isEmpty());
+            if (!devices.isEmpty()) {
+                QJsonArray arr;
+                for (const QTouchDevice *d : devices) {
+                    if (!d) {
+                        continue;
+                    }
+                    QJsonObject dev;
+                    dev.insert(QStringLiteral("name"), d->name());
+                    dev.insert(QStringLiteral("type"), int(d->type()));
+                    dev.insert(QStringLiteral("capabilities"), int(d->capabilities()));
+                    dev.insert(QStringLiteral("max_points"), d->maximumTouchPoints());
+                    arr.append(dev);
+                }
+                touch.insert(QStringLiteral("devices"), arr);
+            }
+            ui.insert(QStringLiteral("touch_device"), touch);
+        }
+
+        {
+            QJsonArray visible;
+            for (QDockWidget *dock : mainWindow->dockWidgets()) {
+                if (dock && dock->isVisible()) {
+                    visible.append(dock->objectName());
+                }
+            }
+            ui.insert(QStringLiteral("visible_docks"), visible);
+        }
+
+        {
+            const QStringList dockerIds = {
+                QStringLiteral("TouchDocker"),
+                QStringLiteral("BrushHudDocker"),
+                QStringLiteral("KisLayerBox"),
+                QStringLiteral("ColorSelectorNg"),
+                QStringLiteral("sharedtooldocker"),
+            };
+            QJsonObject docks;
+            for (const QString &id : dockerIds) {
+                docks.insert(id, dockToJson(id, mainWindow->dockWidget(id)));
+            }
+            ui.insert(QStringLiteral("docks"), docks);
+        }
+
+        {
+            QJsonObject widgets;
+            widgets.insert(QStringLiteral("touchTopBar"), widgetToJson(findWidgetByObjectName(QStringLiteral("touchTopBar"))));
+            widgets.insert(QStringLiteral("kisTouchActionsSheet"),
+                           widgetToJson(findWidgetByObjectName(QStringLiteral("kisTouchActionsSheet"))));
+            widgets.insert(QStringLiteral("kisTouchCopyPasteOverlay"),
+                           widgetToJson(findWidgetByObjectName(QStringLiteral("kisTouchCopyPasteOverlay"))));
+            widgets.insert(QStringLiteral("kisTouchLayerOptionsSheet"),
+                           widgetToJson(findWidgetByObjectName(QStringLiteral("kisTouchLayerOptionsSheet"))));
+            widgets.insert(QStringLiteral("kisTouchQuickMenuConfigSheet"),
+                           widgetToJson(findWidgetByObjectName(QStringLiteral("kisTouchQuickMenuConfigSheet"))));
+            widgets.insert(QStringLiteral("kisTouchQuickShapeEditPopup"),
+                           widgetToJson(findWidgetByObjectName(QStringLiteral("kisTouchQuickShapeEditPopup"))));
+            {
+                int visibleCount = 0;
+                const int count = countWidgetsByObjectName(QStringLiteral("kisTouchQuickMenuOverlay"), &visibleCount);
+                QJsonObject overlay;
+                overlay.insert(QStringLiteral("count"), count);
+                overlay.insert(QStringLiteral("visible_count"), visibleCount);
+                widgets.insert(QStringLiteral("kisTouchQuickMenuOverlay"), overlay);
+            }
+            ui.insert(QStringLiteral("widgets"), widgets);
+        }
+
+        return ui;
+    };
 
     auto finalizeSmoke = [&](bool ok) {
         // Give Qt a moment to settle widget creation + repaint so headless screenshots
@@ -1035,6 +1533,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         QApplication::processEvents();
 
         const QString status = ok ? QStringLiteral("OK") : QStringLiteral("ERROR");
+        report.setUiState(buildUiState());
         const QByteArray json = report.toJson(status);
 
 #ifdef Q_OS_ANDROID
@@ -1065,6 +1564,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
     KisConfig cfg(true);
     cfg.setTouchModeEnabled(true);
     cfg.setTouchQuickShapeEnabled(true);
+    qApp->setProperty("krita_touch_smoke", true);
 
     const bool useLightTouchTheme = normalizedScenario == "top-bar-light" || normalizedScenario == "top_bar_light" ||
         normalizedScenario == "topbar-light" || normalizedScenario == "topbar_light";
@@ -1167,6 +1667,22 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         ok &= visibleTopBar;
 
         if (touchTopBar) {
+            // Ensure the top bar fits within the main window (no horizontal overflow).
+            const QRect barGeom = touchTopBar->geometry(); // parent == main window
+            const QRect winRect = mainWindow->rect();
+            const bool barFitsWindow = winRect.contains(barGeom);
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("window_width"), winRect.width());
+                details.insert(QStringLiteral("window_height"), winRect.height());
+                details.insert(QStringLiteral("toolbar_x"), barGeom.x());
+                details.insert(QStringLiteral("toolbar_y"), barGeom.y());
+                details.insert(QStringLiteral("toolbar_width"), barGeom.width());
+                details.insert(QStringLiteral("toolbar_height"), barGeom.height());
+                report.step(QStringLiteral("top_bar.fits_window"), barFitsWindow, details);
+            }
+            ok &= barFitsWindow;
+
             const QString styleSheet = touchTopBar->styleSheet();
             const QString expectedBackground = useLightTouchTheme
                 ? QStringLiteral("background-color: rgba(245, 245, 245, 245);")
@@ -1176,6 +1692,116 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             details.insert(QStringLiteral("expected_background"), expectedBackground);
             details.insert(QStringLiteral("matches_expected"), styleOk);
             report.step(QStringLiteral("top_bar.touch_top_bar_style"), styleOk, details);
+
+            // Ensure all toolbar buttons are visible (no hidden/overflowed actions).
+            int buttonCount = 0;
+            int visibleButtonCount = 0;
+            QJsonArray actionDetails;
+            const QList<QAction *> actions = touchTopBar->actions();
+            for (QAction *action : actions) {
+                if (!action || action->isSeparator()) {
+                    continue;
+                }
+
+                QWidget *w = touchTopBar->widgetForAction(action);
+                if (w) {
+                    const QSizePolicy policy = w->sizePolicy();
+                    if (policy.horizontalPolicy() == QSizePolicy::Expanding) {
+                        // Spacer widget used to separate left/right clusters.
+                        continue;
+                    }
+                }
+
+                buttonCount++;
+
+                const bool visible = w && w->isVisible();
+                if (visible) {
+                    visibleButtonCount++;
+                }
+
+                QJsonObject actionObj;
+                actionObj.insert(QStringLiteral("text"), action->text());
+                actionObj.insert(QStringLiteral("object_name"), action->objectName());
+                actionObj.insert(QStringLiteral("visible"), visible);
+                if (w) {
+                    const QRect wr = w->geometry(); // relative to toolbar
+                    actionObj.insert(QStringLiteral("x"), wr.x());
+                    actionObj.insert(QStringLiteral("y"), wr.y());
+                    actionObj.insert(QStringLiteral("w"), wr.width());
+                    actionObj.insert(QStringLiteral("h"), wr.height());
+                }
+                actionDetails.append(actionObj);
+            }
+
+            {
+                QJsonObject details2;
+                details2.insert(QStringLiteral("button_count"), buttonCount);
+                details2.insert(QStringLiteral("visible_button_count"), visibleButtonCount);
+                details2.insert(QStringLiteral("actions"), actionDetails);
+                const bool allButtonsVisible = buttonCount > 0 && visibleButtonCount == buttonCount;
+                report.step(QStringLiteral("top_bar.actions_visible"), allButtonsVisible, details2);
+                ok &= allButtonsVisible;
+            }
+        }
+
+        finalizeSmoke(ok);
+        return;
+    }
+
+    if (normalizedScenario == "welcome-page" || normalizedScenario == "welcome_page" ||
+        normalizedScenario == "start-screen" || normalizedScenario == "start_screen" ||
+        normalizedScenario == "welcome") {
+        bool ok = true;
+
+        mainWindow->showWelcomeScreen(true);
+        QApplication::processEvents();
+
+        QToolButton *newFileLink = mainWindow->findChild<QToolButton *>(QStringLiteral("newFileLink"));
+        QToolButton *openFileLink = mainWindow->findChild<QToolButton *>(QStringLiteral("openFileLink"));
+
+        const bool foundActions = newFileLink != nullptr && openFileLink != nullptr;
+        report.step(QStringLiteral("welcome_page.find_actions"), foundActions);
+        ok &= foundActions;
+
+        const bool visibleActions = waitForUiCondition(5000, [&]() {
+            return newFileLink && newFileLink->isVisible() && openFileLink && openFileLink->isVisible();
+        });
+        report.step(QStringLiteral("welcome_page.actions_visible"), visibleActions);
+        ok &= visibleActions;
+
+        // Validate that the welcome screen actions switch to a phone-friendly style on narrow widths.
+        QScreen *screen = nullptr;
+        if (QWindow *windowHandle = mainWindow->windowHandle()) {
+            screen = windowHandle->screen();
+        }
+        if (!screen) {
+            screen = QGuiApplication::primaryScreen();
+        }
+        const qreal scale = KisTouchUiMetrics::scaleForScreen(screen);
+        const bool phoneLike = scale < 0.9;
+        const Qt::ToolButtonStyle expectedStyle = phoneLike ? Qt::ToolButtonTextUnderIcon : Qt::ToolButtonTextBesideIcon;
+
+        if (newFileLink) {
+            const Qt::ToolButtonStyle actualStyle = newFileLink->toolButtonStyle();
+            const bool styleOk = actualStyle == expectedStyle;
+            QJsonObject details;
+            details.insert(QStringLiteral("expected"), int(expectedStyle));
+            details.insert(QStringLiteral("actual"), int(actualStyle));
+            details.insert(QStringLiteral("scale"), scale);
+            details.insert(QStringLiteral("phone_like"), phoneLike);
+            report.step(QStringLiteral("welcome_page.new_file_button_style"), styleOk, details);
+            ok &= styleOk;
+        }
+        if (openFileLink) {
+            const Qt::ToolButtonStyle actualStyle = openFileLink->toolButtonStyle();
+            const bool styleOk = actualStyle == expectedStyle;
+            QJsonObject details;
+            details.insert(QStringLiteral("expected"), int(expectedStyle));
+            details.insert(QStringLiteral("actual"), int(actualStyle));
+            details.insert(QStringLiteral("scale"), scale);
+            details.insert(QStringLiteral("phone_like"), phoneLike);
+            report.step(QStringLiteral("welcome_page.open_file_button_style"), styleOk, details);
+            ok &= styleOk;
         }
 
         finalizeSmoke(ok);
@@ -1254,6 +1880,32 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
         showDockerForTouchSmoke(mainWindow, QStringLiteral("sharedtooldocker"));
 
+#ifndef Q_OS_ANDROID
+        // Desktop regression guard: KisToolSelectTouch must still receive 1-finger touch input even
+        // when touch painting is disabled globally (common desktop configuration).
+        {
+            QAction *touchPaintingDisabled = mainWindow->actionCollection()
+                ? mainWindow->actionCollection()->action("touch_painting_disabled")
+                : nullptr;
+            const bool actionFound = touchPaintingDisabled != nullptr;
+
+            if (touchPaintingDisabled) {
+                touchPaintingDisabled->trigger();
+                QApplication::processEvents();
+            }
+
+            const bool touchDisabled = waitForUiCondition(1000, [&]() {
+                return KisConfig(true).disableTouchOnCanvas();
+            });
+
+            QJsonObject details;
+            details.insert(QStringLiteral("action_found"), actionFound);
+            details.insert(QStringLiteral("disable_touch_on_canvas"), KisConfig(true).disableTouchOnCanvas());
+            report.step(QStringLiteral("selection_tool.touch_painting_disabled"), actionFound && touchDisabled, details);
+            ok &= actionFound && touchDisabled;
+        }
+#endif
+
         auto imgToWidget = [&](const QPointF &imgP) {
             return view->canvasBase()->coordinatesConverter()->imageToWidget(imgP);
         };
@@ -1262,9 +1914,6 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const QPointF widgetPos = imgToWidget(imgP);
             const QPointF screenPos(canvasWidget->mapToGlobal(widgetPos.toPoint()));
 
-#ifdef Q_OS_ANDROID
-            // On Android, injected mouse clicks are often ignored. Inject a real touch tap
-            // so KisToolSelectTouch can build the polygon selection deterministically.
             static QTouchDevice *device = nullptr;
             if (!device) {
                 device = new QTouchDevice();
@@ -1308,31 +1957,6 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
             QApplication::sendEvent(canvasWidget, &endEvent);
             QApplication::processEvents();
-#else
-            // Use the full QMouseEvent ctor (incl. source), otherwise some platforms
-            // will ignore the injected clicks and the selection tool won't receive them.
-            QMouseEvent press(QEvent::MouseButtonPress,
-                              widgetPos,
-                              widgetPos,
-                              screenPos,
-                              Qt::LeftButton,
-                              Qt::LeftButton,
-                              Qt::NoModifier,
-                              Qt::MouseEventNotSynthesized);
-            QApplication::sendEvent(canvasWidget, &press);
-            QApplication::processEvents();
-
-            QMouseEvent release(QEvent::MouseButtonRelease,
-                                widgetPos,
-                                widgetPos,
-                                screenPos,
-                                Qt::LeftButton,
-                                Qt::NoButton,
-                                Qt::NoModifier,
-                                Qt::MouseEventNotSynthesized);
-            QApplication::sendEvent(canvasWidget, &release);
-            QApplication::processEvents();
-#endif
         };
 
         // Tap-to-polygon selection: 4 corners, then tap the first point again to close.
@@ -1367,6 +1991,12 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         report.step(QStringLiteral("selection_tool.create_selection_via_input"), selectionMade);
+#ifndef Q_OS_ANDROID
+        if (!selectionMade) {
+            qWarning() << "Touch smoke: selection-tool failed to create selection via touch input on desktop";
+            ok = false;
+        }
+#endif
         bool usedFallback = false;
         if (!selectionMade) {
             usedFallback = true;
@@ -1844,6 +2474,69 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             report.step(QStringLiteral("touch_sidebar.docker_visible"), visible, details);
         }
         ok = ok && visible;
+        finalizeSmoke(ok);
+        return;
+    }
+
+    if (normalizedScenario == "brush-hud" || normalizedScenario == "brush_hud" ||
+        normalizedScenario == "brushhud" || normalizedScenario == "brush_hud_docker") {
+        bool ok = true;
+        const QString dockerId = QStringLiteral("BrushHudDocker");
+        QDockWidget *dock = mainWindow->dockWidget(dockerId);
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("docker_id"), dockerId);
+            report.step(QStringLiteral("brush_hud.docker_found"), dock != nullptr, details);
+        }
+        if (!dock) {
+            finalizeSmoke(false);
+            return;
+        }
+
+        showDockerForTouchSmoke(mainWindow, dockerId);
+        QApplication::processEvents();
+
+        const bool visible = waitForUiCondition(10000, [&]() {
+            if (!dock || !dock->isVisible()) {
+                return false;
+            }
+            QWidget *w = dock->widget();
+            return w && w->isVisible() && w->width() > 0 && w->height() > 0;
+        });
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("visible"), dock->isVisible());
+            details.insert(QStringLiteral("floating"), dock->isFloating());
+            if (QWidget *w = dock->widget()) {
+                details.insert(QStringLiteral("widget_w"), w->width());
+                details.insert(QStringLiteral("widget_h"), w->height());
+            }
+            report.step(QStringLiteral("brush_hud.docker_visible"), visible, details);
+        }
+        ok = ok && visible;
+
+        const int toolButtonCount = dock->findChildren<QToolButton *>().size();
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("tool_buttons"), toolButtonCount);
+            report.step(QStringLiteral("brush_hud.tool_buttons_present"), toolButtonCount >= 2, details);
+        }
+        ok = ok && toolButtonCount >= 2;
+
+        bool hasScrollArea = false;
+        for (QWidget *child : dock->findChildren<QWidget *>()) {
+            if (!child) {
+                continue;
+            }
+            const QString className = QString::fromLatin1(child->metaObject()->className());
+            if (className == QStringLiteral("QScrollArea")) {
+                hasScrollArea = true;
+                break;
+            }
+        }
+        report.step(QStringLiteral("brush_hud.scroll_area_present"), hasScrollArea);
+        ok = ok && hasScrollArea;
+
         finalizeSmoke(ok);
         return;
     }
@@ -2332,33 +3025,74 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         populateLayersForTouchSmoke(mainWindow, 6);
         // Validate the Procreate-style swipe-right multi-select gesture on the layers list.
         QDockWidget *dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
-        QTreeView *nodeView = nullptr;
+
+        // The layers docker model is attached via KoCanvasObserverBase and can occasionally
+        // miss late-binding updates on cold starts (especially in headless/container setups).
+        // Re-bind the observed canvas after we have populated layers so the NodeView model
+        // reflects the active image deterministically.
         if (dock) {
-            const QList<QTreeView *> views = dock->findChildren<QTreeView *>();
-            QTreeView *fallbackNodeView = nullptr;
-            for (QTreeView *view : views) {
-                if (!view) {
-                    continue;
+            auto findActiveCanvas = [&]() -> KoCanvasBase * {
+                if (!mainWindow) {
+                    return nullptr;
                 }
-                if (QString::fromLatin1(view->metaObject()->className()) != QStringLiteral("NodeView")) {
-                    continue;
+
+                if (mainWindow->viewManager()) {
+                    if (KoCanvasBase *canvas = mainWindow->viewManager()->canvasBase()) {
+                        return canvas;
+                    }
                 }
-                if (!fallbackNodeView) {
-                    fallbackNodeView = view;
+
+                if (KisView *view = mainWindow->activeView()) {
+                    return view->canvasBase();
                 }
-                QWidget *vp = view->viewport();
-                if (view->isVisible() && vp && vp->isVisible() && vp->width() > 0 && vp->height() > 0) {
-                    nodeView = view;
-                    break;
+
+                return nullptr;
+            };
+
+            if (KoCanvasObserverBase *observer = dynamic_cast<KoCanvasObserverBase *>(dock)) {
+                KoCanvasBase *activeCanvas = findActiveCanvas();
+                if (qApp && qApp->property("krita_touch_smoke").toBool()) {
+                    const QString dockClass = dock ? QString::fromLatin1(dock->metaObject()->className()) : QString();
+                    const QString observedClass = observer->observedCanvas()
+                        ? QString::fromLatin1(observer->observedCanvas()->metaObject()->className())
+                        : QStringLiteral("-");
+                    const QString activeCanvasClass =
+                        activeCanvas ? QString::fromLatin1(activeCanvas->metaObject()->className()) : QStringLiteral("-");
+                    qInfo().noquote()
+                        << QStringLiteral(
+                               "KRITA_TOUCH_SMOKE_LAYERS_PANEL bind dock=%1 observed=%2 active=%3")
+                               .arg(dockClass, observedClass, activeCanvasClass);
                 }
-            }
-            if (!nodeView) {
-                nodeView = fallbackNodeView;
-            }
-            if (!nodeView && !views.isEmpty()) {
-                nodeView = views.first();
+                if (activeCanvas) {
+                    observer->unsetObservedCanvas();
+                    QApplication::processEvents();
+                    observer->setObservedCanvas(activeCanvas);
+                    QApplication::processEvents();
+                }
             }
         }
+
+        if (qApp && qApp->property("krita_touch_smoke").toBool()) {
+            KisViewManager *vm = mainWindow ? mainWindow->viewManager() : nullptr;
+            KisImageWSP image = vm ? vm->image() : KisImageWSP();
+            KisGroupLayerSP rootLayer = image ? image->rootLayer() : KisGroupLayerSP();
+            const int imageRootChildren = rootLayer ? rootLayer->childCount() : -1;
+            QStringList imageRootNames;
+            if (rootLayer) {
+                for (KisNodeSP node = rootLayer->lastChild(); node; node = node->prevSibling()) {
+                    imageRootNames << node->name().left(32);
+                    if (imageRootNames.size() >= 8) {
+                        break;
+                    }
+                }
+            }
+            qInfo().noquote()
+                << QStringLiteral("KRITA_TOUCH_SMOKE_LAYERS_PANEL image_root_children=%1 names=[%2]")
+                       .arg(imageRootChildren)
+                       .arg(imageRootNames.join(QStringLiteral(", ")));
+        }
+
+        QTreeView *nodeView = findNodeViewInDockForTouchSmoke(dock);
 
         QWidget *viewport = nodeView ? nodeView->viewport() : nullptr;
         if (!nodeView || !viewport || !nodeView->model()) {
@@ -2383,29 +3117,232 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
 #ifdef Q_OS_ANDROID
         // On Android/Genymotion the synthetic mouse events used to validate swipe gestures are
-        // significantly less reliable than on desktop. Keep this scenario as a screenshot smoke
-        // for now, and only perform best-effort checks that the list has content to display.
+        // significantly less reliable than on desktop. Keep this scenario as a screenshot smoke:
+        // show the layers panel + populate a few layers, then exit OK.
+        //
+        // We still record best-effort probes about the view/model state for debugging, but these
+        // must not gate success because they have produced false negatives (rowCount/indexAt and
+        // even viewport->grab() can report "empty" while the runner screenshot clearly shows rows).
         bool hasRowForScreenshot = false;
+        int rowCountRoot = 0;
+        int rowCountModelRoot = 0;
+        bool anyIndexAtValid = false;
+        QString viewClassName;
+        QString modelClassName;
+        bool rootIndexValid = false;
+        QSize viewportSize;
+        bool dockObservedCanvas = false;
+        bool activeCanvasFound = false;
+        QString dockClassName;
+        QString detectedVia;
+        bool viewportGrabOk = false;
+        int viewportGrabWidth = 0;
+        int viewportGrabHeight = 0;
+        qreal viewportGrabDpr = 0.0;
+        int viewportGrabMinLuma = 0;
+        int viewportGrabMaxLuma = 0;
+        int viewportGrabBrightSamples = 0;
+        int viewportGrabTotalSamples = 0;
+        int waitElapsedMs = 0;
+
+        auto computeLuma = [](QRgb rgba) -> int {
+            // Integer approximation of Rec. 709 luma.
+            const int r = qRed(rgba);
+            const int g = qGreen(rgba);
+            const int b = qBlue(rgba);
+            return (r * 2126 + g * 7152 + b * 722 + 5000) / 10000;
+        };
+
+        auto viewportLooksPopulated = [&](QWidget *vp) -> bool {
+            viewportGrabOk = false;
+            viewportGrabWidth = 0;
+            viewportGrabHeight = 0;
+            viewportGrabDpr = 0.0;
+            viewportGrabMinLuma = 0;
+            viewportGrabMaxLuma = 0;
+            viewportGrabBrightSamples = 0;
+            viewportGrabTotalSamples = 0;
+
+            if (!vp || vp->width() <= 0 || vp->height() <= 0) {
+                return false;
+            }
+
+            const QPixmap pix = vp->grab();
+            if (pix.isNull()) {
+                return false;
+            }
+
+            viewportGrabDpr = pix.devicePixelRatio();
+
+            const QImage img = pix.toImage();
+            if (img.isNull()) {
+                return false;
+            }
+
+            viewportGrabWidth = img.width();
+            viewportGrabHeight = img.height();
+            viewportGrabOk = viewportGrabWidth > 8 && viewportGrabHeight > 8;
+            if (!viewportGrabOk) {
+                return false;
+            }
+
+            const int w = viewportGrabWidth;
+            const int h = viewportGrabHeight;
+            const int xStep = qMax(1, w / 12);
+            const int yStep = qMax(1, h / 18);
+
+            int minLum = 255;
+            int maxLum = 0;
+            int bright = 0;
+            int total = 0;
+
+            for (int y = 0; y < h; y += yStep) {
+                for (int x = 0; x < w; x += xStep) {
+                    const int lum = computeLuma(img.pixel(x, y));
+                    minLum = qMin(minLum, lum);
+                    maxLum = qMax(maxLum, lum);
+                    if (lum >= 200) {
+                        ++bright;
+                    }
+                    ++total;
+                }
+            }
+
+            viewportGrabMinLuma = minLum;
+            viewportGrabMaxLuma = maxLum;
+            viewportGrabBrightSamples = bright;
+            viewportGrabTotalSamples = total;
+
+            // Heuristic: the empty layers list is a mostly dark, flat background. A populated
+            // list has bright UI elements (icons/thumbnails) and strong contrast.
+            return maxLum >= 200 && (maxLum - minLum) >= 120 && bright >= 2;
+        };
+
         {
             QElapsedTimer timer;
             timer.start();
-            while (timer.elapsed() < 12000) {
+            int lastGrabMs = -1000000;
+            // Note: Genymotion/Android startup can be slow. Keep the probe window short to avoid
+            // runner timeouts, but long enough to catch late docker binding.
+            while (timer.elapsed() < 15000) {
                 QApplication::processEvents();
-                if (nodeView->model()->rowCount(nodeView->rootIndex()) > 0 ||
-                    nodeView->model()->rowCount(QModelIndex()) > 0 ||
-                    nodeView->indexAt(QPoint(viewport->width() / 2, viewport->height() / 2)).isValid()) {
+                dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
+                dockClassName = dock ? QString::fromLatin1(dock->metaObject()->className()) : QString();
+                if (dock) {
+                    if (KoCanvasObserverBase *observer = dynamic_cast<KoCanvasObserverBase *>(dock)) {
+                        dockObservedCanvas = observer->observedCanvas() != nullptr;
+                        if (!dockObservedCanvas) {
+                            KoCanvasBase *canvas = nullptr;
+                            if (mainWindow->viewManager()) {
+                                canvas = mainWindow->viewManager()->canvasBase();
+                            }
+                            if (!canvas) {
+                                if (KisView *view = mainWindow->activeView()) {
+                                    canvas = view->canvasBase();
+                                }
+                            }
+                            activeCanvasFound = canvas != nullptr;
+                            if (canvas) {
+                                observer->setObservedCanvas(canvas);
+                                dockObservedCanvas = observer->observedCanvas() != nullptr;
+                            }
+                        } else {
+                            activeCanvasFound = true;
+                        }
+                    }
+                }
+                nodeView = findNodeViewInDockForTouchSmoke(dock);
+                viewport = nodeView ? nodeView->viewport() : nullptr;
+                QAbstractItemModel *model = nodeView ? nodeView->model() : nullptr;
+                if (!nodeView || !viewport || !model) {
+                    QThread::msleep(20);
+                    continue;
+                }
+
+                viewClassName = QString::fromLatin1(nodeView->metaObject()->className());
+                viewportSize = viewport->size();
+                modelClassName = QString::fromLatin1(model->metaObject()->className());
+                rootIndexValid = nodeView->rootIndex().isValid();
+                if (viewport->width() <= 0 || viewport->height() <= 0) {
+                    QThread::msleep(20);
+                    continue;
+                }
+
+                rowCountRoot = model->rowCount(nodeView->rootIndex());
+                rowCountModelRoot = model->rowCount(QModelIndex());
+
+                anyIndexAtValid = false;
+                const QVector<QPoint> probePoints{
+                    QPoint(viewport->width() / 2, viewport->height() / 2),
+                    QPoint(viewport->width() / 2, 10),
+                    QPoint(viewport->width() / 2, viewport->height() - 10),
+                    QPoint(10, viewport->height() / 2),
+                };
+                for (const QPoint &p : probePoints) {
+                    if (nodeView->indexAt(p).isValid()) {
+                        anyIndexAtValid = true;
+                        break;
+                    }
+                }
+
+                if (rowCountRoot > 0 || rowCountModelRoot > 0 || anyIndexAtValid) {
                     hasRowForScreenshot = true;
+                    detectedVia = QStringLiteral("model");
+                    waitElapsedMs = int(timer.elapsed());
                     break;
                 }
-                QThread::msleep(20);
+
+                // The Qt model queries above have been observed to return 0/invalid on Android
+                // even while the view is visibly populated. As a backup, grab the viewport and
+                // check that it contains bright, high-contrast content.
+                const int elapsed = int(timer.elapsed());
+                if (elapsed - lastGrabMs >= 500) {
+                    lastGrabMs = elapsed;
+                    if (viewportLooksPopulated(viewport)) {
+                        hasRowForScreenshot = true;
+                        detectedVia = QStringLiteral("viewport_grab");
+                        waitElapsedMs = elapsed;
+                        break;
+                    }
+                }
+
+                QThread::msleep(50);
+            }
+            if (!hasRowForScreenshot) {
+                waitElapsedMs = int(timer.elapsed());
             }
         }
+
         {
             QJsonObject details;
             details.insert(QStringLiteral("has_row"), hasRowForScreenshot);
-            report.step(QStringLiteral("layers_panel.android.has_row_for_screenshot"), hasRowForScreenshot, details);
+            if (!detectedVia.isEmpty()) {
+                details.insert(QStringLiteral("detected_via"), detectedVia);
+            }
+            details.insert(QStringLiteral("view_class"), viewClassName);
+            details.insert(QStringLiteral("model_class"), modelClassName);
+            details.insert(QStringLiteral("viewport_w"), viewportSize.width());
+            details.insert(QStringLiteral("viewport_h"), viewportSize.height());
+            details.insert(QStringLiteral("dock_class"), dockClassName);
+            details.insert(QStringLiteral("dock_observed_canvas"), dockObservedCanvas);
+            details.insert(QStringLiteral("active_canvas_found"), activeCanvasFound);
+            details.insert(QStringLiteral("root_index_valid"), rootIndexValid);
+            details.insert(QStringLiteral("rowCount_rootIndex"), rowCountRoot);
+            details.insert(QStringLiteral("rowCount_modelRoot"), rowCountModelRoot);
+            details.insert(QStringLiteral("indexAt_any_valid"), anyIndexAtValid);
+            details.insert(QStringLiteral("viewport_grab_ok"), viewportGrabOk);
+            details.insert(QStringLiteral("viewport_grab_w"), viewportGrabWidth);
+            details.insert(QStringLiteral("viewport_grab_h"), viewportGrabHeight);
+            details.insert(QStringLiteral("viewport_grab_dpr"), viewportGrabDpr);
+            details.insert(QStringLiteral("viewport_grab_min_luma"), viewportGrabMinLuma);
+            details.insert(QStringLiteral("viewport_grab_max_luma"), viewportGrabMaxLuma);
+            details.insert(QStringLiteral("viewport_grab_bright_samples"), viewportGrabBrightSamples);
+            details.insert(QStringLiteral("viewport_grab_total_samples"), viewportGrabTotalSamples);
+            details.insert(QStringLiteral("wait_elapsed_ms"), waitElapsedMs);
+            details.insert(QStringLiteral("screenshot_only"), true);
+            report.step(QStringLiteral("layers_panel.android.list_probe"), true, details);
         }
-        finalizeSmoke(hasRowForScreenshot);
+        finalizeSmoke(true);
         return;
 #endif
 
@@ -2416,23 +3353,240 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return;
         }
 
-        QModelIndex rawIndex;
-        QRect rowRect;
-        if (!pickNodeViewRowForSwipeForTouchSmoke(nodeView, &rawIndex, &rowRect)) {
-            qWarning() << "Touch smoke: layers-panel could not find a valid row for swipe";
+        struct TouchSmokeRowCandidate {
+            QModelIndex rawIndex; // DEFAULT_COL
+            QRect rect;
+        };
+
+        auto pickTwoVisibleSiblingRows = [&](TouchSmokeRowCandidate *outA, TouchSmokeRowCandidate *outB, int timeoutMs) -> bool {
+            if (!outA || !outB || !nodeView || !viewport || !nodeView->model()) {
+                return false;
+            }
+
+            QElapsedTimer timer;
+            timer.start();
+            qint64 lastModelDebugMs = -999999;
+            qint64 lastIndexAtDebugMs = -999999;
+            while (timer.elapsed() < timeoutMs) {
+                QApplication::processEvents();
+                if (viewport->width() <= 0 || viewport->height() <= 0) {
+                    QThread::msleep(10);
+                    continue;
+                }
+
+                // Prefer picking rows via model traversal. View/indexAt probing has been observed to
+                // return false negatives on some runs (returning the same row index for all points
+                // even when the list is visibly populated).
+                {
+                    QAbstractItemModel *layersModel = nodeView->model();
+                    const QModelIndex rootIndex = nodeView->rootIndex();
+                    const int rootRows = layersModel ? layersModel->rowCount(rootIndex) : 0;
+                    const int modelRows = layersModel ? layersModel->rowCount(QModelIndex()) : 0;
+
+                    const qint64 nowMs = timer.elapsed();
+                    if (qApp && qApp->property("krita_touch_smoke").toBool() && nowMs - lastModelDebugMs >= 500) {
+                        lastModelDebugMs = nowMs;
+                        const QString modelClass =
+                            layersModel ? QString::fromLatin1(layersModel->metaObject()->className()) : QString();
+                        QString sourceClass;
+                        if (QSortFilterProxyModel *proxy = qobject_cast<QSortFilterProxyModel *>(layersModel)) {
+                            if (proxy->sourceModel()) {
+                                sourceClass = QString::fromLatin1(proxy->sourceModel()->metaObject()->className());
+                            }
+                        }
+
+                        const QModelIndex onlyTop = layersModel ? layersModel->index(0, 0, QModelIndex()) : QModelIndex();
+                        const int onlyTopRows = onlyTop.isValid() ? layersModel->rowCount(onlyTop) : 0;
+                        const QRect onlyTopRect = onlyTop.isValid() ? nodeView->visualRect(onlyTop) : QRect();
+                        const QString onlyTopName = onlyTop.isValid() ? onlyTop.data(Qt::DisplayRole).toString() : QString();
+
+                        const QString rootIndexStr = rootIndex.isValid()
+                            ? QStringLiteral("v row=%1 col=%2 pValid=%3").arg(rootIndex.row()).arg(rootIndex.column()).arg(rootIndex.parent().isValid())
+                            : QStringLiteral("invalid");
+
+                        qInfo().noquote()
+                            << QStringLiteral(
+                                   "KRITA_TOUCH_SMOKE_LAYERS_PANEL model=%1 source=%2 rootIndex=%3 rowCount(rootIndex)=%4 rowCount(modelRoot)=%5 "
+                                   "onlyTopValid=%6 onlyTopName=%7 onlyTopRows=%8 onlyTopRect=%9,%10 %11x%12 expanded=%13")
+                                   .arg(modelClass,
+                                        sourceClass.isEmpty() ? QStringLiteral("-") : sourceClass,
+                                        rootIndexStr)
+                                   .arg(rootRows)
+                                   .arg(modelRows)
+                                   .arg(onlyTop.isValid())
+                                   .arg(onlyTopName.left(32))
+                                   .arg(onlyTopRows)
+                                   .arg(onlyTopRect.x())
+                                   .arg(onlyTopRect.y())
+                                   .arg(onlyTopRect.width())
+                                   .arg(onlyTopRect.height())
+                                   .arg(onlyTop.isValid() ? nodeView->isExpanded(onlyTop) : false);
+                    }
+
+                    if (rootRows > 0 || modelRows > 0) {
+                        QModelIndex scanRootIndex = rootRows > 0 ? rootIndex : QModelIndex();
+
+                        // Some node models expose a single top-level "root" row (image root group),
+                        // with the actual layers living as its children. Prefer scanning the children.
+                        if (!scanRootIndex.isValid() && modelRows == 1) {
+                            const QModelIndex onlyTop = layersModel->index(0, 0, QModelIndex());
+                            if (onlyTop.isValid()) {
+                                nodeView->expand(onlyTop);
+                                QApplication::processEvents();
+                                if (layersModel->canFetchMore(onlyTop)) {
+                                    layersModel->fetchMore(onlyTop);
+                                    QApplication::processEvents();
+                                }
+                                if (layersModel->rowCount(onlyTop) > 0) {
+                                    scanRootIndex = onlyTop;
+                                }
+                            }
+                        }
+
+                        if (layersModel && layersModel->canFetchMore(scanRootIndex)) {
+                            layersModel->fetchMore(scanRootIndex);
+                            QApplication::processEvents();
+                        }
+
+                        QVector<TouchSmokeRowCandidate> candidates;
+                        const int rowCount = layersModel->rowCount(scanRootIndex);
+                        for (int row = 0; row < rowCount; ++row) {
+                            QModelIndex idx = layersModel->index(row, 0, scanRootIndex);
+                            if (!idx.isValid()) {
+                                continue;
+                            }
+
+                            nodeView->scrollTo(idx, QAbstractItemView::PositionAtCenter);
+                            QApplication::processEvents();
+
+                            const QRect rect = nodeView->visualRect(idx);
+                            if (!rect.isValid() || rect.width() <= 0 || rect.height() <= 0) {
+                                continue;
+                            }
+
+                            candidates.push_back(TouchSmokeRowCandidate{idx, rect});
+                            if (candidates.size() >= 2) {
+                                *outA = candidates[0];
+                                *outB = candidates[1];
+                                return true;
+                            }
+                        }
+                    }
+                }
+
+                const QVector<int> xCandidates{
+                    qBound(2, viewport->width() / 2, viewport->width() - 2),
+                    qBound(2, viewport->width() / 4, viewport->width() - 2),
+                    qBound(2, 20, viewport->width() - 2),
+                };
+
+                QVector<TouchSmokeRowCandidate> candidates;
+                candidates.reserve(8);
+
+                for (int y = 10; y < viewport->height(); y += 24) {
+                    for (int x : xCandidates) {
+                        QModelIndex idx = nodeView->indexAt(QPoint(x, y));
+                        if (!idx.isValid()) {
+                            continue;
+                        }
+
+                        QModelIndex raw = idx.sibling(idx.row(), 0);
+                        if (!raw.isValid()) {
+                            raw = idx;
+                        }
+                        if (!raw.isValid()) {
+                            continue;
+                        }
+
+                        const QRect rect = nodeView->visualRect(raw);
+                        if (!rect.isValid() || rect.width() <= 0 || rect.height() <= 0) {
+                            continue;
+                        }
+
+                        bool already = false;
+                        for (const TouchSmokeRowCandidate &c : candidates) {
+                            if (c.rawIndex == raw) {
+                                already = true;
+                                break;
+                            }
+                        }
+                        if (already) {
+                            continue;
+                        }
+
+                        candidates.push_back(TouchSmokeRowCandidate{raw, rect});
+                        if (candidates.size() >= 12) {
+                            break;
+                        }
+                    }
+                    if (candidates.size() >= 12) {
+                        break;
+                    }
+                }
+
+                // Debug: report what we can "see" via indexAt when smoke is running.
+                const qint64 nowMs = timer.elapsed();
+                if (qApp && qApp->property("krita_touch_smoke").toBool() && nowMs - lastIndexAtDebugMs >= 500) {
+                    lastIndexAtDebugMs = nowMs;
+                    QStringList rows;
+                    for (const TouchSmokeRowCandidate &c : candidates) {
+                        const QString name = c.rawIndex.data(Qt::DisplayRole).toString();
+                        rows << QStringLiteral("{r=%1 p=%2 name=%3}")
+                                    .arg(c.rawIndex.row())
+                                    .arg(c.rawIndex.parent().isValid() ? QString::number(c.rawIndex.parent().row()) : QStringLiteral("-"))
+                                    .arg(name.left(24));
+                    }
+                    qInfo().noquote()
+                        << QStringLiteral("KRITA_TOUCH_SMOKE_LAYERS_PANEL indexAt_candidates=%1 [%2]")
+                               .arg(candidates.size())
+                               .arg(rows.join(QStringLiteral(", ")));
+                }
+
+                // Find a pair of visible rows that share a parent (so they are siblings).
+                // Prefer a valid parent (usually indicates real layer rows, not a single top-level root).
+                for (int pass = 0; pass < 2; ++pass) {
+                    const bool preferValidParent = pass == 0;
+                    for (int i = 0; i < candidates.size(); ++i) {
+                        for (int j = i + 1; j < candidates.size(); ++j) {
+                            if (candidates[i].rawIndex.parent() != candidates[j].rawIndex.parent()) {
+                                continue;
+                            }
+                            if (preferValidParent && !candidates[i].rawIndex.parent().isValid()) {
+                                continue;
+                            }
+                            *outA = candidates[i];
+                            *outB = candidates[j];
+                            return true;
+                        }
+                    }
+                }
+
+                QThread::msleep(20);
+            }
+
+            qWarning() << "Touch smoke: layers-panel could not pick two visible sibling rows"
+                       << "viewportSize=" << viewport->size()
+                       << "rowCount(modelRoot)=" << nodeView->model()->rowCount(QModelIndex());
+            return false;
+        };
+
+        // Some node models expose a single top-level "root" row (image root group) with
+        // actual layers as its children. Ensure our "seed" index is a real layer row.
+        TouchSmokeRowCandidate seedCandidate;
+        TouchSmokeRowCandidate swipeCandidate;
+        // On cold starts the layers docker can take a while to fully reflect layer inserts
+        // (signal compression/lazy model updates). Keep this generous to avoid flakes.
+        constexpr int pickTimeoutMs = 45000;
+        if (!pickTwoVisibleSiblingRows(&seedCandidate, &swipeCandidate, pickTimeoutMs)) {
             report.step(QStringLiteral("layers_panel.pick_row"), false);
             finalizeSmoke(false);
             return;
         }
         report.step(QStringLiteral("layers_panel.pick_row"), true);
 
-        const int startX = qBound(rowRect.left() + 2, viewport->width() / 2, rowRect.right() - 2);
-        const int endX = qMin(viewport->width() - 2, startX + minSwipePx + 10);
-        const QPoint startPos(startX, qBound(2, rowRect.center().y(), viewport->height() - 3));
-
-        QModelIndex buddyIndex = nodeView->model()->buddy(rawIndex);
+        QModelIndex buddyIndex = nodeView->model()->buddy(seedCandidate.rawIndex);
         if (!buddyIndex.isValid()) {
-            buddyIndex = rawIndex;
+            buddyIndex = seedCandidate.rawIndex;
         }
 
         auto sendTouchMouseEvent = [&](QEvent::Type type,
@@ -2452,26 +3606,219 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             QApplication::sendEvent(viewport, &ev);
         };
 
-        sendTouchMouseEvent(QEvent::MouseButtonPress, startPos, Qt::LeftButton, Qt::LeftButton);
-        sendTouchMouseEvent(QEvent::MouseMove, QPoint(endX, startPos.y() + 1), Qt::NoButton, Qt::LeftButton);
-        sendTouchMouseEvent(QEvent::MouseButtonRelease, QPoint(endX, startPos.y() + 1), Qt::LeftButton, Qt::NoButton);
+        // Swipe-right multi-select should add to the selection (Procreate-style). Seed a
+        // selected row first, then swipe-right on a different row and expect 2+ selected rows.
+        selectionModel->select(buddyIndex, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        selectionModel->setCurrentIndex(buddyIndex, QItemSelectionModel::NoUpdate);
+        QApplication::processEvents(QEventLoop::AllEvents, 50);
 
-        QApplication::processEvents();
-
-        if (!selectionModel->isSelected(buddyIndex)) {
-            qWarning() << "Touch smoke: layers-panel swipe-right did not toggle selection";
+        const bool selectedBeforeSwipe = selectionModel->isSelected(buddyIndex);
+        if (!selectedBeforeSwipe) {
+            qWarning() << "Touch smoke: layers-panel could not seed a selected row before swipe-right";
             report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), false);
             finalizeSmoke(false);
             return;
         }
-        report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), true);
+
+        nodeView->scrollTo(swipeCandidate.rawIndex, QAbstractItemView::PositionAtCenter);
+        QApplication::processEvents();
+        const QRect swipeRect = nodeView->visualRect(swipeCandidate.rawIndex);
+        if (!swipeRect.isValid() || swipeRect.width() <= 0 || swipeRect.height() <= 0) {
+            qWarning() << "Touch smoke: layers-panel could not compute swipe row rect";
+            report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), false);
+            finalizeSmoke(false);
+            return;
+        }
+
+        QModelIndex swipeBuddyIndex = nodeView->model()->buddy(swipeCandidate.rawIndex);
+        if (!swipeBuddyIndex.isValid()) {
+            swipeBuddyIndex = swipeCandidate.rawIndex;
+        }
+        if (!swipeBuddyIndex.isValid() || swipeBuddyIndex == buddyIndex) {
+            qWarning() << "Touch smoke: layers-panel could not resolve a second row for swipe-right multi-select";
+            report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), false);
+            finalizeSmoke(false);
+            return;
+        }
+
+        const bool swipeSelectedBefore = selectionModel->isSelected(swipeBuddyIndex);
+        const int selectedRowsBefore = selectionModel->selectedRows().size();
+
+        // Use a point inside the default column that is unlikely to hit per-row icons
+        // (thumbnail/decoration/property buttons), so the press is not consumed by the delegate.
+        const int swipeMargin = qMin(60, qMax(8, swipeRect.width() / 4));
+        int swipeStartX = swipeRect.left() + swipeRect.width() / 2;
+        swipeStartX = qBound(swipeRect.left() + swipeMargin, swipeStartX, swipeRect.right() - swipeMargin);
+        const int swipeEndX = qMin(viewport->width() - 2, swipeStartX + minSwipePx + 10);
+        const QPoint swipeStartPos(swipeStartX, qBound(2, swipeRect.center().y(), viewport->height() - 3));
+
+        // Use a MouseButtonPress that does not look like a normal left-click to the delegate,
+        // so the press isn't consumed by thumbnail/property hit-testing (which would prevent the swipe
+        // candidate from being armed). The swipe logic relies on the move event's buttons state.
+        sendTouchMouseEvent(QEvent::MouseButtonPress, swipeStartPos, Qt::LeftButton, Qt::NoButton);
+        sendTouchMouseEvent(QEvent::MouseMove, QPoint(swipeEndX, swipeStartPos.y() + 1), Qt::NoButton, Qt::LeftButton);
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        const bool swipeSelectedAfterMove = selectionModel->isSelected(swipeBuddyIndex);
+        const int selectedRowsAfterMove = selectionModel->selectedRows().size();
+
+        sendTouchMouseEvent(QEvent::MouseButtonRelease, QPoint(swipeEndX, swipeStartPos.y() + 1), Qt::LeftButton, Qt::NoButton);
+        QApplication::processEvents(QEventLoop::AllEvents, 100);
+        const bool seedSelectedAfterRelease = selectionModel->isSelected(buddyIndex);
+        const bool swipeSelectedAfterRelease = selectionModel->isSelected(swipeBuddyIndex);
+        const int selectedRowsAfterRelease = selectionModel->selectedRows().size();
+
+        const bool multiSelected = selectedBeforeSwipe && seedSelectedAfterRelease && swipeSelectedAfterRelease &&
+            selectedRowsAfterRelease >= 2 && !swipeSelectedBefore && selectedRowsBefore == 1;
+        if (!multiSelected) {
+            qWarning() << "Touch smoke: layers-panel swipe-right did not multi-select a second layer";
+            QJsonObject details;
+            details.insert(QStringLiteral("selected_before"), selectedBeforeSwipe);
+            details.insert(QStringLiteral("seed_selected_after_release"), seedSelectedAfterRelease);
+            details.insert(QStringLiteral("swipe_selected_before"), swipeSelectedBefore);
+            details.insert(QStringLiteral("swipe_selected_after_move"), swipeSelectedAfterMove);
+            details.insert(QStringLiteral("swipe_selected_after_release"), swipeSelectedAfterRelease);
+            details.insert(QStringLiteral("selected_rows_before"), selectedRowsBefore);
+            details.insert(QStringLiteral("selected_rows_after_move"), selectedRowsAfterMove);
+            details.insert(QStringLiteral("selected_rows_after_release"), selectedRowsAfterRelease);
+            report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), false, details);
+            finalizeSmoke(false);
+            return;
+        }
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("selected_before"), selectedBeforeSwipe);
+            details.insert(QStringLiteral("seed_selected_after_release"), seedSelectedAfterRelease);
+            details.insert(QStringLiteral("swipe_selected_before"), swipeSelectedBefore);
+            details.insert(QStringLiteral("swipe_selected_after_move"), swipeSelectedAfterMove);
+            details.insert(QStringLiteral("swipe_selected_after_release"), swipeSelectedAfterRelease);
+            details.insert(QStringLiteral("selected_rows_before"), selectedRowsBefore);
+            details.insert(QStringLiteral("selected_rows_after_move"), selectedRowsAfterMove);
+            details.insert(QStringLiteral("selected_rows_after_release"), selectedRowsAfterRelease);
+            report.step(QStringLiteral("layers_panel.swipe_right_multi_select"), true, details);
+        }
 
         bool ok = true;
 
         KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
         KisGroupLayerSP rootLayer = image ? image->rootLayer() : KisGroupLayerSP();
 
-        auto visibleDirectChildCount = [&]() -> int {
+        QAbstractItemModel *layersModel = nodeView->model();
+        KisNodeFilterProxyModel *proxyModel = qobject_cast<KisNodeFilterProxyModel *>(layersModel);
+        KisNodeModel *nodeModel = !proxyModel ? qobject_cast<KisNodeModel *>(layersModel) : nullptr;
+
+        auto nodeForIndex = [&](const QModelIndex &idx) -> KisNodeSP {
+            if (!idx.isValid()) {
+                return KisNodeSP();
+            }
+            if (proxyModel) {
+                return proxyModel->nodeFromIndex(idx);
+            }
+            if (nodeModel) {
+                return nodeModel->nodeFromIndex(idx);
+            }
+            return KisNodeSP();
+        };
+
+        auto indexFromNode = [&](const KisNodeSP &node) -> QModelIndex {
+            if (!node) {
+                return QModelIndex();
+            }
+            if (proxyModel) {
+                return proxyModel->indexFromNode(node);
+            }
+            if (nodeModel) {
+                return nodeModel->indexFromNode(node);
+            }
+            return QModelIndex();
+        };
+
+        auto pickVisibleNonRootBuddyIndex = [&]() -> QModelIndex {
+            if (!layersModel || !viewport || viewport->width() <= 0 || viewport->height() <= 0) {
+                return QModelIndex();
+            }
+
+            const QVector<int> xCandidates{
+                qBound(2, viewport->width() / 2, viewport->width() - 2),
+                qBound(2, viewport->width() / 4, viewport->width() - 2),
+                qBound(2, 20, viewport->width() - 2),
+            };
+
+            for (int y = 10; y < viewport->height(); y += 24) {
+                for (int x : xCandidates) {
+                    QModelIndex idx = nodeView->indexAt(QPoint(x, y));
+                    if (!idx.isValid()) {
+                        continue;
+                    }
+
+                    QModelIndex idx0 = idx.sibling(idx.row(), 0);
+                    if (!idx0.isValid()) {
+                        idx0 = idx;
+                    }
+
+                    QModelIndex buddy = layersModel->buddy(idx0);
+                    if (!buddy.isValid()) {
+                        buddy = idx0;
+                    }
+
+                    KisNodeSP node = nodeForIndex(buddy);
+                    if (node && rootLayer && node.data() == rootLayer.data()) {
+                        continue;
+                    }
+
+                    if (!node && !buddy.parent().isValid() && layersModel->rowCount(QModelIndex()) == 1) {
+                        // When the model shows only a single top-level root row, ignore candidates
+                        // that still appear to be that root.
+                        continue;
+                    }
+
+                    const QRect rect = nodeView->visualRect(idx0);
+                    if (!rect.isValid() || rect.width() <= 0 || rect.height() <= 0) {
+                        continue;
+                    }
+
+                    return buddy;
+                }
+            }
+            return QModelIndex();
+        };
+
+        QModelIndex soloBuddyIndex;
+        if (rootLayer) {
+            KisNodeSP soloNode = rootLayer->lastChild();
+            if (!soloNode) {
+                soloNode = rootLayer->firstChild();
+            }
+
+            if (soloNode) {
+                waitForUiCondition(5000, [&]() {
+                    soloBuddyIndex = indexFromNode(soloNode);
+                    return soloBuddyIndex.isValid();
+                });
+                if (soloBuddyIndex.isValid()) {
+                    const QModelIndex buddy = layersModel ? layersModel->buddy(soloBuddyIndex) : QModelIndex();
+                    if (buddy.isValid()) {
+                        soloBuddyIndex = buddy;
+                    }
+                }
+            }
+        }
+
+        if (!soloBuddyIndex.isValid()) {
+            soloBuddyIndex = pickVisibleNonRootBuddyIndex();
+        }
+        if (!soloBuddyIndex.isValid()) {
+            soloBuddyIndex = buddyIndex;
+        }
+
+        if (soloBuddyIndex.isValid()) {
+            for (QModelIndex parent = soloBuddyIndex.parent(); parent.isValid(); parent = parent.parent()) {
+                nodeView->expand(parent);
+            }
+            nodeView->scrollTo(soloBuddyIndex, QAbstractItemView::PositionAtCenter);
+            QApplication::processEvents();
+        }
+
+        auto visibleDirectChildCountInImageRoot = [&]() -> int {
             if (!rootLayer) {
                 return 0;
             }
@@ -2484,18 +3831,37 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return count;
         };
 
-        const int beforeVisible = visibleDirectChildCount();
-        if (!image || !rootLayer || beforeVisible < 2) {
-            qWarning() << "Touch smoke: layers-panel cannot validate solo visibility; visible children=" << beforeVisible;
+        const int beforeVisible = visibleDirectChildCountInImageRoot();
+        KisNodeSP soloTargetNode = nodeForIndex(soloBuddyIndex);
+        const bool soloTargetsRoot = soloTargetNode && rootLayer && soloTargetNode.data() == rootLayer.data();
+        if (!image || !rootLayer || !layersModel || (!proxyModel && !nodeModel) || !soloBuddyIndex.isValid() || soloTargetsRoot || beforeVisible < 2) {
+            qWarning() << "Touch smoke: layers-panel cannot validate solo visibility; visible image root children=" << beforeVisible;
             {
                 QJsonObject details;
-                details.insert(QStringLiteral("visible_children"), beforeVisible);
+                details.insert(QStringLiteral("rowCount_modelRoot"), layersModel ? layersModel->rowCount(QModelIndex()) : 0);
+                details.insert(QStringLiteral("visible_image_root_children"), beforeVisible);
+                details.insert(QStringLiteral("solo_index_valid"), soloBuddyIndex.isValid());
+                details.insert(QStringLiteral("solo_parent_valid"), soloBuddyIndex.parent().isValid());
+                details.insert(QStringLiteral("solo_targets_root"), soloTargetsRoot);
+                details.insert(QStringLiteral("solo_node_found"), soloTargetNode != nullptr);
+                if (layersModel) {
+                    const QModelIndex onlyTop = layersModel->index(0, 0, QModelIndex());
+                    details.insert(QStringLiteral("rowCount_onlyTop"), onlyTop.isValid() ? layersModel->rowCount(onlyTop) : 0);
+                }
+                details.insert(QStringLiteral("model_class"),
+                               layersModel ? QString::fromLatin1(layersModel->metaObject()->className()) : QString());
                 report.step(QStringLiteral("layers_panel.solo_setup"), false, details);
             }
             ok = false;
         } else {
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("visible_image_root_children"), beforeVisible);
+                details.insert(QStringLiteral("solo_parent_valid"), soloBuddyIndex.parent().isValid());
+                report.step(QStringLiteral("layers_panel.solo_setup"), true, details);
+            }
             // Procreate-like layer solo: press-and-hold visibility icon toggles solo.
-            const QModelIndex visibilityIndex = buddyIndex.sibling(buddyIndex.row(), 1 /* VISIBILITY_COL */);
+            const QModelIndex visibilityIndex = soloBuddyIndex.sibling(soloBuddyIndex.row(), 1 /* VISIBILITY_COL */);
             const QRect visRect = nodeView->visualRect(visibilityIndex);
             const QPoint visPos = visRect.isValid() ? visRect.center() : QPoint();
 
@@ -2508,10 +3874,14 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             } else {
                 sendTouchMouseEvent(QEvent::MouseButtonPress, visPos, Qt::LeftButton, Qt::LeftButton);
                 for (int i = 0; i < 80; ++i) {
-                    QApplication::processEvents();
-                    image->waitForDone();
-                    afterVisible = visibleDirectChildCount();
-                    if (afterVisible < beforeVisible) {
+                    QApplication::processEvents(QEventLoop::AllEvents, 25);
+                    afterVisible = visibleDirectChildCountInImageRoot();
+                    // "Solo" should hide almost all other top-level layers, not just toggle one.
+                    // Allow a small slack because the initial document may include an always-visible
+                    // background-like layer in some setups.
+                    const bool looksSolo =
+                        afterVisible > 0 && afterVisible < beforeVisible && afterVisible <= 2;
+                    if (looksSolo) {
                         soloApplied = true;
                         break;
                     }
@@ -2523,6 +3893,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     QJsonObject details;
                     details.insert(QStringLiteral("before_visible"), beforeVisible);
                     details.insert(QStringLiteral("after_visible"), afterVisible);
+                    details.insert(QStringLiteral("target_max_visible"), 2);
                     report.step(QStringLiteral("layers_panel.hold_visibility_solo"), soloApplied, details);
                 }
 
@@ -2534,9 +3905,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     int restoredVisible = afterVisible;
                     sendTouchMouseEvent(QEvent::MouseButtonPress, visPos, Qt::LeftButton, Qt::LeftButton);
                     for (int i = 0; i < 80; ++i) {
-                        QApplication::processEvents();
-                        image->waitForDone();
-                        restoredVisible = visibleDirectChildCount();
+                        QApplication::processEvents(QEventLoop::AllEvents, 25);
+                        restoredVisible = visibleDirectChildCountInImageRoot();
                         if (restoredVisible == beforeVisible) {
                             restored = true;
                             break;
@@ -2567,6 +3937,21 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         showDockerForTouchSmoke(mainWindow, QStringLiteral("KisLayerBox"));
         populateLayersForTouchSmoke(mainWindow, 6);
 
+        // On some startup paths (notably Android), a view may exist without an active node
+        // being selected yet. The layer options sheet disables the opacity slider without
+        // an active node, so seed a deterministic current node for smoke.
+        if (KisViewManager *vm = mainWindow->viewManager()) {
+            if (!vm->activeNode()) {
+                KisImageWSP image = vm->image();
+                KisView *view = mainWindow->activeView();
+                KisNodeSP fallbackNode = image && image->root() ? image->root()->lastChild() : KisNodeSP();
+                if (view && fallbackNode) {
+                    view->setCurrentNode(fallbackNode);
+                    QApplication::processEvents();
+                }
+            }
+        }
+
         // UI readability: the layer options sheet is hard to see on a light/white canvas.
         // Keep smoke screenshots reviewable by ensuring a black canvas background.
         const bool filledBlack = fillCanvasForTouchSmoke(mainWindow, QColor(0x00, 0x00, 0x00));
@@ -2576,6 +3961,163 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
 
         bool ok = filledBlack;
+
+        auto assertOpacitySliderWiring = [&](QWidget *sheet, const QString &stepPrefix) {
+            QJsonObject details;
+
+            KisSliderSpinBox *opacitySlider = sheet ? sheet->findChild<KisSliderSpinBox *>() : nullptr;
+
+            details.insert(QStringLiteral("opacity_slider_found"), opacitySlider != nullptr);
+
+            KisViewManager *viewManager = mainWindow ? mainWindow->viewManager() : nullptr;
+            KisImageWSP image = viewManager ? viewManager->image() : KisImageWSP();
+            KisNodeSP activeNode;
+            qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: start").arg(stepPrefix);
+
+            bool selectionAttempted = false;
+            bool selectionOk = false;
+            bool nodeViewFound = false;
+            bool nodeIndexValid = false;
+
+            if (viewManager) {
+                activeNode = viewManager->activeNode();
+                if (!activeNode) {
+                    QDockWidget *dock = mainWindow ? mainWindow->dockWidget(QStringLiteral("KisLayerBox")) : nullptr;
+                    QTreeView *nodeView = findNodeViewInDockForTouchSmoke(dock);
+                    nodeViewFound = nodeView != nullptr;
+
+                    selectionAttempted = true;
+                    bool nodeModelReady = false;
+                    if (nodeView && nodeView->model()) {
+                        nodeModelReady = waitForUiCondition(5000, [&]() {
+                            QAbstractItemModel *model = nodeView->model();
+                            if (!model) {
+                                return false;
+                            }
+
+                            return model->rowCount(nodeView->rootIndex()) > 0 || model->rowCount(QModelIndex()) > 0;
+                        });
+                    }
+                    details.insert(QStringLiteral("node_model_ready"), nodeModelReady);
+
+                    if (nodeModelReady && nodeView && nodeView->model() && nodeView->selectionModel()) {
+                        QAbstractItemModel *model = nodeView->model();
+                        QModelIndex idx;
+                        if (model->rowCount(nodeView->rootIndex()) > 0) {
+                            idx = model->index(0, 0, nodeView->rootIndex());
+                        }
+                        if (!idx.isValid() && model->rowCount(QModelIndex()) > 0) {
+                            idx = model->index(0, 0, QModelIndex());
+                        }
+
+                        if (idx.isValid()) {
+                            nodeIndexValid = true;
+                            nodeView->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+                            nodeView->setCurrentIndex(idx);
+                            QApplication::processEvents();
+                            selectionOk = true;
+                        }
+                    }
+                }
+            }
+
+            details.insert(QStringLiteral("active_node_selection_attempted"), selectionAttempted);
+            details.insert(QStringLiteral("active_node_selection_ok"), selectionOk);
+            details.insert(QStringLiteral("node_view_found"), nodeViewFound);
+            details.insert(QStringLiteral("node_index_valid"), nodeIndexValid);
+
+            const bool activeNodeReady = waitForUiCondition(5000, [&]() {
+                activeNode = viewManager ? viewManager->activeNode() : KisNodeSP();
+                return !activeNode.isNull();
+            });
+
+            bool sliderEnabled = false;
+            if (opacitySlider) {
+                sliderEnabled = waitForUiCondition(5000, [&]() { return opacitySlider->isEnabled(); });
+                details.insert(QStringLiteral("opacity_slider_enabled"), opacitySlider->isEnabled());
+                details.insert(QStringLiteral("opacity_slider_value_before"), opacitySlider->value());
+            }
+
+            details.insert(QStringLiteral("active_node_found"), bool(activeNode));
+            details.insert(QStringLiteral("active_node_ready"), activeNodeReady);
+
+            if (opacitySlider) {
+                details.insert(QStringLiteral("opacity_slider_ready"), sliderEnabled);
+            }
+            if (activeNode) {
+                details.insert(QStringLiteral("node_opacity_before_u8"), activeNode->opacity());
+            }
+
+            bool stepOk = activeNodeReady && sliderEnabled;
+            if (stepOk) {
+                // Changing layer opacity via node manager pushes an undo command and may block
+                // waiting for the image to become idle. On Android cold starts, the image can
+                // stay busy for a while (resource DB migration, thumbnails, etc). Avoid an
+                // indefinite hang in smoke by ensuring the image is idle before we change it.
+                qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: waiting for image idle").arg(stepPrefix);
+                const bool imageIdleBefore = image ? waitForImageIdleForTouchSmoke(image, 30000) : false;
+                details.insert(QStringLiteral("image_idle_before"), imageIdleBefore);
+                if (!imageIdleBefore) {
+                    qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: image never became idle").arg(stepPrefix);
+                    stepOk = false;
+                }
+            }
+
+            if (stepOk) {
+                const int beforeValue = opacitySlider->value();
+                constexpr int testValue = 50;
+                constexpr int toleranceU8 = 12;
+
+                const int expectedTestU8 = qBound(0, qRound(testValue * 255.0 / 100.0), 255);
+                const int expectedTestMinU8 = qMax(0, expectedTestU8 - toleranceU8);
+                const int expectedTestMaxU8 = qMin(255, expectedTestU8 + toleranceU8);
+
+                qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: setValue(%2)").arg(stepPrefix).arg(testValue);
+                opacitySlider->setValue(testValue);
+                qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: setValue returned").arg(stepPrefix);
+                QApplication::processEvents();
+
+                details.insert(QStringLiteral("expected_test_opacity_u8"), expectedTestU8);
+                details.insert(QStringLiteral("expected_test_opacity_min_u8"), expectedTestMinU8);
+                details.insert(QStringLiteral("expected_test_opacity_max_u8"), expectedTestMaxU8);
+
+                const bool changed = waitForUiCondition(800, [&]() {
+                    const int o = activeNode ? activeNode->opacity() : -1;
+                    return o >= expectedTestMinU8 && o <= expectedTestMaxU8;
+                });
+
+                details.insert(QStringLiteral("opacity_slider_value_test"), testValue);
+                details.insert(QStringLiteral("node_opacity_after_test_u8"), activeNode ? activeNode->opacity() : -1);
+                details.insert(QStringLiteral("changed"), changed);
+
+                const int expectedRestoreU8 = qBound(0, qRound(beforeValue * 255.0 / 100.0), 255);
+                const int expectedRestoreMinU8 = qMax(0, expectedRestoreU8 - toleranceU8);
+                const int expectedRestoreMaxU8 = qMin(255, expectedRestoreU8 + toleranceU8);
+
+                qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: restore setValue(%2)").arg(stepPrefix).arg(beforeValue);
+                opacitySlider->setValue(beforeValue);
+                qInfo().noquote() << QStringLiteral("Touch smoke: %1.opacity_slider: restore setValue returned").arg(stepPrefix);
+                QApplication::processEvents();
+
+                details.insert(QStringLiteral("expected_restore_opacity_u8"), expectedRestoreU8);
+                details.insert(QStringLiteral("expected_restore_opacity_min_u8"), expectedRestoreMinU8);
+                details.insert(QStringLiteral("expected_restore_opacity_max_u8"), expectedRestoreMaxU8);
+
+                const bool restored = waitForUiCondition(800, [&]() {
+                    const int o = activeNode ? activeNode->opacity() : -1;
+                    return o >= expectedRestoreMinU8 && o <= expectedRestoreMaxU8;
+                });
+
+                details.insert(QStringLiteral("opacity_slider_value_restored"), beforeValue);
+                details.insert(QStringLiteral("node_opacity_after_restore_u8"), activeNode ? activeNode->opacity() : -1);
+                details.insert(QStringLiteral("restored"), restored);
+
+                stepOk = stepOk && changed && restored;
+            }
+
+            report.step(stepPrefix + QStringLiteral(".opacity_slider_changes_node_opacity"), stepOk, details);
+            ok = ok && stepOk;
+        };
 
 #ifdef Q_OS_ANDROID
         // On Android keep this as a screenshot smoke: trigger the layer options sheet directly.
@@ -2619,6 +4161,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(optionsSheet);
             report.step(QStringLiteral("layer_options.sheet_contrast"), contrast.ok, contrast.details);
             ok = ok && contrast.ok;
+
+            assertOpacitySliderWiring(optionsSheet, QStringLiteral("layer_options"));
         }
 
         finalizeSmoke(ok);
@@ -2627,33 +4171,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
 
         // Validate the Procreate-style swipe-left gesture that opens the layer options sheet.
         QDockWidget *dock = mainWindow->dockWidget(QStringLiteral("KisLayerBox"));
-        QTreeView *nodeView = nullptr;
-        if (dock) {
-            const QList<QTreeView *> views = dock->findChildren<QTreeView *>();
-            QTreeView *fallbackNodeView = nullptr;
-            for (QTreeView *view : views) {
-                if (!view) {
-                    continue;
-                }
-                if (QString::fromLatin1(view->metaObject()->className()) != QStringLiteral("NodeView")) {
-                    continue;
-                }
-                if (!fallbackNodeView) {
-                    fallbackNodeView = view;
-                }
-                QWidget *vp = view->viewport();
-                if (view->isVisible() && vp && vp->isVisible() && vp->width() > 0 && vp->height() > 0) {
-                    nodeView = view;
-                    break;
-                }
-            }
-            if (!nodeView) {
-                nodeView = fallbackNodeView;
-            }
-            if (!nodeView && !views.isEmpty()) {
-                nodeView = views.first();
-            }
-        }
+        QTreeView *nodeView = findNodeViewInDockForTouchSmoke(dock);
 
         QWidget *viewport = nodeView ? nodeView->viewport() : nullptr;
         if (!nodeView || !viewport || !nodeView->model()) {
@@ -2741,6 +4259,8 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             const TouchSmokeSheetContrastCheck contrast = checkTouchSheetContrastForTouchSmoke(visibleSheet);
             report.step(QStringLiteral("layer_options.sheet_contrast"), contrast.ok, contrast.details);
             ok = ok && contrast.ok;
+
+            assertOpacitySliderWiring(visibleSheet, QStringLiteral("layer_options"));
         }
         finalizeSmoke(ok);
         return;

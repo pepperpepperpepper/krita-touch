@@ -3,9 +3,11 @@
         <file>scripts/canvas-only-toggle.json</file>
         <file>scripts/clipboard-overlay-gating.json</file>
         <file>scripts/clear-layer-scrub-gating.json</file>
+        <file>scripts/erase-action-toggle.json</file>
         <file>scripts/quick-pinch-fit-gating.json</file>
         <file>scripts/quickshape-gating.json</file>
         <file>scripts/quickmenu-hold-gating.json</file>
+        <file>scripts/layer-add-remove.json</file>
         <file>scripts/rotate-with-pinch-gating.json</file>
         <file>scripts/touch-painting-gating.json</file>
         <file>scripts/undo-redo-layer-gating.json</file>

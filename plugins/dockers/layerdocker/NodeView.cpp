@@ -37,6 +37,15 @@
 
 #include "kis_node_view_color_scheme.h"
 
+namespace {
+
+bool isTouchSmokeRun()
+{
+    return qApp && qApp->property("krita_touch_smoke").toBool();
+}
+
+} // namespace
+
 
 #ifdef HAVE_X11
 #define DRAG_WHILE_DRAG_WORKAROUND
@@ -236,10 +245,26 @@ bool NodeView::viewportEvent(QEvent *e)
                 selectionModel()->isSelected(rawBuddyIndex);
 
             const KisConfig cfg(true);
+            const bool treatAsTouchMouse =
+                mouseEvent->source() != Qt::MouseEventNotSynthesized ||
+                isTouchSmokeRun();
             const bool touchModeMouse =
                 cfg.touchModeEnabled() &&
-                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
+                treatAsTouchMouse &&
                 mouseEvent->button() == Qt::LeftButton;
+
+            if (isTouchSmokeRun()) {
+                qInfo().noquote()
+                    << QStringLiteral("KRITA_TOUCH_SMOKE_NODEVIEW press pos=%1,%2 rawValid=%3 rawCol=%4 button=%5 buttons=%6 source=%7 touchMode=%8")
+                           .arg(pos.x())
+                           .arg(pos.y())
+                           .arg(rawIndex.isValid())
+                           .arg(rawIndex.column())
+                           .arg(int(mouseEvent->button()))
+                           .arg(int(mouseEvent->buttons()))
+                           .arg(int(mouseEvent->source()))
+                           .arg(touchModeMouse);
+            }
 
             // Procreate-like layer "solo": press-and-hold the visibility icon.
             // We delay the normal visibility toggle so short tap still toggles.
@@ -261,12 +286,13 @@ bool NodeView::viewportEvent(QEvent *e)
 
             QModelIndex index = model()->buddy(indexAt(pos));
             if (d->delegate.editorEvent(e, model(), optionForIndex(index), index)) {
+                if (isTouchSmokeRun()) {
+                    qInfo().noquote() << QStringLiteral("KRITA_TOUCH_SMOKE_NODEVIEW press delegate_consumed=true");
+                }
                 return true;
             }
 
-            if (cfg.touchModeEnabled() &&
-                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
-                mouseEvent->button() == Qt::LeftButton) {
+            if (touchModeMouse) {
                 if (rawIndex.isValid() && rawIndex.column() == DEFAULT_COL && rawBuddyIndex.isValid()) {
                     d->touchSwipeCandidateActive = true;
                     d->touchSwipeCandidateIndex = rawBuddyIndex;
@@ -275,6 +301,13 @@ bool NodeView::viewportEvent(QEvent *e)
                     if (pressedOnSelectedRow) {
                         d->touchOptionsCandidateActive = true;
                         d->touchOptionsCandidateIndex = rawBuddyIndex;
+                    }
+
+                    if (isTouchSmokeRun()) {
+                        qInfo().noquote()
+                            << QStringLiteral("KRITA_TOUCH_SMOKE_NODEVIEW press swipe_candidate=1 row=%1 col=%2")
+                                   .arg(d->touchSwipeCandidateIndex.row())
+                                   .arg(d->touchSwipeCandidateIndex.column());
                     }
                 }
             }
@@ -391,7 +424,7 @@ bool NodeView::viewportEvent(QEvent *e)
             }
 
             if (d->touchSwipeCandidateActive &&
-                mouseEvent->source() != Qt::MouseEventNotSynthesized &&
+                (mouseEvent->source() != Qt::MouseEventNotSynthesized || isTouchSmokeRun()) &&
                 (mouseEvent->buttons() & Qt::LeftButton) &&
                 d->touchSwipeCandidateIndex.isValid()) {
 
@@ -402,6 +435,18 @@ bool NodeView::viewportEvent(QEvent *e)
                 const int absDy = qAbs(dy);
 
                 const int minSwipePx = qMax(qApp->startDragDistance() * 2, 36);
+                if (isTouchSmokeRun()) {
+                    qInfo().noquote()
+                        << QStringLiteral(
+                               "KRITA_TOUCH_SMOKE_NODEVIEW move pos=%1,%2 dx=%3 dy=%4 absDx=%5 absDy=%6 minSwipe=%7")
+                               .arg(pos.x())
+                               .arg(pos.y())
+                               .arg(dx)
+                               .arg(dy)
+                               .arg(absDx)
+                               .arg(absDy)
+                               .arg(minSwipePx);
+                }
                 if (absDy >= minSwipePx && absDy > absDx) {
                     // Treat as a scroll/drag; don't keep a swipe candidate alive.
                     d->touchSwipeCandidateActive = false;
@@ -424,11 +469,24 @@ bool NodeView::viewportEvent(QEvent *e)
                         }
                     } else {
                         if (selectionModel()) {
+                            const bool wasSelected = selectionModel()->isSelected(d->touchSwipeCandidateIndex);
                             selectionModel()->select(d->touchSwipeCandidateIndex,
                                                      QItemSelectionModel::Toggle | QItemSelectionModel::Rows);
                             selectionModel()->setCurrentIndex(d->touchSwipeCandidateIndex,
                                                              QItemSelectionModel::NoUpdate);
+                            if (isTouchSmokeRun()) {
+                                const bool isSelectedNow = selectionModel()->isSelected(d->touchSwipeCandidateIndex);
+                                qInfo().noquote()
+                                    << QStringLiteral("KRITA_TOUCH_SMOKE_NODEVIEW swipe_right selection %1->%2")
+                                           .arg(wasSelected ? 1 : 0)
+                                           .arg(isSelectedNow ? 1 : 0);
+                            }
                         }
+                    }
+
+                    if (isTouchSmokeRun()) {
+                        qInfo().noquote()
+                            << QStringLiteral("KRITA_TOUCH_SMOKE_NODEVIEW swipe recognized dx=%1").arg(dx);
                     }
 
                     d->touchSwipeCandidateActive = false;

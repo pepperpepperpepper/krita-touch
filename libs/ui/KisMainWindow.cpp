@@ -1923,7 +1923,16 @@ void KisMainWindow::resizeEvent(QResizeEvent * e)
         const bool themeIsLight = themeName == QLatin1String("Touch Procreate Light");
 
         const QScreen *touchScreen = screen() ? screen() : QApplication::primaryScreen();
-        const int availableWidthPx = d->touchTopBar->width() > 0 ? d->touchTopBar->width() : width();
+        int availableWidthPx = d->touchTopBar->width();
+        if (availableWidthPx <= 0 && e) {
+            availableWidthPx = e->size().width();
+        }
+        if (availableWidthPx <= 0) {
+            availableWidthPx = width();
+        }
+        if (availableWidthPx <= 0 && touchScreen) {
+            availableWidthPx = touchScreen->availableGeometry().width();
+        }
         updateTouchTopBarChrome(d->touchTopBar, touchScreen, availableWidthPx, themeIsLight);
     }
 }
@@ -3599,7 +3608,13 @@ void KisMainWindow::applyTouchMode(bool enabled)
         // The top bar uses a custom style sheet instead of full widget theming so it is
         // stable across platforms. Update it even when toggling Touch themes at runtime,
         // and make sure it fits the current window width (phones / split-screen).
-        const int availableWidthPx = d->touchTopBar && d->touchTopBar->width() > 0 ? d->touchTopBar->width() : width();
+        int availableWidthPx = 0;
+        if (touchScreen) {
+            availableWidthPx = touchScreen->availableGeometry().width();
+        }
+        if (availableWidthPx <= 0) {
+            availableWidthPx = width();
+        }
         updateTouchTopBarChrome(d->touchTopBar, touchScreen, availableWidthPx, themeIsLight);
 
         d->touchTopBar->show();
@@ -4036,55 +4051,55 @@ void KisMainWindow::createActions()
     connect(d->touchRightHandedAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchRightHandedToggled(bool)));
 
     d->touchLightThemeAction = new KToggleAction(i18nc("@action:inmenu", "Light Touch Theme"), this);
-    d->touchLightThemeAction->setIcon(QIcon::fromTheme(QStringLiteral("color-management")));
+    d->touchLightThemeAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("color-management")));
     d->touchLightThemeAction->setChecked(KisConfig(true).touchThemeName() == QStringLiteral("Touch Procreate Light"));
     actionCollection()->addAction("touch_theme_light", d->touchLightThemeAction);
     connect(d->touchLightThemeAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchThemeLightToggled(bool)));
 
     d->touchRotateWithPinchAction = new KToggleAction(i18nc("@action:inmenu", "Rotate with Pinch"), this);
-    d->touchRotateWithPinchAction->setIcon(QIcon::fromTheme(QStringLiteral("object-rotate-right")));
+    d->touchRotateWithPinchAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("object-rotate-right")));
     d->touchRotateWithPinchAction->setChecked(KisConfig(true).touchRotateWithPinchEnabled());
     actionCollection()->addAction("touch_rotate_with_pinch", d->touchRotateWithPinchAction);
     connect(d->touchRotateWithPinchAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchRotateWithPinchToggled(bool)));
 
     d->touchQuickPinchToFitAction = new KToggleAction(i18nc("@action:inmenu", "Quick Pinch to Fit"), this);
-    d->touchQuickPinchToFitAction->setIcon(QIcon::fromTheme(QStringLiteral("zoom-fit-best")));
+    d->touchQuickPinchToFitAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("zoom-fit-best")));
     d->touchQuickPinchToFitAction->setChecked(KisConfig(true).touchQuickPinchToFitEnabled());
     actionCollection()->addAction("touch_quick_pinch_to_fit_enabled", d->touchQuickPinchToFitAction);
     connect(d->touchQuickPinchToFitAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickPinchToFitToggled(bool)));
 
     d->touchQuickShapeEnabledAction = new KToggleAction(i18nc("@action:inmenu", "QuickShape"), this);
-    d->touchQuickShapeEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("draw-freehand")));
+    d->touchQuickShapeEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("draw-freehand")));
     d->touchQuickShapeEnabledAction->setChecked(KisConfig(true).touchQuickShapeEnabled());
     actionCollection()->addAction("touch_quickshape_enabled", d->touchQuickShapeEnabledAction);
     connect(d->touchQuickShapeEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickShapeEnabledToggled(bool)));
 
     d->touchQuickMenuEnabledAction = new KToggleAction(i18nc("@action:inmenu", "QuickMenu Gesture"), this);
-    d->touchQuickMenuEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("view-grid")));
+    d->touchQuickMenuEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("view-grid")));
     d->touchQuickMenuEnabledAction->setChecked(KisConfig(true).touchQuickMenuEnabled());
     actionCollection()->addAction("touch_quickmenu_enabled", d->touchQuickMenuEnabledAction);
     connect(d->touchQuickMenuEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchQuickMenuEnabledToggled(bool)));
 
     d->touchClipboardGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Copy/Paste Gesture"), this);
-    d->touchClipboardGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-paste")));
+    d->touchClipboardGestureEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("edit-paste")));
     d->touchClipboardGestureEnabledAction->setChecked(KisConfig(true).touchClipboardGestureEnabled());
     actionCollection()->addAction("touch_clipboard_gesture_enabled", d->touchClipboardGestureEnabledAction);
     connect(d->touchClipboardGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchClipboardGestureEnabledToggled(bool)));
 
     d->touchClearLayerGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Clear Layer Gesture"), this);
-    d->touchClearLayerGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-clear")));
+    d->touchClearLayerGestureEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("edit-clear")));
     d->touchClearLayerGestureEnabledAction->setChecked(KisConfig(true).touchClearLayerGestureEnabled());
     actionCollection()->addAction("touch_clear_layer_gesture_enabled", d->touchClearLayerGestureEnabledAction);
     connect(d->touchClearLayerGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchClearLayerGestureEnabledToggled(bool)));
 
     d->touchUndoRedoGesturesEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Undo/Redo Gestures"), this);
-    d->touchUndoRedoGesturesEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("edit-undo")));
+    d->touchUndoRedoGesturesEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("edit-undo")));
     d->touchUndoRedoGesturesEnabledAction->setChecked(KisConfig(true).touchUndoRedoGesturesEnabled());
     actionCollection()->addAction("touch_undo_redo_gestures_enabled", d->touchUndoRedoGesturesEnabledAction);
     connect(d->touchUndoRedoGesturesEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchUndoRedoGesturesEnabledToggled(bool)));
 
     d->touchFullscreenGestureEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Canvas Only Gesture"), this);
-    d->touchFullscreenGestureEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("view-fullscreen")));
+    d->touchFullscreenGestureEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("view-fullscreen")));
     d->touchFullscreenGestureEnabledAction->setChecked(KisConfig(true).touchFullscreenGestureEnabled());
     actionCollection()->addAction("touch_fullscreen_gesture_enabled", d->touchFullscreenGestureEnabledAction);
     connect(d->touchFullscreenGestureEnabledAction, SIGNAL(toggled(bool)), this, SLOT(slotTouchFullscreenGestureEnabledToggled(bool)));
@@ -4095,7 +4110,7 @@ void KisMainWindow::createActions()
         const KisConfig::TouchPainting touchPainting = KisConfig(true).touchPainting();
 
         d->touchPaintingAutoAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Auto"), this);
-        d->touchPaintingAutoAction->setIcon(QIcon::fromTheme(QStringLiteral("dialog-question")));
+        d->touchPaintingAutoAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("dialog-question")));
         d->touchPaintingAutoAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_AUTO);
         d->touchPaintingAutoAction->setActionGroup(d->touchPaintingModeGroup);
         actionCollection()->addAction("touch_painting_auto", d->touchPaintingAutoAction);
@@ -4108,7 +4123,7 @@ void KisMainWindow::createActions()
         });
 
         d->touchPaintingEnabledAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Enabled"), this);
-        d->touchPaintingEnabledAction->setIcon(QIcon::fromTheme(QStringLiteral("draw-brush")));
+        d->touchPaintingEnabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("draw-brush")));
         d->touchPaintingEnabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_ENABLED);
         d->touchPaintingEnabledAction->setActionGroup(d->touchPaintingModeGroup);
         actionCollection()->addAction("touch_painting_enabled", d->touchPaintingEnabledAction);
@@ -4121,7 +4136,7 @@ void KisMainWindow::createActions()
         });
 
         d->touchPaintingDisabledAction = new KToggleAction(i18nc("@action:inmenu", "Touch Painting: Disabled"), this);
-        d->touchPaintingDisabledAction->setIcon(QIcon::fromTheme(QStringLiteral("process-stop")));
+        d->touchPaintingDisabledAction->setIcon(KisIconUtils::loadIcon(QStringLiteral("process-stop")));
         d->touchPaintingDisabledAction->setChecked(touchPainting == KisConfig::TOUCH_PAINTING_DISABLED);
         d->touchPaintingDisabledAction->setActionGroup(d->touchPaintingModeGroup);
         actionCollection()->addAction("touch_painting_disabled", d->touchPaintingDisabledAction);

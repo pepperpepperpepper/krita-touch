@@ -126,6 +126,8 @@ namespace {
 
 using KisTouchSmokeScriptRunnerDetail::actionEnsureChecked;
 using KisTouchSmokeScriptRunnerDetail::actionTriggerWaitLayerCountDelta;
+using KisTouchSmokeScriptRunnerDetail::waitCanvasEraserMode;
+using KisTouchSmokeScriptRunnerDetail::waitCanvasEffectiveCompositeOp;
 using KisTouchSmokeScriptRunnerDetail::assertActiveToolMaskSyntheticEvents;
 using KisTouchSmokeScriptRunnerDetail::buildTouchDragPathPoints;
 using KisTouchSmokeScriptRunnerDetail::buildTouchHoldPoints;
@@ -482,6 +484,15 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             } else {
                 ok = setConfigBool(cfg, key, v.toBool(), &details, &localError);
             }
+        } else if (op == QStringLiteral("canvas.wait_eraser_mode")) {
+            const bool expected = step.value(QStringLiteral("expected")).toBool(false);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            ok = waitCanvasEraserMode(mainWindow, expected, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("canvas.wait_effective_composite_op")) {
+            const QString expectedId = step.value(QStringLiteral("expected")).toString();
+            const bool negate = step.value(QStringLiteral("not")).toBool(false);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
+            ok = waitCanvasEffectiveCompositeOp(mainWindow, expectedId, negate, timeoutMs, &details, &localError);
         } else if (op == QStringLiteral("ui.overlay.hide")) {
             const QString objectName = step.value(QStringLiteral("object_name")).toString();
             ok = hideOverlay(mainWindow, objectName, &details);

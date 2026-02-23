@@ -22,6 +22,7 @@
 
 #include <kactioncollection.h>
 #include <klocalizedstring.h>
+#include <kis_icon_utils.h>
 
 #include "kis_touch_ui_metrics.h"
 
@@ -99,6 +100,26 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
     const int toolButtonRadius = KisTouchUiMetrics::px(12.0 * kActionsUiScale, scale);
     const int toolButtonPadding = KisTouchUiMetrics::px(8.0 * kActionsUiScale, scale);
 
+#ifdef Q_OS_ANDROID
+    // Android compositing tends to make semi-transparent button backplates read as
+    // "disabled"; use a slightly more opaque palette to keep touch controls legible.
+    constexpr int listItemSelectedBgAlpha = 110;
+    constexpr int toolButtonBgAlpha = 95;
+    constexpr int toolButtonBorderAlpha = 150;
+    constexpr int toolButtonPressedBgAlpha = 125;
+    constexpr int toolButtonCheckedBgAlpha = 160;
+    constexpr int toolButtonCheckedBorderAlpha = 230;
+    constexpr int toolButtonCheckedPressedBgAlpha = 200;
+#else
+    constexpr int listItemSelectedBgAlpha = 70;
+    constexpr int toolButtonBgAlpha = 60;
+    constexpr int toolButtonBorderAlpha = 90;
+    constexpr int toolButtonPressedBgAlpha = 80;
+    constexpr int toolButtonCheckedBgAlpha = 110;
+    constexpr int toolButtonCheckedBorderAlpha = 200;
+    constexpr int toolButtonCheckedPressedBgAlpha = 150;
+#endif
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchActionsSheet"));
@@ -121,30 +142,37 @@ KisTouchActionsSheet::KisTouchActionsSheet(KisKActionCollection *actionCollectio
         "  border-radius: %3px;"
         "}"
         "QListWidget::item:selected {"
-        "  background-color: rgba(255, 255, 255, 70);"
+        "  background-color: rgba(255, 255, 255, %6);"
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 60);"
-        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  background: rgba(255, 255, 255, %7);"
+        "  border: 1px solid rgba(255, 255, 255, %8);"
         "  border-radius: %4px;"
         "  padding: %5px;"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 80);"
+        "  background-color: rgba(255, 255, 255, %9);"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 110);"
-        "  border-color: rgba(90, 160, 255, 200);"
+        "  background-color: rgba(90, 160, 255, %10);"
+        "  border-color: rgba(90, 160, 255, %11);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 150);"
+        "  background-color: rgba(90, 160, 255, %12);"
         "}")
                       .arg(listItemPaddingV)
                       .arg(listItemPaddingH)
                       .arg(listItemRadius)
                       .arg(toolButtonRadius)
-                      .arg(toolButtonPadding));
+                      .arg(toolButtonPadding)
+                      .arg(listItemSelectedBgAlpha)
+                      .arg(toolButtonBgAlpha)
+                      .arg(toolButtonBorderAlpha)
+                      .arg(toolButtonPressedBgAlpha)
+                      .arg(toolButtonCheckedBgAlpha)
+                      .arg(toolButtonCheckedBorderAlpha)
+                      .arg(toolButtonCheckedPressedBgAlpha));
 
     rebuildUi();
 }
@@ -389,7 +417,7 @@ void KisTouchActionsSheet::rebuildUi()
     };
 
     for (const Category &cat : categories) {
-        QListWidgetItem *item = new QListWidgetItem(QIcon::fromTheme(cat.iconName), cat.name, m_categories);
+        QListWidgetItem *item = new QListWidgetItem(KisIconUtils::loadIcon(cat.iconName), cat.name, m_categories);
         item->setSizeHint(QSize(categoriesWidthPx, categoryRowHeightPx));
         m_categories->addItem(item);
 

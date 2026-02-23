@@ -60,6 +60,24 @@ uint qHash(QPointer<T> value) {
     return reinterpret_cast<quintptr>(value.data());
 }
 
+static bool touchPaintingEnabledForTouchInput()
+{
+    if (!KisConfig(true).disableTouchOnCanvas()) {
+        return true;
+    }
+
+    // Desktop touch routing: allow touch-first tools to receive 1-finger touch strokes even when
+    // touch painting is disabled globally (common in Pepper/Sway-style setups where 1-finger maps
+    // to navigation gestures by default).
+    if (KoToolManager *toolManager = KoToolManager::instance()) {
+        if (toolManager->activeToolId() == QLatin1String("KisToolSelectTouch")) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 KisInputManager::KisInputManager(QObject *parent)
     : QObject(parent), d(new Private(this))
 {
@@ -742,15 +760,25 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
             d->originatingTouchBeginEvent.reset(touchEvent->clone());
 #endif
 
-            // In the face of a touch and hold shortcut being present, we need
-            // to disambiguate whether this is a touch being held or the user
-            // is doing something else. For that purpose, we start buffering
-            // received touch events until we can actually make a decision.
+            // If touch painting is enabled, prefer Procreate-style behavior:
+            // 1-finger = tool stroke, 2-finger = navigation gestures.
+            //
+            // Touch-hold shortcuts (e.g. QuickMenu) should still work, but they
+            // must not delay tool strokes until the finger moves beyond
+            // TOUCH_SLOP_SQUARED. Therefore we only use the legacy "buffer the
+            // whole sequence" logic when touch painting is disabled.
+            const bool touchPaintingEnabled = touchPaintingEnabledForTouchInput();
+
             d->clearBufferedTouchEvents();
             if (d->matcher.hasTouchHoldShortcut() && touchEvent->touchPoints().length() == 1) {
-                d->bufferTouchEvent(touchEvent);
-                d->restartTouchHoldTimer();
-                retval = true;
+                if (touchPaintingEnabled) {
+                    d->restartTouchHoldTimer();
+                    retval = handleTouchBegin(touchEvent);
+                } else {
+                    d->bufferTouchEvent(touchEvent);
+                    d->restartTouchHoldTimer();
+                    retval = true;
+                }
             } else {
                 d->cancelTouchHoldTimer();
                 retval = handleTouchBegin(touchEvent);
@@ -801,7 +829,7 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         }
 #endif
         // if the event isn't handled, Qt starts to send MouseEvents
-        if (!KisConfig(true).disableTouchOnCanvas())
+        if (touchPaintingEnabledForTouchInput())
             retval = true;
 
         event->accept();
@@ -843,7 +871,7 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
             d->startingPos = {0, 0};
             d->previousPos = {0, 0};
             d->touchStrokeStarted = false; // stroke ended
-        } else if (!KisConfig(true).disableTouchOnCanvas() && !d->touchHasBlockedPressEvents
+        } else if (touchPaintingEnabledForTouchInput() && !d->touchHasBlockedPressEvents
                    && touchEvent->touchPoints().count() == 1) {
             // If no stroke has been started while touch painting is enabled,
             // the user tapped with one finger, but didn't make any motion that
@@ -857,7 +885,7 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         d->allowMouseEvents();
 
         // if the event isn't handled, Qt starts to send MouseEvents
-        if (!KisConfig(true).disableTouchOnCanvas())
+        if (touchPaintingEnabledForTouchInput())
             retval = true;
 
         event->accept();
@@ -894,6 +922,15 @@ bool KisInputManager::eventFilterImpl(QEvent * event)
         endTouch();
         d->allowMouseEvents();
         QTouchEvent *touchEvent = static_cast<QTouchEvent*>(event);
+
+        // Ensure we always end touch-paint strokes even when the touch
+        // sequence is cancelled, otherwise the tool can remain "pressed"
+        // and input appears stuck until a mouse click happens.
+        if (d->touchStrokeStarted) {
+            d->matcher.buttonReleased(Qt::LeftButton, touchEvent);
+            d->touchStrokeStarted = false;
+        }
+
         if (ignoreCancel) {
             d->matcher.touchEndEvent(touchEvent);
         } else {
@@ -952,7 +989,7 @@ bool KisInputManager::startTouch(bool &retval)
     Q_UNUSED(retval);
 
     // Touch rejection: if touch is disabled on canvas, no need to block mouse press events
-    if (KisConfig(true).disableTouchOnCanvas()) {
+    if (!touchPaintingEnabledForTouchInput()) {
         d->eatOneMousePress();
     }
 
@@ -967,6 +1004,17 @@ void KisInputManager::endTouch()
 bool KisInputManager::touchHoldBufferUpdate(QTouchEvent *touchEvent)
 {
     if (d->isPendingTouchHold()) {
+        // In touch painting mode, do not buffer updates behind the touch-hold
+        // timer. Buffering forces the user to move beyond TOUCH_SLOP_SQUARED
+        // before a stroke can begin, which makes 1-finger tools feel broken.
+        //
+        // We still keep the timer running so a true hold can trigger the hold
+        // shortcut, but movement will start a tool stroke and cancel the timer
+        // in handleTouchUpdate().
+        if (touchPaintingEnabledForTouchInput()) {
+            return false;
+        }
+
         if (touchEvent->touchPoints().length() == 1 && d->isWithinTouchHoldSlopRange(touchEvent->touchPoints().at(0).pos())) {
             d->bufferTouchEvent(touchEvent);
             return true;
@@ -986,29 +1034,73 @@ bool KisInputManager::handleTouchBegin(QTouchEvent *touchEvent)
 bool KisInputManager::handleTouchUpdate(QTouchEvent *touchEvent)
 {
     QPointF currentPos = touchEvent->touchPoints().at(0).pos();
-    if (d->touchStrokeStarted
-        || (!KisConfig(true).disableTouchOnCanvas() && !d->touchHasBlockedPressEvents
-            && touchEvent->touchPoints().count() == 1 && touchEvent->touchPointStates() != Qt::TouchPointStationary
-            && (qAbs(currentPos.x() - d->previousPos.x()) > 1 // stop wobbliness which Qt sends us
-                || qAbs(currentPos.y() - d->previousPos.y()) > 1))) {
+
+    /**
+     * If a touch-paint stroke is already in progress and the user adds another
+     * finger, terminate the tool stroke first and then let the gesture system
+     * take over (Procreate-style: 1-finger = tool, 2-finger = navigation).
+     *
+     * Without this, Krita can end up with a "stuck pressed button" state until
+     * a real mouse/stylus event arrives.
+     */
+    if (d->touchStrokeStarted && touchEvent->touchPoints().count() > 1) {
+        d->cancelTouchHoldTimer();
+        d->clearBufferedTouchEvents();
+        d->matcher.buttonReleased(Qt::LeftButton, touchEvent);
+        d->touchStrokeStarted = false;
+        d->startingPos = {0, 0};
         d->previousPos = currentPos;
-        if (!d->touchStrokeStarted) {
-            // we start it here not in TouchBegin, because Qt::TouchPointStationary doesn't work with hpdi devices.
-            bool retval = d->matcher.buttonPressed(Qt::LeftButton, d->originatingTouchBeginEvent.data());
-            d->touchStrokeStarted = retval;
-            return retval;
-        } else {
-            // if it is a full-fledged stroke, then ignore (currentPos.x - previousPos.x)
-            bool retval = compressMoveEventCommon(touchEvent);
-            d->blockMouseEvents();
-            return retval;
-        }
-    } else {
+
         KisAbstractInputAction::setInputManager(this);
-        bool retval = d->matcher.touchUpdateEvent(touchEvent);
+        const bool retval = d->matcher.touchUpdateEvent(touchEvent);
         d->touchHasBlockedPressEvents = retval;
         return retval;
     }
+
+    const bool touchPaintingEnabled = touchPaintingEnabledForTouchInput();
+
+    // When touch painting is enabled, the touch-hold timer should only apply
+    // to 1-finger interactions. If the user begins a multi-touch gesture,
+    // cancel the timer immediately so a stray timeout can't trigger.
+    if (touchPaintingEnabled && touchEvent->touchPoints().count() > 1) {
+        d->cancelTouchHoldTimer();
+        d->clearBufferedTouchEvents();
+    }
+
+    // Touch painting: never route 1-finger drags through the gesture matcher.
+    // This avoids one-finger pan/zoom shortcuts blocking tool strokes.
+    if (touchPaintingEnabled && touchEvent->touchPoints().count() == 1) {
+        const QPointF delta = currentPos - d->previousPos;
+        const bool movedEnoughForStroke = (qAbs(delta.x()) > 1 || qAbs(delta.y()) > 1);
+
+        if (d->touchStrokeStarted || movedEnoughForStroke) {
+            d->previousPos = currentPos;
+            if (!d->touchStrokeStarted) {
+                d->cancelTouchHoldTimer();
+                d->clearBufferedTouchEvents();
+                // We start it here (not in TouchBegin), because some devices
+                // misreport touch point state as stationary while still
+                // changing position.
+                const bool retval = d->matcher.buttonPressed(Qt::LeftButton, d->originatingTouchBeginEvent.data());
+                d->touchStrokeStarted = retval;
+                d->touchHasBlockedPressEvents = false;
+                return retval;
+            } else {
+                // If it is a full-fledged stroke, then ignore (currentPos.x - previousPos.x).
+                const bool retval = compressMoveEventCommon(touchEvent);
+                d->blockMouseEvents();
+                return retval;
+            }
+        }
+
+        // No meaningful motion yet: keep waiting (touch-hold might trigger).
+        return true;
+    }
+
+    KisAbstractInputAction::setInputManager(this);
+    const bool retval = d->matcher.touchUpdateEvent(touchEvent);
+    d->touchHasBlockedPressEvents = retval;
+    return retval;
 }
 
 void KisInputManager::slotCompressedMoveEvent()

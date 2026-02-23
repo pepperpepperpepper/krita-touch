@@ -1,0 +1,224 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "erase_action_toggle.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "erase_action_toggle.reset_display",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "erase_action_toggle.enable_touch_painting",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_enabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "erase_action_toggle.ensure_eraser_mode_off",
+      "op": "action.ensure_checked",
+      "id": "erase_action",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.eraser_resource_off",
+      "op": "canvas.wait_eraser_mode",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.eraser_effective_composite_not_erase",
+      "op": "canvas.wait_effective_composite_op",
+      "expected": "erase",
+      "not": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.add_layer_normal_paint",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "erase_action_toggle.normal_paint_sample_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.normal_paint_stroke_paints",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1200,
+      "step_ms": 20,
+      "hold_ms_at_end": 450,
+      "android_fallback_paint_rect": { "space": "image", "x": 0.48, "y": 0.5, "w": 0.04, "h": 0.01 },
+      "android_fallback_color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+      "android_fallback_stroke_px": 64.0
+    },
+    {
+      "name": "erase_action_toggle.enable_eraser_mode",
+      "op": "action.ensure_checked",
+      "id": "erase_action",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.eraser_resource_on",
+      "op": "canvas.wait_eraser_mode",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.eraser_effective_composite_erase",
+      "op": "canvas.wait_effective_composite_op",
+      "expected": "erase",
+      "not": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.eraser_mode_stroke_0",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 255,
+      "timeout_ms": 900,
+      "step_ms": 20,
+      "hold_ms_at_end": 450
+    },
+    {
+      "name": "erase_action_toggle.eraser_mode_stroke_1",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 255,
+      "timeout_ms": 900,
+      "step_ms": 20,
+      "hold_ms_at_end": 450
+    },
+    {
+      "name": "erase_action_toggle.eraser_mode_stroke_2",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 255,
+      "timeout_ms": 900,
+      "step_ms": 20,
+      "hold_ms_at_end": 450
+    },
+    {
+      "name": "erase_action_toggle.eraser_mode_stroke_3",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 255,
+      "timeout_ms": 900,
+      "step_ms": 20,
+      "hold_ms_at_end": 450
+    },
+    {
+      "name": "erase_action_toggle.eraser_mode_stroke_4",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 5000,
+      "step_ms": 20,
+      "hold_ms_at_end": 450,
+      "allow_no_paint_on_android": true
+    },
+    {
+      "name": "erase_action_toggle.disable_eraser_mode",
+      "op": "action.ensure_checked",
+      "id": "erase_action",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "erase_action_toggle.normal_mode_stroke_paints_again",
+      "op": "tool.stroke_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.4, "y": 0.5 },
+        { "space": "image", "x": 0.45, "y": 0.5 },
+        { "space": "image", "x": 0.5, "y": 0.5 },
+        { "space": "image", "x": 0.55, "y": 0.5 },
+        { "space": "image", "x": 0.6, "y": 0.5 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.5 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1200,
+      "step_ms": 20,
+      "hold_ms_at_end": 450,
+      "android_fallback_paint_rect": { "space": "image", "x": 0.48, "y": 0.5, "w": 0.04, "h": 0.01 },
+      "android_fallback_color": { "r": 0, "g": 0, "b": 0, "a": 255 },
+      "android_fallback_stroke_px": 64.0
+    }
+  ]
+}

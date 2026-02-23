@@ -42,7 +42,7 @@ inline const QHash<QString, IconSpec> &quickMenuIconSpecs()
         {QStringLiteral("edit_undo"), {QStringLiteral("edit-undo"), 0.82}},
         {QStringLiteral("edit_redo"), {QStringLiteral("edit-redo"), 0.82}},
         {QStringLiteral("deselect"), {QStringLiteral("select-clear"), 0.82}},
-        {QStringLiteral("KisToolSelectTouch"), {QStringLiteral("tool_outline_selection"), 0.80}},
+        {QStringLiteral("KisToolSelectTouch"), {QStringLiteral("tool_touch_selection"), 0.82}},
         {QStringLiteral("KisToolTransform"), {QStringLiteral("krita_tool_transform"), 0.78}},
         // Global action currently uses a generic document icon; QuickMenu needs a
         // "canvas only" specific glyph without affecting the rest of the UI.

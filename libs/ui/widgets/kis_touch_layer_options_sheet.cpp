@@ -25,6 +25,7 @@
 #include <klocalizedstring.h>
 #include <kis_node.h>
 #include <kis_node_manager.h>
+#include <kis_icon_utils.h>
 #include <kis_slider_spin_box.h>
 
 #include "kis_touch_ui_metrics.h"
@@ -76,6 +77,22 @@ KisTouchLayerOptionsSheet::KisTouchLayerOptionsSheet(KisKActionCollection *actio
     const int toolButtonRadius = KisTouchUiMetrics::px(12.0, scale);
     const int toolButtonPadding = KisTouchUiMetrics::px(8.0, scale);
 
+#ifdef Q_OS_ANDROID
+    constexpr int toolButtonBgAlpha = 95;
+    constexpr int toolButtonBorderAlpha = 150;
+    constexpr int toolButtonPressedBgAlpha = 125;
+    constexpr int toolButtonCheckedBgAlpha = 160;
+    constexpr int toolButtonCheckedBorderAlpha = 230;
+    constexpr int toolButtonCheckedPressedBgAlpha = 200;
+#else
+    constexpr int toolButtonBgAlpha = 60;
+    constexpr int toolButtonBorderAlpha = 90;
+    constexpr int toolButtonPressedBgAlpha = 80;
+    constexpr int toolButtonCheckedBgAlpha = 110;
+    constexpr int toolButtonCheckedBorderAlpha = 200;
+    constexpr int toolButtonCheckedPressedBgAlpha = 150;
+#endif
+
     setWindowFlags(Qt::Popup | Qt::FramelessWindowHint);
     setAttribute(Qt::WA_TranslucentBackground, true);
     setObjectName(QStringLiteral("kisTouchLayerOptionsSheet"));
@@ -90,23 +107,29 @@ KisTouchLayerOptionsSheet::KisTouchLayerOptionsSheet(KisKActionCollection *actio
         "}"
         "QToolButton {"
         "  color: rgb(240, 240, 240);"
-        "  background: rgba(255, 255, 255, 60);"
-        "  border: 1px solid rgba(255, 255, 255, 90);"
+        "  background: rgba(255, 255, 255, %3);"
+        "  border: 1px solid rgba(255, 255, 255, %4);"
         "  border-radius: %1px;"
         "  padding: %2px;"
         "}"
         "QToolButton:pressed {"
-        "  background-color: rgba(255, 255, 255, 80);"
+        "  background-color: rgba(255, 255, 255, %5);"
         "}"
         "QToolButton:checked {"
-        "  background-color: rgba(90, 160, 255, 110);"
-        "  border-color: rgba(90, 160, 255, 200);"
+        "  background-color: rgba(90, 160, 255, %6);"
+        "  border-color: rgba(90, 160, 255, %7);"
         "}"
         "QToolButton:checked:pressed {"
-        "  background-color: rgba(90, 160, 255, 150);"
+        "  background-color: rgba(90, 160, 255, %8);"
         "}")
                       .arg(toolButtonRadius)
-                      .arg(toolButtonPadding));
+                      .arg(toolButtonPadding)
+                      .arg(toolButtonBgAlpha)
+                      .arg(toolButtonBorderAlpha)
+                      .arg(toolButtonPressedBgAlpha)
+                      .arg(toolButtonCheckedBgAlpha)
+                      .arg(toolButtonCheckedBorderAlpha)
+                      .arg(toolButtonCheckedPressedBgAlpha));
 
     rebuildUi();
 }
@@ -360,7 +383,10 @@ QToolButton *KisTouchLayerOptionsSheet::buildActionButton(QWidget *parent,
     QAction *action = m_actionCollection ? m_actionCollection->action(actionId) : nullptr;
     if (action) {
         const QString label = labelOverride.isEmpty() ? stripAmpersands(action->text()) : labelOverride;
-        const QIcon icon = !action->icon().isNull() ? action->icon() : QIcon::fromTheme(fallbackIconName);
+        QIcon icon = action->icon();
+        if (icon.isNull() && !fallbackIconName.isEmpty()) {
+            icon = KisIconUtils::loadIcon(fallbackIconName);
+        }
 
         button->setIcon(icon);
         button->setText(label);
@@ -373,7 +399,7 @@ QToolButton *KisTouchLayerOptionsSheet::buildActionButton(QWidget *parent,
 
         connect(button, &QToolButton::clicked, this, [this, actionId]() { triggerAndClose(actionId); });
     } else {
-        button->setIcon(QIcon::fromTheme(fallbackIconName));
+        button->setIcon(KisIconUtils::loadIcon(fallbackIconName));
         button->setText(labelOverride.isEmpty() ? i18n("…") : labelOverride);
         button->setToolTip(i18n("Missing action: %1", actionId));
         button->setEnabled(false);

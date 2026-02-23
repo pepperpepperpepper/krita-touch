@@ -545,11 +545,17 @@ void KisWelcomePageWidget::applyTouchResponsiveLayout()
         openFileShortcut->setVisible(false);
     }
 
-    const int startIconPx = KisTouchUiMetrics::px(56.0, scale, 32, 64);
+    // Start screen actions ("New Image", "Open Image") can overflow on narrow phone-like widths.
+    // On phones, switch to text-under-icon to reduce required horizontal space.
+    const Qt::ToolButtonStyle startButtonStyle =
+        phoneLike ? Qt::ToolButtonTextUnderIcon : Qt::ToolButtonTextBesideIcon;
+    const int startIconPx = KisTouchUiMetrics::px(56.0, scale, 24, 64);
     if (newFileLink) {
+        newFileLink->setToolButtonStyle(startButtonStyle);
         newFileLink->setIconSize(QSize(startIconPx, startIconPx));
     }
     if (openFileLink) {
+        openFileLink->setToolButtonStyle(startButtonStyle);
         openFileLink->setIconSize(QSize(startIconPx, startIconPx));
     }
 
