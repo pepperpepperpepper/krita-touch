@@ -82,6 +82,7 @@
 #include <KoDockWidgetTitleBar.h>
 #include <kis_utility_title_bar.h>
 #include <kis_touch_actions_sheet.h>
+#include <kis_touch_color_picker_button.h>
 #include <kis_touch_quickmenu_config_sheet.h>
 #include <kis_touch_layer_options_sheet.h>
 #include <kis_touch_copypaste_overlay.h>
@@ -659,6 +660,7 @@ public:
     QPointer<KisTouchCopyPasteOverlay> touchCopyPasteOverlay;
     QPointer<KisTouchLayerOptionsSheet> touchLayerOptionsSheet;
     QToolBar *touchTopBar {nullptr};
+    QPointer<KisTouchColorPickerButton> touchColorPickerButton;
 
     KisActionManager * actionManager() {
         return viewManager->actionManager();
@@ -3595,13 +3597,31 @@ void KisMainWindow::applyTouchMode(bool enabled)
                 }
             }
             if (QDockWidget *colorDock = dockWidget(QStringLiteral("ColorSelectorNg"))) {
-                QAction *action = colorDock->toggleViewAction();
-                if (action && action->icon().isNull()) {
-                    action->setIcon(KisIconUtils::loadIcon("extended_color_selector"));
-                }
-                if (action) {
-                    d->touchTopBar->addAction(action);
-                }
+                auto *colorButton = new KisTouchColorPickerButton(d->touchTopBar);
+                colorButton->setColorDock(colorDock);
+                d->touchColorPickerButton = colorButton;
+
+                auto updateColorButtonResources = [this, colorButton]() {
+                    if (!d->viewManager) {
+                        return;
+                    }
+                    KisCanvasResourceProvider *provider = d->viewManager->canvasResourceProvider();
+                    KoCanvasResourceProvider *rm = provider ? provider->resourceManager() : nullptr;
+                    colorButton->setResourceManager(rm);
+                };
+
+                updateColorButtonResources();
+                connect(this, &KisMainWindow::activeViewChanged, colorButton, updateColorButtonResources);
+                connect(d->touchTopBar, &QToolBar::iconSizeChanged, colorButton, [colorButton](const QSize &sz) {
+                    colorButton->setIconSize(sz);
+                    colorButton->refreshIcon();
+                });
+                colorButton->setIconSize(d->touchTopBar->iconSize());
+                colorButton->refreshIcon();
+
+                auto *colorAction = new QWidgetAction(d->touchTopBar);
+                colorAction->setDefaultWidget(colorButton);
+                d->touchTopBar->addAction(colorAction);
             }
         }
 

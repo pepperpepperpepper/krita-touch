@@ -287,6 +287,7 @@ set(kritaui_LIB_SRCS
     widgets/kis_floating_message.cpp
     widgets/kis_touch_copypaste_overlay.cpp
     widgets/kis_touch_actions_sheet.cpp
+    widgets/kis_touch_color_picker_button.cpp
     widgets/kis_touch_layer_options_sheet.cpp
     widgets/kis_touch_quickmenu_config_sheet.cpp
     widgets/kis_touch_quickmenu_overlay.cpp

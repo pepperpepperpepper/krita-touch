@@ -1667,6 +1667,47 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         ok &= visibleTopBar;
 
         if (touchTopBar) {
+            // Touch Mode should expose a Procreate-like color disk button in the top bar.
+            QToolButton *colorButton = mainWindow->findChild<QToolButton *>(QStringLiteral("touchColorPickerButton"));
+            const bool colorButtonFound = colorButton != nullptr;
+            report.step(QStringLiteral("top_bar.color_picker_button_found"), colorButtonFound);
+            ok &= colorButtonFound;
+
+            if (colorButton) {
+                const bool iconOk = !colorButton->icon().isNull();
+                report.step(QStringLiteral("top_bar.color_picker_button_icon"), iconOk);
+                ok &= iconOk;
+
+                QColor expectedFg;
+                if (mainWindow->viewManager() && mainWindow->viewManager()->canvasResourceProvider()) {
+                    expectedFg = mainWindow->viewManager()->canvasResourceProvider()->fgColor().toQColor();
+                }
+
+                const QString actualRgba = colorButton->property("touchColorRgba").toString();
+                const QString expectedRgba = expectedFg.isValid()
+                    ? QStringLiteral("#%1%2%3%4")
+                          .arg(expectedFg.red(), 2, 16, QLatin1Char('0'))
+                          .arg(expectedFg.green(), 2, 16, QLatin1Char('0'))
+                          .arg(expectedFg.blue(), 2, 16, QLatin1Char('0'))
+                          .arg(expectedFg.alpha(), 2, 16, QLatin1Char('0'))
+                    : QString();
+
+                const bool rgbaOk = expectedFg.isValid()
+                    ? (!actualRgba.isEmpty() && actualRgba.compare(expectedRgba, Qt::CaseInsensitive) == 0)
+                    : true;
+                {
+                    QJsonObject details;
+                    if (!expectedRgba.isEmpty()) {
+                        details.insert(QStringLiteral("expected_rgba"), expectedRgba);
+                    }
+                    if (!actualRgba.isEmpty()) {
+                        details.insert(QStringLiteral("actual_rgba"), actualRgba);
+                    }
+                    report.step(QStringLiteral("top_bar.color_picker_button_matches_fg"), rgbaOk, details);
+                }
+                ok &= rgbaOk;
+            }
+
             // Ensure the top bar fits within the main window (no horizontal overflow).
             const QRect barGeom = touchTopBar->geometry(); // parent == main window
             const QRect winRect = mainWindow->rect();
