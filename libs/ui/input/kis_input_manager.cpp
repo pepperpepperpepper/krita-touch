@@ -1070,8 +1070,17 @@ bool KisInputManager::handleTouchUpdate(QTouchEvent *touchEvent)
     // Touch painting: never route 1-finger drags through the gesture matcher.
     // This avoids one-finger pan/zoom shortcuts blocking tool strokes.
     if (touchPaintingEnabled && touchEvent->touchPoints().count() == 1) {
-        const QPointF delta = currentPos - d->previousPos;
-        const bool movedEnoughForStroke = (qAbs(delta.x()) > 1 || qAbs(delta.y()) > 1);
+        // When touch-hold shortcuts exist (e.g. brush "hold to sample"),
+        // users expect a stationary hold to trigger the shortcut without
+        // accidentally starting a paint stroke. Some touch devices report
+        // minor jitter even while the finger is held in place, so use a small
+        // slop threshold instead of reacting to 1px motion.
+        constexpr qreal kTouchPaintingStrokeStartDistanceSquared =
+            KisShortcutMatcher::TOUCH_SLOP_SQUARED / 4.0; // 8px
+        const QPointF deltaFromStart = currentPos - d->startingPos;
+        const qreal deltaFromStartSquared =
+            (deltaFromStart.x() * deltaFromStart.x()) + (deltaFromStart.y() * deltaFromStart.y());
+        const bool movedEnoughForStroke = deltaFromStartSquared > kTouchPaintingStrokeStartDistanceSquared;
 
         if (d->touchStrokeStarted || movedEnoughForStroke) {
             d->previousPos = currentPos;

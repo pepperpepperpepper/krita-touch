@@ -3009,16 +3009,25 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                 resourceManager->resource(KoCanvasResource::ForegroundColor).value<KoColor>().toQColor();
 
             const QPointF wStart = imgToWidget(imgPos);
-            const QPointF wUpdate = wStart + QPointF(1.0, 0.0); // stay under the stroke threshold
+            // Simulate small finger drift while holding (common on touch devices).
+            // This should not start a brush stroke, and the touch-hold shortcut
+            // should still trigger.
+            const QPointF wJitter = wStart + QPointF(4.0, 0.0);
+            const QPointF wUpdate = wJitter + QPointF(1.0, 0.0);
 
             sendTouchPoint(QEvent::TouchBegin, Qt::TouchPointPressed, wStart, wStart, wStart, 1.0);
 
+            // Nudge slightly before the hold delay expires to ensure minor motion doesn't
+            // cancel the hold shortcut and start a brush stroke.
+            waitForUiCondition(200, [&]() { return false; });
+            sendTouchPoint(QEvent::TouchUpdate, Qt::TouchPointMoved, wJitter, wStart, wStart, 1.0);
+
             // Give the touch-hold gesture time to trigger (see TOUCH_HOLD_DELAY_MS in KisInputManager).
-            waitForUiCondition(650, [&]() { return false; });
+            waitForUiCondition(550, [&]() { return false; });
 
             // Some tools apply sampling on move rather than initial press. Nudge within slop (and under stroke start
             // threshold) to help ensure the sample is applied without starting a brush stroke.
-            sendTouchPoint(QEvent::TouchUpdate, Qt::TouchPointMoved, wUpdate, wStart, wStart, 1.0);
+            sendTouchPoint(QEvent::TouchUpdate, Qt::TouchPointMoved, wUpdate, wJitter, wStart, 1.0);
 
             QColor fgLocalAfter;
             const bool fgUpdated = waitForUiCondition(1400, [&]() {
