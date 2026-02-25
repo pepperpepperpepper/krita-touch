@@ -261,6 +261,43 @@ bool actionEnsureChecked(KisMainWindow *mainWindow, const QString &actionId, boo
     return ok;
 }
 
+bool actionWaitChecked(KisMainWindow *mainWindow, const QString &actionId, bool expectedChecked, int timeoutMs, QJsonObject *details, QString *errorOut)
+{
+    if (!mainWindow || !mainWindow->actionCollection()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing action collection");
+        }
+        return false;
+    }
+
+    QAction *action = mainWindow->actionCollection()->action(actionId);
+    if (!action) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Action not found: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    bool actual = action->isChecked();
+    const bool ok = waitForUiCondition(timeoutMs, [&]() {
+        actual = action->isChecked();
+        return actual == expectedChecked;
+    });
+
+    if (details) {
+        details->insert(QStringLiteral("action_id"), actionId);
+        details->insert(QStringLiteral("expected_checked"), expectedChecked);
+        details->insert(QStringLiteral("actual_checked"), actual);
+        details->insert(QStringLiteral("timeout_ms"), timeoutMs);
+    }
+
+    if (!ok && errorOut) {
+        *errorOut = QStringLiteral("Timed out waiting for action '%1' checked=%2").arg(actionId).arg(expectedChecked);
+    }
+
+    return ok;
+}
+
 static bool getCanvasResourceProvider(KisMainWindow *mainWindow, KisCanvasResourceProvider **providerOut, QString *errorOut)
 {
     if (!mainWindow || !mainWindow->viewManager()) {

@@ -3574,10 +3574,12 @@ void KisMainWindow::applyTouchMode(bool enabled)
             d->touchTopBar->setToolButtonStyle(Qt::ToolButtonIconOnly);
             addToolBar(Qt::TopToolBarArea, d->touchTopBar);
 
-            auto addActionIfPresent = [&](const QString &actionId) {
+            auto addActionIfPresent = [&](const QString &actionId) -> QAction * {
                 if (QAction *action = actionCollection()->action(actionId)) {
                     d->touchTopBar->addAction(action);
+                    return action;
                 }
+                return nullptr;
             };
 
             auto addActionWithFallbackIcon = [&](const QString &actionId, const QString &fallbackIconName) {
@@ -3627,8 +3629,23 @@ void KisMainWindow::applyTouchMode(bool enabled)
             spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
             d->touchTopBar->addWidget(spacer);
 
-            addActionIfPresent(QStringLiteral("KritaShape/KisToolBrush"));
+            QAction *brushToolAction = addActionIfPresent(QStringLiteral("KritaShape/KisToolBrush"));
             addActionIfPresent(QStringLiteral("eraser_preset_action"));
+            if (brushToolAction && !brushToolAction->property("touch_brush_clears_eraser_preset_installed").toBool()) {
+                brushToolAction->setProperty("touch_brush_clears_eraser_preset_installed", true);
+                connect(brushToolAction, &QAction::triggered, this, [this]() {
+                    if (!d->touchModeActive) {
+                        return;
+                    }
+                    if (!actionCollection()) {
+                        return;
+                    }
+                    QAction *eraserPresetAction = actionCollection()->action(QStringLiteral("eraser_preset_action"));
+                    if (eraserPresetAction && eraserPresetAction->isChecked()) {
+                        eraserPresetAction->trigger();
+                    }
+                });
+            }
             if (QDockWidget *layersDock = dockWidget(QStringLiteral("KisLayerBox"))) {
                 QAction *action = layersDock->toggleViewAction();
                 if (action && action->icon().isNull()) {

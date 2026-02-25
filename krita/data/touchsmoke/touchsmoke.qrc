@@ -4,6 +4,7 @@
         <file>scripts/clipboard-overlay-gating.json</file>
         <file>scripts/clear-layer-scrub-gating.json</file>
         <file>scripts/erase-action-toggle.json</file>
+        <file>scripts/eraser-preset-switch.json</file>
         <file>scripts/quick-pinch-fit-gating.json</file>
         <file>scripts/quickshape-gating.json</file>
         <file>scripts/quickmenu-hold-gating.json</file>

@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "eraser_preset_switch.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "eraser_preset_switch.reset_display",
+      "op": "action.trigger",
+      "id": "reset_display"
+    },
+    {
+      "name": "eraser_preset_switch.enable_touch_painting",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_enabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "eraser_preset_switch.ensure_eraser_preset_off",
+      "op": "action.ensure_checked",
+      "id": "eraser_preset_action",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.composite_not_erase_before",
+      "op": "canvas.wait_effective_composite_op",
+      "expected": "erase",
+      "not": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.enable_eraser_preset",
+      "op": "action.ensure_checked",
+      "id": "eraser_preset_action",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.composite_erase_when_enabled",
+      "op": "canvas.wait_effective_composite_op",
+      "expected": "erase",
+      "not": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.switch_back_via_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "eraser_preset_switch.eraser_preset_cleared",
+      "op": "action.wait_checked",
+      "id": "eraser_preset_action",
+      "expected": false,
+      "timeout_ms": 900
+    },
+    {
+      "name": "eraser_preset_switch.composite_not_erase_after",
+      "op": "canvas.wait_effective_composite_op",
+      "expected": "erase",
+      "not": true,
+      "timeout_ms": 900
+    }
+  ]
+}
+

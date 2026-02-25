@@ -125,6 +125,7 @@ bool sleepWithImageEvents(KisImageWSP image, int ms)
 namespace {
 
 using KisTouchSmokeScriptRunnerDetail::actionEnsureChecked;
+using KisTouchSmokeScriptRunnerDetail::actionWaitChecked;
 using KisTouchSmokeScriptRunnerDetail::actionTriggerWaitLayerCountDelta;
 using KisTouchSmokeScriptRunnerDetail::waitCanvasEraserMode;
 using KisTouchSmokeScriptRunnerDetail::waitCanvasEffectiveCompositeOp;
@@ -520,6 +521,11 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const bool expected = step.value(QStringLiteral("expected")).toBool(false);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
             ok = actionEnsureChecked(mainWindow, actionId, expected, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("action.wait_checked")) {
+            const QString actionId = step.value(QStringLiteral("id")).toString();
+            const bool expected = step.value(QStringLiteral("expected")).toBool(false);
+            const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
+            ok = actionWaitChecked(mainWindow, actionId, expected, timeoutMs, &details, &localError);
         } else if (op == QStringLiteral("action.reset_trigger_count")) {
             const QString actionId = step.value(QStringLiteral("id")).toString();
             ok = actionTriggerCounter.reset(actionId, &details, &localError);

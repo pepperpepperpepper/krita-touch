@@ -57,6 +57,7 @@ bool waitOverlayVisible(KisMainWindow *mainWindow,
 int touchShortcutFromString(const QString &shortcutName);
 
 bool actionEnsureChecked(KisMainWindow *mainWindow, const QString &actionId, bool expectedChecked, int timeoutMs, QJsonObject *details, QString *errorOut);
+bool actionWaitChecked(KisMainWindow *mainWindow, const QString &actionId, bool expectedChecked, int timeoutMs, QJsonObject *details, QString *errorOut);
 
 bool actionTriggerWaitLayerCountDelta(KisMainWindow *mainWindow,
                                       const QString &actionId,
