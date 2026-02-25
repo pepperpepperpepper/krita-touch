@@ -475,6 +475,9 @@ void KisTouchColorPickerButton::ensureColorDropOverlay()
     overlay->setObjectName(QStringLiteral("touchColorDropOverlay"));
     overlay->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     overlay->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    overlay->setAttribute(Qt::WA_TranslucentBackground, true);
+    overlay->setAutoFillBackground(false);
+    overlay->setStyleSheet(QStringLiteral("background: transparent;"));
     overlay->setAlignment(Qt::AlignCenter);
     overlay->setFixedSize(kColorDropOverlaySizePx, kColorDropOverlaySizePx);
 

@@ -1706,6 +1706,91 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
                     report.step(QStringLiteral("top_bar.color_picker_button_matches_fg"), rgbaOk, details);
                 }
                 ok &= rgbaOk;
+
+                // Regression guard: repeated foreground color changes should repaint the disk cleanly
+                // (no "ghost" rectangles left behind in the top bar area).
+                bool diskUpdateOk = true;
+                bool diskUpdateAttempted = false;
+                QJsonObject diskUpdateDetails;
+
+                KisImageWSP image = mainWindow->viewManager() ? mainWindow->viewManager()->image() : KisImageWSP();
+                KoCanvasResourceProvider *resourceManager =
+                    mainWindow->viewManager() && mainWindow->viewManager()->canvasResourceProvider()
+                        ? mainWindow->viewManager()->canvasResourceProvider()->resourceManager()
+                        : nullptr;
+
+                const bool canChangeColor = resourceManager && image && image->colorSpace();
+                diskUpdateDetails.insert(QStringLiteral("can_change_color"), canChangeColor);
+
+                if (canChangeColor) {
+                    diskUpdateAttempted = true;
+
+                    const QVector<QColor> testColors{
+                        QColor(0xff, 0x00, 0x00),
+                        QColor(0x00, 0xff, 0x00),
+                        QColor(0x00, 0x66, 0xff),
+                    };
+
+                    QJsonArray steps;
+                    for (const QColor &testColor : testColors) {
+                        resourceManager->setResource(KoCanvasResource::ForegroundColor, KoColor(testColor, image->colorSpace()));
+                        QApplication::processEvents();
+
+                        const QString expectedDiskRgba = rgbaToHexForTouchSmoke(testColor);
+                        const bool propUpdated = waitForUiCondition(1500, [&]() {
+                            const QString actual = colorButton->property("touchColorRgba").toString();
+                            return !actual.isEmpty() && actual.compare(expectedDiskRgba, Qt::CaseInsensitive) == 0;
+                        });
+
+                        const TouchSmokeWidgetGrab grab = grabWidgetForTouchSmoke(touchTopBar);
+                        const QColor bg = sampleGrabColorForTouchSmoke(grab, QPoint(1, 1));
+                        const QPoint buttonCenter = colorButton->mapTo(touchTopBar, colorButton->rect().center());
+                        const QColor centerColor = sampleGrabColorForTouchSmoke(grab, buttonCenter);
+
+                        const QPoint topMid = colorButton->mapTo(touchTopBar, QPoint(colorButton->width() / 2, 2));
+                        const QPoint bottomMid =
+                            colorButton->mapTo(touchTopBar, QPoint(colorButton->width() / 2, qMax(0, colorButton->height() - 3)));
+                        const QPoint leftMid = colorButton->mapTo(touchTopBar, QPoint(2, colorButton->height() / 2));
+                        const QPoint rightMid =
+                            colorButton->mapTo(touchTopBar, QPoint(qMax(0, colorButton->width() - 3), colorButton->height() / 2));
+
+                        const QColor topMidColor = sampleGrabColorForTouchSmoke(grab, topMid);
+                        const QColor bottomMidColor = sampleGrabColorForTouchSmoke(grab, bottomMid);
+                        const QColor leftMidColor = sampleGrabColorForTouchSmoke(grab, leftMid);
+                        const QColor rightMidColor = sampleGrabColorForTouchSmoke(grab, rightMid);
+
+                        const bool centerOk = colorsEqualForTouchSmoke(centerColor, testColor, 10);
+                        const bool bgOk = bg.isValid();
+                        const bool edgesOk = bgOk
+                            && colorsEqualForTouchSmoke(topMidColor, bg, 18)
+                            && colorsEqualForTouchSmoke(bottomMidColor, bg, 18)
+                            && colorsEqualForTouchSmoke(leftMidColor, bg, 18)
+                            && colorsEqualForTouchSmoke(rightMidColor, bg, 18);
+
+                        QJsonObject stepDetails;
+                        stepDetails.insert(QStringLiteral("expected_disk_rgba"), expectedDiskRgba);
+                        stepDetails.insert(QStringLiteral("property_updated"), propUpdated);
+                        stepDetails.insert(QStringLiteral("toolbar_bg_rgba"), rgbaToHexForTouchSmoke(bg));
+                        stepDetails.insert(QStringLiteral("center_rgba"), rgbaToHexForTouchSmoke(centerColor));
+                        stepDetails.insert(QStringLiteral("center_ok"), centerOk);
+                        stepDetails.insert(QStringLiteral("edges_ok"), edgesOk);
+                        stepDetails.insert(QStringLiteral("top_mid_rgba"), rgbaToHexForTouchSmoke(topMidColor));
+                        stepDetails.insert(QStringLiteral("bottom_mid_rgba"), rgbaToHexForTouchSmoke(bottomMidColor));
+                        stepDetails.insert(QStringLiteral("left_mid_rgba"), rgbaToHexForTouchSmoke(leftMidColor));
+                        stepDetails.insert(QStringLiteral("right_mid_rgba"), rgbaToHexForTouchSmoke(rightMidColor));
+                        steps.append(stepDetails);
+
+                        diskUpdateOk = diskUpdateOk && propUpdated && centerOk && edgesOk;
+                    }
+
+                    diskUpdateDetails.insert(QStringLiteral("steps"), steps);
+                }
+
+                const bool diskStepOk = !diskUpdateAttempted ? true : diskUpdateOk;
+                report.step(QStringLiteral("top_bar.color_disk_updates_cleanly"), diskStepOk, diskUpdateDetails);
+#ifndef Q_OS_ANDROID
+                ok &= diskStepOk;
+#endif
             }
 
             // Ensure the top bar fits within the main window (no horizontal overflow).
