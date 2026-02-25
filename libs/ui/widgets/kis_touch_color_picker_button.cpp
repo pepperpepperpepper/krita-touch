@@ -14,18 +14,21 @@
 #include <klocalizedstring.h>
 
 #include <QApplication>
-#include <QDrag>
+#include <QDropEvent>
 #include <QDockWidget>
+#include <QLabel>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QTouchEvent>
 
 namespace {
 
 constexpr int kLongPressDelayMs = 400;
 constexpr int kTouchSlopSquared = 16 * 16;
+constexpr int kColorDropOverlaySizePx = 44;
 
 QString rgbaString(const QColor &c)
 {
@@ -98,6 +101,7 @@ KisTouchColorPickerButton::KisTouchColorPickerButton(QWidget *parent)
     setToolButtonStyle(Qt::ToolButtonIconOnly);
     setFocusPolicy(Qt::NoFocus);
     setCheckable(false);
+    setAttribute(Qt::WA_AcceptTouchEvents, true);
 
     setObjectName(QStringLiteral("touchColorPickerButton"));
     setToolTip(i18n("Color"));
@@ -157,12 +161,106 @@ void KisTouchColorPickerButton::refreshIcon()
     updateDiskIcon();
 }
 
+bool KisTouchColorPickerButton::event(QEvent *event)
+{
+    switch (event->type()) {
+    case QEvent::TouchBegin: {
+        QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
+        if (touchEvent->touchPoints().isEmpty()) {
+            event->accept();
+            return true;
+        }
+
+        const QTouchEvent::TouchPoint &pt = touchEvent->touchPoints().first();
+        m_pressPos = pt.pos().toPoint();
+        m_lastGlobalPos = pt.screenPos().toPoint();
+        m_pressActive = true;
+        m_longPressActive = false;
+        m_colorDropActive = false;
+        m_suppressClick = false;
+        m_longPressTimer.start();
+        setDown(true);
+        event->accept();
+        return true;
+    }
+    case QEvent::TouchUpdate: {
+        QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
+        if (!m_pressActive || touchEvent->touchPoints().isEmpty()) {
+            event->accept();
+            return true;
+        }
+
+        const QTouchEvent::TouchPoint &pt = touchEvent->touchPoints().first();
+        const QPoint localPos = pt.pos().toPoint();
+        const QPoint globalPos = pt.screenPos().toPoint();
+        m_lastGlobalPos = globalPos;
+
+        const QPoint delta = localPos - m_pressPos;
+        const int deltaSquared = delta.x() * delta.x() + delta.y() * delta.y();
+        if (!m_longPressActive && m_longPressTimer.isActive() && deltaSquared > kTouchSlopSquared) {
+            m_longPressTimer.stop();
+        }
+
+        if (m_colorDropActive) {
+            updateColorDropDrag(globalPos);
+        }
+
+        event->accept();
+        return true;
+    }
+    case QEvent::TouchEnd: {
+        QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
+        const QPoint globalPos =
+            (!touchEvent->touchPoints().isEmpty()) ? touchEvent->touchPoints().first().screenPos().toPoint() : m_lastGlobalPos;
+        m_lastGlobalPos = globalPos;
+
+        m_longPressTimer.stop();
+
+        if (m_colorDropActive) {
+            endColorDropDrag(globalPos, false);
+            m_pressActive = false;
+            setDown(false);
+            event->accept();
+            return true;
+        }
+
+        const bool longPressed = m_longPressActive;
+        m_pressActive = false;
+        m_longPressActive = false;
+        setDown(false);
+
+        // Procreate-style: long press is for ColorDrop, not for toggling the panel.
+        if (!longPressed) {
+            slotClicked();
+        }
+
+        event->accept();
+        return true;
+    }
+    case QEvent::TouchCancel: {
+        m_longPressTimer.stop();
+        endColorDropDrag(m_lastGlobalPos, true);
+        m_pressActive = false;
+        m_longPressActive = false;
+        setDown(false);
+        event->accept();
+        return true;
+    }
+    default:
+        break;
+    }
+
+    return QToolButton::event(event);
+}
+
 void KisTouchColorPickerButton::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
         m_pressPos = event->pos();
+        m_lastGlobalPos = event->globalPos();
+        m_pressActive = true;
         m_longPressActive = false;
-        m_dragInProgress = false;
+        m_colorDropActive = false;
         m_suppressClick = false;
         m_longPressTimer.start();
     }
@@ -177,6 +275,7 @@ void KisTouchColorPickerButton::mouseMoveEvent(QMouseEvent *event)
         return;
     }
 
+    m_lastGlobalPos = event->globalPos();
     const QPoint delta = event->pos() - m_pressPos;
     const int deltaSquared = delta.x() * delta.x() + delta.y() * delta.y();
 
@@ -184,12 +283,8 @@ void KisTouchColorPickerButton::mouseMoveEvent(QMouseEvent *event)
         m_longPressTimer.stop();
     }
 
-    if (m_longPressActive && !m_dragInProgress && dragDistanceReached(event->pos())) {
-        m_dragInProgress = true;
-        m_suppressClick = true;
-        m_longPressTimer.stop();
-        startColorDrag();
-        setDown(false);
+    if (m_colorDropActive) {
+        updateColorDropDrag(event->globalPos());
         event->accept();
         return;
     }
@@ -201,13 +296,15 @@ void KisTouchColorPickerButton::mouseReleaseEvent(QMouseEvent *event)
 {
     m_longPressTimer.stop();
 
-    if (m_dragInProgress) {
-        m_dragInProgress = false;
+    if (m_colorDropActive) {
+        endColorDropDrag(event->globalPos(), false);
+        m_pressActive = false;
         setDown(false);
         event->accept();
         return;
     }
 
+    m_pressActive = false;
     QToolButton::mouseReleaseEvent(event);
 }
 
@@ -252,14 +349,12 @@ void KisTouchColorPickerButton::updateDiskIcon()
     setIcon(icon);
 }
 
-bool KisTouchColorPickerButton::dragDistanceReached(const QPoint &pos) const
+void KisTouchColorPickerButton::beginColorDropDrag(const QPoint &globalPos)
 {
-    const int dist = (pos - m_pressPos).manhattanLength();
-    return dist >= QApplication::startDragDistance();
-}
+    if (m_colorDropActive) {
+        return;
+    }
 
-void KisTouchColorPickerButton::startColorDrag()
-{
     if (!m_hasValidColor) {
         return;
     }
@@ -269,18 +364,135 @@ void KisTouchColorPickerButton::startColorDrag()
         return;
     }
 
-    auto *drag = new QDrag(this);
-    auto *mime = new QMimeData;
-    mime->setColorData(c);
-    mime->setText(c.name(QColor::HexArgb));
-    drag->setMimeData(mime);
+    m_colorDropActive = true;
+    m_suppressClick = true;
+    m_lastGlobalPos = globalPos;
+    ensureColorDropOverlay();
+    if (m_colorDropOverlay) {
+        const QPixmap pix = makeColorDiskPixmap(c, kColorDropOverlaySizePx, m_colorDropOverlay->devicePixelRatioF());
+        m_colorDropOverlay->setPixmap(pix);
+    }
+    updateColorDropDrag(globalPos);
+}
 
-    const int pixSizePx = qMax(32, iconSize().width());
-    const QPixmap pix = makeColorDiskPixmap(c, pixSizePx, devicePixelRatioF());
-    drag->setPixmap(pix);
-    drag->setHotSpot(QPoint(pixSizePx / 2, pixSizePx / 2));
+void KisTouchColorPickerButton::updateColorDropDrag(const QPoint &globalPos)
+{
+    if (!m_colorDropActive) {
+        return;
+    }
 
-    drag->exec(Qt::CopyAction);
+    m_lastGlobalPos = globalPos;
+    if (!m_colorDropOverlay) {
+        return;
+    }
+
+    QWidget *anchorWindow = window();
+    if (!anchorWindow) {
+        anchorWindow = this;
+    }
+
+    const QPoint localPos = anchorWindow->mapFromGlobal(globalPos);
+    const QSize size = m_colorDropOverlay->size();
+    const QPoint desiredTopLeft = localPos - QPoint(size.width() / 2, size.height() / 2);
+    m_colorDropOverlay->move(desiredTopLeft);
+    m_colorDropOverlay->raise();
+    if (!m_colorDropOverlay->isVisible()) {
+        m_colorDropOverlay->show();
+    }
+}
+
+void KisTouchColorPickerButton::endColorDropDrag(const QPoint &globalPos, bool canceled)
+{
+    if (!m_colorDropActive) {
+        hideColorDropOverlay();
+        return;
+    }
+
+    m_colorDropActive = false;
+    m_longPressActive = false;
+
+    hideColorDropOverlay();
+
+    if (!canceled) {
+        (void)performColorDropAtGlobalPos(globalPos);
+    }
+}
+
+bool KisTouchColorPickerButton::performColorDropAtGlobalPos(const QPoint &globalPos) const
+{
+    if (!m_hasValidColor) {
+        return false;
+    }
+
+    const QColor c = m_color.toQColor();
+    if (!c.isValid()) {
+        return false;
+    }
+
+    QWidget *targetWidget = QApplication::widgetAt(globalPos);
+    QWidget *viewWidget = nullptr;
+    for (QWidget *w = targetWidget; w; w = w->parentWidget()) {
+        if (w->inherits("KisView")) {
+            viewWidget = w;
+            break;
+        }
+    }
+    if (!viewWidget) {
+        return false;
+    }
+
+    const QPoint viewPos = viewWidget->mapFromGlobal(globalPos);
+    if (!viewWidget->rect().contains(viewPos)) {
+        return false;
+    }
+
+    QMimeData mime;
+    mime.setColorData(c);
+    mime.setText(c.name(QColor::HexArgb));
+
+    QDragEnterEvent enterEvent(viewPos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(viewWidget, &enterEvent);
+
+    QDropEvent dropEvent(viewPos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+    dropEvent.setDropAction(Qt::CopyAction);
+    QApplication::sendEvent(viewWidget, &dropEvent);
+
+    return true;
+}
+
+void KisTouchColorPickerButton::ensureColorDropOverlay()
+{
+    if (m_colorDropOverlay) {
+        return;
+    }
+
+    QWidget *anchorWindow = window();
+    if (!anchorWindow) {
+        anchorWindow = this;
+    }
+
+    auto *overlay = new QLabel(anchorWindow);
+    overlay->setObjectName(QStringLiteral("touchColorDropOverlay"));
+    overlay->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+    overlay->setAttribute(Qt::WA_ShowWithoutActivating, true);
+    overlay->setAlignment(Qt::AlignCenter);
+    overlay->setFixedSize(kColorDropOverlaySizePx, kColorDropOverlaySizePx);
+
+    if (m_hasValidColor) {
+        const QColor c = m_color.toQColor();
+        const QPixmap pix = makeColorDiskPixmap(c, kColorDropOverlaySizePx, overlay->devicePixelRatioF());
+        overlay->setPixmap(pix);
+    }
+
+    overlay->hide();
+    m_colorDropOverlay = overlay;
+}
+
+void KisTouchColorPickerButton::hideColorDropOverlay()
+{
+    if (m_colorDropOverlay) {
+        m_colorDropOverlay->hide();
+    }
 }
 
 void KisTouchColorPickerButton::slotResourceChanged(int key, const QVariant &value)
@@ -295,6 +507,13 @@ void KisTouchColorPickerButton::slotResourceChanged(int key, const QVariant &val
 void KisTouchColorPickerButton::slotLongPressTriggered()
 {
     m_longPressActive = true;
+    m_suppressClick = true;
+
+    if (m_pressActive && !m_colorDropActive) {
+        const QPoint globalPos = m_lastGlobalPos.isNull() ? mapToGlobal(m_pressPos) : m_lastGlobalPos;
+        beginColorDropDrag(globalPos);
+        setDown(false);
+    }
 }
 
 void KisTouchColorPickerButton::slotClicked()

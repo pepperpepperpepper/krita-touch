@@ -4476,6 +4476,29 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
             return;
         }
 
+        const QColor expectedFill(0xff, 0x33, 0xaa);
+
+        const bool filledWhite = fillCanvasForTouchSmoke(mainWindow, QColor(0xff, 0xff, 0xff));
+        report.step(QStringLiteral("colordrop.fill_canvas_white"), filledWhite);
+        if (!filledWhite) {
+            finalizeSmoke(false);
+            return;
+        }
+        image->waitForDone();
+
+        KoCanvasResourceProvider *resourceManager =
+            mainWindow->viewManager() && mainWindow->viewManager()->canvasResourceProvider()
+                ? mainWindow->viewManager()->canvasResourceProvider()->resourceManager()
+                : nullptr;
+        if (resourceManager && image->colorSpace()) {
+            resourceManager->setResource(KoCanvasResource::ForegroundColor,
+                                         KoColor(expectedFill, image->colorSpace()));
+            report.step(QStringLiteral("colordrop.set_foreground_color"), true);
+        } else {
+            report.step(QStringLiteral("colordrop.set_foreground_color"), false);
+        }
+        QApplication::processEvents();
+
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
         const QVector<QPoint> samplePoints{image->bounds().center()};
         const QVector<QColor> before = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
@@ -4483,46 +4506,157 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         const QPointF imgPos = image->bounds().center();
         const QPointF widgetPos = view->canvasBase()->coordinatesConverter()->imageToWidget(imgPos);
 
-        QMimeData mime;
-        mime.setColorData(QColor(0xff, 0x33, 0xaa));
+        bool ok = true;
 
-        // Simulate the full drag + drop flow. KisView's dropEvent expects normal drag handling,
-        // and the touch threshold overlay is driven by dragEnterEvent.
-        QDragEnterEvent dragEnter(widgetPos.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-        QApplication::sendEvent(view, &dragEnter);
+        // Prefer exercising the real Touch Mode interaction: long-press the top-bar color disk and
+        // drag onto the canvas to fill (Procreate-style ColorDrop).
+        bool topBarAttempted = false;
+        bool topBarDropChanged = false;
+        QVector<QColor> afterTopBar;
 
-        QDropEvent dropEvent(widgetPos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
-        dropEvent.setDropAction(Qt::CopyAction);
-        QApplication::sendEvent(view, &dropEvent);
+        QWidget *canvasWidget = view->canvasBase() ? view->canvasBase()->canvasWidget() : nullptr;
+        QWidget *colorButton = mainWindow->findChild<QWidget *>(QStringLiteral("touchColorPickerButton"));
+        if (canvasWidget && colorButton) {
+            topBarAttempted = true;
 
-        image->waitForDone();
+            const QPoint startGlobal = colorButton->mapToGlobal(colorButton->rect().center());
+            const QPoint endGlobal = canvasWidget->mapToGlobal(widgetPos.toPoint());
 
-        const QVector<QColor> after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
-        const QColor expectedFill(0xff, 0x33, 0xaa);
-        const bool dropChanged = dev && anySampleChangedForTouchSmoke(before, after, 3);
-        {
-            QJsonObject details;
-            details.insert(QStringLiteral("drop_changed"), dropChanged);
-            if (!before.isEmpty() && before[0].isValid()) {
-                details.insert(QStringLiteral("before_rgba"),
-                               QStringLiteral("#%1%2%3%4")
-                                   .arg(before[0].red(), 2, 16, QLatin1Char('0'))
-                                   .arg(before[0].green(), 2, 16, QLatin1Char('0'))
-                                   .arg(before[0].blue(), 2, 16, QLatin1Char('0'))
-                                   .arg(before[0].alpha(), 2, 16, QLatin1Char('0')));
+            static QTouchDevice *device = nullptr;
+            if (!device) {
+                device = new QTouchDevice();
+                device->setType(QTouchDevice::TouchScreen);
+                device->setCapabilities(QTouchDevice::Position | QTouchDevice::Pressure);
+                device->setMaximumTouchPoints(10);
             }
-            if (!after.isEmpty() && after[0].isValid()) {
-                details.insert(QStringLiteral("after_rgba"),
-                               QStringLiteral("#%1%2%3%4")
-                                   .arg(after[0].red(), 2, 16, QLatin1Char('0'))
-                                   .arg(after[0].green(), 2, 16, QLatin1Char('0'))
-                                   .arg(after[0].blue(), 2, 16, QLatin1Char('0'))
-                                   .arg(after[0].alpha(), 2, 16, QLatin1Char('0')));
+
+            colorButton->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+            const QPointF startLocal(colorButton->mapFromGlobal(startGlobal));
+            const QPointF endLocal(colorButton->mapFromGlobal(endGlobal));
+
+            {
+                QTouchEvent::TouchPoint tp(0);
+                tp.setState(Qt::TouchPointPressed);
+                tp.setPos(startLocal);
+                tp.setScreenPos(QPointF(startGlobal));
+                tp.setStartPos(startLocal);
+                tp.setStartScreenPos(QPointF(startGlobal));
+                tp.setLastPos(startLocal);
+                tp.setLastScreenPos(QPointF(startGlobal));
+                tp.setPressure(1.0);
+
+                QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed,
+                                       QList<QTouchEvent::TouchPoint>{tp});
+                QApplication::sendEvent(colorButton, &beginEvent);
+                QApplication::processEvents();
             }
-            report.step(QStringLiteral("colordrop.drop_modified_canvas"), dropChanged, details);
+
+            // Wait for the long-press timer (ColorDrop gesture) to trigger.
+            for (int i = 0; i < 30; ++i) {
+                QApplication::processEvents();
+                QThread::msleep(20);
+            }
+
+            {
+                QTouchEvent::TouchPoint tp(0);
+                tp.setState(Qt::TouchPointMoved);
+                tp.setPos(endLocal);
+                tp.setScreenPos(QPointF(endGlobal));
+                tp.setStartPos(startLocal);
+                tp.setStartScreenPos(QPointF(startGlobal));
+                tp.setLastPos(startLocal);
+                tp.setLastScreenPos(QPointF(startGlobal));
+                tp.setPressure(1.0);
+
+                QTouchEvent updateEvent(QEvent::TouchUpdate, device, Qt::NoModifier, Qt::TouchPointMoved,
+                                        QList<QTouchEvent::TouchPoint>{tp});
+                QApplication::sendEvent(colorButton, &updateEvent);
+                QApplication::processEvents();
+            }
+
+            {
+                QTouchEvent::TouchPoint tp(0);
+                tp.setState(Qt::TouchPointReleased);
+                tp.setPos(endLocal);
+                tp.setScreenPos(QPointF(endGlobal));
+                tp.setStartPos(startLocal);
+                tp.setStartScreenPos(QPointF(startGlobal));
+                tp.setLastPos(endLocal);
+                tp.setLastScreenPos(QPointF(endGlobal));
+                tp.setPressure(0.0);
+
+                QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased,
+                                     QList<QTouchEvent::TouchPoint>{tp});
+                QApplication::sendEvent(colorButton, &endEvent);
+                QApplication::processEvents();
+            }
+
+            image->waitForDone();
+            afterTopBar = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+            topBarDropChanged = dev && anySampleChangedForTouchSmoke(before, afterTopBar, 3);
         }
 
-        bool ok = true;
+        {
+            QJsonObject details;
+            details.insert(QStringLiteral("attempted"), topBarAttempted);
+            details.insert(QStringLiteral("drop_changed"), topBarDropChanged);
+            report.step(QStringLiteral("colordrop.topbar_drag_modified_canvas"), topBarDropChanged, details);
+        }
+#ifndef Q_OS_ANDROID
+        if (!topBarDropChanged) {
+            qWarning() << "Touch smoke: colordrop top bar ColorDrop did not modify the canvas on desktop";
+            ok = false;
+        }
+#endif
+
+        QVector<QColor> after = afterTopBar;
+        bool dropChanged = topBarDropChanged;
+
+        if (!dropChanged) {
+            QMimeData mime;
+            mime.setColorData(expectedFill);
+
+            // Simulate the full drag + drop flow. KisView's dropEvent expects normal drag handling,
+            // and the touch threshold overlay is driven by dragEnterEvent.
+            QDragEnterEvent dragEnter(widgetPos.toPoint(), Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            QApplication::sendEvent(view, &dragEnter);
+
+            QDropEvent dropEvent(widgetPos, Qt::CopyAction, &mime, Qt::LeftButton, Qt::NoModifier);
+            dropEvent.setDropAction(Qt::CopyAction);
+            QApplication::sendEvent(view, &dropEvent);
+
+            image->waitForDone();
+
+            after = sampleDeviceColorsForTouchSmoke(dev, samplePoints);
+            dropChanged = dev && anySampleChangedForTouchSmoke(before, after, 3);
+            {
+                QJsonObject details;
+                details.insert(QStringLiteral("drop_changed"), dropChanged);
+                if (!before.isEmpty() && before[0].isValid()) {
+                    details.insert(QStringLiteral("before_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(before[0].red(), 2, 16, QLatin1Char('0'))
+                                       .arg(before[0].green(), 2, 16, QLatin1Char('0'))
+                                       .arg(before[0].blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(before[0].alpha(), 2, 16, QLatin1Char('0')));
+                }
+                if (!after.isEmpty() && after[0].isValid()) {
+                    details.insert(QStringLiteral("after_rgba"),
+                                   QStringLiteral("#%1%2%3%4")
+                                       .arg(after[0].red(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].green(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].blue(), 2, 16, QLatin1Char('0'))
+                                       .arg(after[0].alpha(), 2, 16, QLatin1Char('0')));
+                }
+                report.step(QStringLiteral("colordrop.drop_modified_canvas"), dropChanged, details);
+            }
+        } else {
+            QJsonObject details;
+            details.insert(QStringLiteral("skipped"), true);
+            report.step(QStringLiteral("colordrop.drop_modified_canvas"), true, details);
+        }
+
         QVector<QColor> finalColors = after;
 
         if (!dropChanged) {

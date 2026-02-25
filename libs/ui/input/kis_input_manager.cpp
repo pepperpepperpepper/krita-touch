@@ -1075,12 +1075,20 @@ bool KisInputManager::handleTouchUpdate(QTouchEvent *touchEvent)
         // accidentally starting a paint stroke. Some touch devices report
         // minor jitter even while the finger is held in place, so use a small
         // slop threshold instead of reacting to 1px motion.
-        constexpr qreal kTouchPaintingStrokeStartDistanceSquared =
-            KisShortcutMatcher::TOUCH_SLOP_SQUARED / 4.0; // 8px
+        //
+        // Exception: the Touch Selection tool should feel responsive when tracing a selection,
+        // so start the interaction on the first meaningful motion instead of waiting for the
+        // larger paint jitter threshold.
+        qreal touchPaintingStrokeStartDistanceSquared = KisShortcutMatcher::TOUCH_SLOP_SQUARED / 4.0; // 8px
+        if (KoToolManager *toolManager = KoToolManager::instance()) {
+            if (toolManager->activeToolId() == QLatin1String("KisToolSelectTouch")) {
+                touchPaintingStrokeStartDistanceSquared = 0.0;
+            }
+        }
         const QPointF deltaFromStart = currentPos - d->startingPos;
         const qreal deltaFromStartSquared =
             (deltaFromStart.x() * deltaFromStart.x()) + (deltaFromStart.y() * deltaFromStart.y());
-        const bool movedEnoughForStroke = deltaFromStartSquared > kTouchPaintingStrokeStartDistanceSquared;
+        const bool movedEnoughForStroke = deltaFromStartSquared > touchPaintingStrokeStartDistanceSquared;
 
         if (d->touchStrokeStarted || movedEnoughForStroke) {
             d->previousPos = currentPos;

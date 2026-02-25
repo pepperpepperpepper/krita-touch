@@ -18,7 +18,9 @@
 
 class KoCanvasResourceProvider;
 class QDockWidget;
+class QLabel;
 class QMouseEvent;
+class QTouchEvent;
 class QVariant;
 
 /**
@@ -45,6 +47,7 @@ public Q_SLOTS:
     void refreshIcon();
 
 protected:
+    bool event(QEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -53,8 +56,12 @@ protected:
 private:
     void setColor(const KoColor &color);
     void updateDiskIcon();
-    void startColorDrag();
-    bool dragDistanceReached(const QPoint &pos) const;
+    void beginColorDropDrag(const QPoint &globalPos);
+    void updateColorDropDrag(const QPoint &globalPos);
+    void endColorDropDrag(const QPoint &globalPos, bool canceled);
+    bool performColorDropAtGlobalPos(const QPoint &globalPos) const;
+    void ensureColorDropOverlay();
+    void hideColorDropOverlay();
 
 private Q_SLOTS:
     void slotResourceChanged(int key, const QVariant &value);
@@ -68,9 +75,13 @@ private:
 
     QTimer m_longPressTimer;
     QPoint m_pressPos;
+    QPoint m_lastGlobalPos;
+    bool m_pressActive {false};
     bool m_longPressActive {false};
-    bool m_dragInProgress {false};
+    bool m_colorDropActive {false};
     bool m_suppressClick {false};
+
+    QPointer<QLabel> m_colorDropOverlay;
 
     bool m_hasValidColor {false};
     KoColor m_color;
