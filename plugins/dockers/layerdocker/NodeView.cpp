@@ -73,6 +73,9 @@ public:
         , touchVisibilityHoldCandidateActive(false)
         , touchVisibilityHoldTriggered(false)
         , touchVisibilityHoldTimer(nullptr)
+        , touchSelectOpaqueHoldCandidateActive(false)
+        , touchSelectOpaqueHoldTriggered(false)
+        , touchSelectOpaqueHoldTimer(nullptr)
     {
     }
     NodeDelegate delegate;
@@ -94,6 +97,12 @@ public:
     bool touchVisibilityHoldCandidateActive;
     bool touchVisibilityHoldTriggered;
     QTimer *touchVisibilityHoldTimer;
+
+    QPersistentModelIndex touchSelectOpaqueHoldCandidateIndex;
+    QPoint touchSelectOpaqueHoldStartPos;
+    bool touchSelectOpaqueHoldCandidateActive;
+    bool touchSelectOpaqueHoldTriggered;
+    QTimer *touchSelectOpaqueHoldTimer;
 };
 
 
@@ -128,6 +137,10 @@ NodeView::NodeView(QWidget *parent)
     d->touchVisibilityHoldTimer = new QTimer(this);
     d->touchVisibilityHoldTimer->setSingleShot(true);
     connect(d->touchVisibilityHoldTimer, &QTimer::timeout, this, &NodeView::slotTouchVisibilityHoldTimeout);
+
+    d->touchSelectOpaqueHoldTimer = new QTimer(this);
+    d->touchSelectOpaqueHoldTimer->setSingleShot(true);
+    connect(d->touchSelectOpaqueHoldTimer, &QTimer::timeout, this, &NodeView::slotTouchSelectOpaqueHoldTimeout);
 }
 
 NodeView::~NodeView()
@@ -227,6 +240,13 @@ bool NodeView::viewportEvent(QEvent *e)
             if (d->touchVisibilityHoldTimer) {
                 d->touchVisibilityHoldTimer->stop();
             }
+            d->touchSelectOpaqueHoldCandidateActive = false;
+            d->touchSelectOpaqueHoldTriggered = false;
+            d->touchSelectOpaqueHoldCandidateIndex = QModelIndex();
+            d->touchSelectOpaqueHoldStartPos = QPoint();
+            if (d->touchSelectOpaqueHoldTimer) {
+                d->touchSelectOpaqueHoldTimer->stop();
+            }
 
             QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(e);
             const QPoint pos = mouseEvent->pos();
@@ -298,6 +318,16 @@ bool NodeView::viewportEvent(QEvent *e)
                     d->touchSwipeCandidateIndex = rawBuddyIndex;
                     d->touchSwipeStartPos = pos;
 
+                    if (d->touchSelectOpaqueHoldTimer) {
+                        d->touchSelectOpaqueHoldCandidateActive = true;
+                        d->touchSelectOpaqueHoldTriggered = false;
+                        d->touchSelectOpaqueHoldCandidateIndex = rawBuddyIndex;
+                        d->touchSelectOpaqueHoldStartPos = pos;
+
+                        constexpr int kHoldMs = 450;
+                        d->touchSelectOpaqueHoldTimer->start(kHoldMs);
+                    }
+
                     if (pressedOnSelectedRow) {
                         d->touchOptionsCandidateActive = true;
                         d->touchOptionsCandidateIndex = rawBuddyIndex;
@@ -344,6 +374,28 @@ bool NodeView::viewportEvent(QEvent *e)
 
                 e->accept();
                 return true;
+            }
+
+            if (d->touchSelectOpaqueHoldCandidateActive && mouseEvent->button() == Qt::LeftButton) {
+                if (d->touchSelectOpaqueHoldTimer) {
+                    d->touchSelectOpaqueHoldTimer->stop();
+                }
+
+                const bool holdTriggered = d->touchSelectOpaqueHoldTriggered;
+                d->touchSelectOpaqueHoldCandidateActive = false;
+                d->touchSelectOpaqueHoldTriggered = false;
+                d->touchSelectOpaqueHoldCandidateIndex = QModelIndex();
+                d->touchSelectOpaqueHoldStartPos = QPoint();
+
+                if (holdTriggered) {
+                    d->touchSwipeCandidateActive = false;
+                    d->touchSwipeCandidateIndex = QModelIndex();
+                    d->touchOptionsCandidateActive = false;
+                    d->touchOptionsCandidateIndex = QModelIndex();
+
+                    e->accept();
+                    return true;
+                }
             }
 
             d->touchSwipeCandidateActive = false;
@@ -423,6 +475,21 @@ bool NodeView::viewportEvent(QEvent *e)
                 }
             }
 
+            if (d->touchSelectOpaqueHoldCandidateActive &&
+                (mouseEvent->buttons() & Qt::LeftButton) &&
+                d->touchSelectOpaqueHoldCandidateIndex.isValid()) {
+                const int dragDistance = (pos - d->touchSelectOpaqueHoldStartPos).manhattanLength();
+                if (dragDistance > qApp->startDragDistance()) {
+                    if (d->touchSelectOpaqueHoldTimer) {
+                        d->touchSelectOpaqueHoldTimer->stop();
+                    }
+                    d->touchSelectOpaqueHoldCandidateActive = false;
+                    d->touchSelectOpaqueHoldTriggered = false;
+                    d->touchSelectOpaqueHoldCandidateIndex = QModelIndex();
+                    d->touchSelectOpaqueHoldStartPos = QPoint();
+                }
+            }
+
             if (d->touchSwipeCandidateActive &&
                 (mouseEvent->source() != Qt::MouseEventNotSynthesized || isTouchSmokeRun()) &&
                 (mouseEvent->buttons() & Qt::LeftButton) &&
@@ -493,6 +560,13 @@ bool NodeView::viewportEvent(QEvent *e)
                     d->touchSwipeCandidateIndex = QModelIndex();
                     d->touchOptionsCandidateActive = false;
                     d->touchOptionsCandidateIndex = QModelIndex();
+                    if (d->touchSelectOpaqueHoldTimer) {
+                        d->touchSelectOpaqueHoldTimer->stop();
+                    }
+                    d->touchSelectOpaqueHoldCandidateActive = false;
+                    d->touchSelectOpaqueHoldTriggered = false;
+                    d->touchSelectOpaqueHoldCandidateIndex = QModelIndex();
+                    d->touchSelectOpaqueHoldStartPos = QPoint();
 
                     e->accept();
                     return true;
@@ -788,6 +862,32 @@ void NodeView::slotTouchVisibilityHoldTimeout()
     toggleSolo(d->touchVisibilityHoldCandidateIndex);
 }
 
+void NodeView::slotTouchSelectOpaqueHoldTimeout()
+{
+    if (!d->touchSelectOpaqueHoldCandidateActive ||
+        d->touchSelectOpaqueHoldTriggered ||
+        !d->touchSelectOpaqueHoldCandidateIndex.isValid()) {
+        return;
+    }
+
+    d->touchSelectOpaqueHoldTriggered = true;
+    d->touchSwipeCandidateActive = false;
+    d->touchSwipeCandidateIndex = QModelIndex();
+    d->touchOptionsCandidateActive = false;
+    d->touchOptionsCandidateIndex = QModelIndex();
+
+    if (selectionModel()) {
+        selectionModel()->setCurrentIndex(d->touchSelectOpaqueHoldCandidateIndex, QItemSelectionModel::NoUpdate);
+    }
+
+    KisMainWindow *mainWindow = KisPart::instance()->currentMainwindow();
+    KisKActionCollection *actionCollection = mainWindow ? mainWindow->actionCollection() : nullptr;
+    QAction *action = actionCollection ? actionCollection->action(QStringLiteral("selectopaque")) : nullptr;
+    if (action) {
+        action->trigger();
+    }
+}
+
 void NodeView::slotScrollerStateChanged(QScroller::State state){
     if (state != QScroller::Inactive && d->touchVisibilityHoldCandidateActive) {
         if (d->touchVisibilityHoldTimer) {
@@ -797,6 +897,15 @@ void NodeView::slotScrollerStateChanged(QScroller::State state){
         d->touchVisibilityHoldTriggered = false;
         d->touchVisibilityHoldCandidateIndex = QModelIndex();
         d->touchVisibilityHoldStartPos = QPoint();
+    }
+    if (state != QScroller::Inactive && d->touchSelectOpaqueHoldCandidateActive) {
+        if (d->touchSelectOpaqueHoldTimer) {
+            d->touchSelectOpaqueHoldTimer->stop();
+        }
+        d->touchSelectOpaqueHoldCandidateActive = false;
+        d->touchSelectOpaqueHoldTriggered = false;
+        d->touchSelectOpaqueHoldCandidateIndex = QModelIndex();
+        d->touchSelectOpaqueHoldStartPos = QPoint();
     }
     KisKineticScroller::updateCursor(this, state);
 }

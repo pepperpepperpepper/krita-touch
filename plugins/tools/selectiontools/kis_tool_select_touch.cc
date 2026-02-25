@@ -827,6 +827,55 @@ void KisToolSelectTouch::continuePrimaryAction(KoPointerEvent *event)
 
 void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
 {
+    KisCanvas2 *kisCanvas = dynamic_cast<KisCanvas2 *>(canvas());
+    KisViewManager *viewManager = kisCanvas ? kisCanvas->viewManager() : nullptr;
+    KisView *view = kisCanvas ? kisCanvas->imageView() : nullptr;
+
+    auto currentPixelSelection = [&]() -> KisPixelSelectionSP {
+        KisSelectionSP selection = view ? view->selection() : KisSelectionSP();
+        if (!selection) {
+            return KisPixelSelectionSP();
+        }
+        return selection->pixelSelection();
+    };
+
+    auto hasActiveSelection = [&]() -> bool {
+        KisPixelSelectionSP pixelSelection = currentPixelSelection();
+        if (!pixelSelection) {
+            return false;
+        }
+        return !pixelSelection->selectedExactRect().isEmpty();
+    };
+
+    auto selectionContainsImagePoint = [&](const QPoint &imagePos) -> bool {
+        KisPixelSelectionSP pixelSelection = currentPixelSelection();
+        if (!pixelSelection) {
+            return false;
+        }
+        if (pixelSelection->selectedExactRect().isEmpty()) {
+            return false;
+        }
+
+        // Use the selection mask itself (not just the bounding rect) so taps in holes
+        // are treated as "outside".
+        const QRect pointRect(imagePos, QSize(1, 1));
+        return !pixelSelection->isTotallyUnselected(pointRect);
+    };
+
+    auto deselectIfTapOutsideSelection = [&](const QPoint &imagePos) -> bool {
+        if (!hasActiveSelection()) {
+            return false;
+        }
+        if (selectionContainsImagePoint(imagePos)) {
+            return false;
+        }
+        if (viewManager && viewManager->selectionManager()) {
+            viewManager->selectionManager()->deselect();
+            return true;
+        }
+        return false;
+    };
+
     if (m_method == SelectionMethod::Automatic && m_autoAdjustingThreshold) {
         m_autoAdjustingThreshold = false;
         applyAutomaticSelection(m_autoImagePos, m_threshold);
@@ -837,6 +886,20 @@ void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
     if ((m_method == SelectionMethod::Rectangle || m_method == SelectionMethod::Ellipse) && m_draggingShape) {
         m_draggingShape = false;
         m_shapeCurrent = convertToImagePixelCoordFloored(event);
+        const QPointF startView = pixelToView(m_shapeStart);
+        const QPointF endView = pixelToView(m_shapeCurrent);
+        const QPointF deltaView = startView - endView;
+        const bool isTap =
+            (deltaView.x() * deltaView.x() + deltaView.y() * deltaView.y()) <=
+            (kTapMaxDistanceViewPx * kTapMaxDistanceViewPx);
+
+        if (isTap) {
+            const QPoint imagePos = m_shapeCurrent.toPoint();
+            if (deselectIfTapOutsideSelection(imagePos)) {
+                endSelectInteraction();
+                return;
+            }
+        }
         const QRectF rect = QRectF(m_shapeStart, m_shapeCurrent).normalized();
         applyRectSelection(rect, m_method == SelectionMethod::Ellipse);
         endSelectInteraction();
@@ -874,6 +937,17 @@ void KisToolSelectTouch::endPrimaryAction(KoPointerEvent *event)
                 m_polygonPoints.append(p);
             }
         };
+
+        if (isTap) {
+            const QPointF tapPoint = m_freehandPoints.last();
+            if (!m_polygonActive) {
+                if (deselectIfTapOutsideSelection(tapPoint.toPoint())) {
+                    m_freehandPoints.clear();
+                    endSelectInteraction();
+                    return;
+                }
+            }
+        }
 
         // Procreate-style unified freehand selection:
         // - taps add polygon anchors

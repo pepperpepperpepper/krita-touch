@@ -49,6 +49,8 @@
 #include <QActionGroup>
 #include <QSignalBlocker>
 #include <QToolBar>
+#include <QToolButton>
+#include <QTimer>
 
 #include <kactioncollection.h>
 #include <kactionmenu.h>
@@ -3590,7 +3592,35 @@ void KisMainWindow::applyTouchMode(bool enabled)
             };
 
             addActionWithFallbackIcon(QStringLiteral("touch_actions_sheet"), QStringLiteral("config-performance"));
-            addActionIfPresent(QStringLiteral("KisToolSelectTouch"));
+            QAction *touchSelectionToolAction = actionCollection()->action(QStringLiteral("KisToolSelectTouch"));
+            if (touchSelectionToolAction) {
+                d->touchTopBar->addAction(touchSelectionToolAction);
+                if (QToolButton *button =
+                        qobject_cast<QToolButton *>(d->touchTopBar->widgetForAction(touchSelectionToolAction))) {
+                    button->setObjectName(QStringLiteral("touchSelectionToolButton"));
+
+                    if (!button->property("touch_selection_hold_to_reselect_installed").toBool()) {
+                        button->setProperty("touch_selection_hold_to_reselect_installed", true);
+
+                        auto *holdTimer = new QTimer(button);
+                        holdTimer->setSingleShot(true);
+
+                        constexpr int kHoldMs = 450;
+                        connect(button, &QToolButton::pressed, holdTimer, [holdTimer, kHoldMs]() {
+                            holdTimer->start(kHoldMs);
+                        });
+                        connect(button, &QToolButton::released, holdTimer, &QTimer::stop);
+                        connect(holdTimer, &QTimer::timeout, this, [this, touchSelectionToolAction]() {
+                            if (touchSelectionToolAction) {
+                                touchSelectionToolAction->trigger();
+                            }
+                            if (QAction *reselectAction = actionCollection()->action(QStringLiteral("reselect"))) {
+                                reselectAction->trigger();
+                            }
+                        });
+                    }
+                }
+            }
             addActionIfPresent(QStringLiteral("KisToolTransform"));
 
             QWidget *spacer = new QWidget(d->touchTopBar);

@@ -2229,6 +2229,82 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         }
         report.step(QStringLiteral("selection_tool.load_restores_selection"), selectionRestored);
 
+        // Procreate-style deselect: tap outside the active selection.
+        const QPointF outsideTap(bounds.left() + bounds.width() * 0.10, bounds.top() + bounds.height() * 0.10);
+        tapAtImagePos(outsideTap);
+
+        bool selectionClearedByOutsideTap = false;
+        for (int i = 0; i < 80; ++i) {
+            QApplication::processEvents();
+            if (selectedExactRect().isEmpty()) {
+                selectionClearedByOutsideTap = true;
+                break;
+            }
+            QThread::msleep(20);
+        }
+        if (!selectionClearedByOutsideTap) {
+            qWarning() << "Touch smoke: selection-tool tap outside selection did not deselect";
+#ifndef Q_OS_ANDROID
+            ok = false;
+#endif
+        }
+        report.step(QStringLiteral("selection_tool.tap_outside_deselects"), selectionClearedByOutsideTap);
+
+        // Keep the rest of the scenario stable even if the outside-tap path fails: force-clear the
+        // selection so the hold-to-reselect check measures an actual transition.
+        if (!selectedExactRect().isEmpty()) {
+            if (QAction *action = mainWindow->actionCollection()->action("deselect")) {
+                action->trigger();
+                for (int i = 0; i < 80; ++i) {
+                    QApplication::processEvents();
+                    if (selectedExactRect().isEmpty()) {
+                        break;
+                    }
+                    QThread::msleep(20);
+                }
+            }
+        }
+
+        // Procreate-style "reselect last selection": tap-and-hold the Selection tool button.
+        bool reselectTriggered = false;
+        {
+            QToolButton *selectionButton =
+                mainWindow->findChild<QToolButton *>(QStringLiteral("touchSelectionToolButton"));
+            const bool buttonFound = selectionButton != nullptr;
+            report.step(QStringLiteral("selection_tool.find_touch_selection_button"), buttonFound);
+
+            if (selectionButton) {
+                const QPoint pressPos = selectionButton->rect().center();
+                QMouseEvent pressEvent(QEvent::MouseButtonPress,
+                                       pressPos,
+                                       Qt::LeftButton,
+                                       Qt::LeftButton,
+                                       Qt::NoModifier);
+                QApplication::sendEvent(selectionButton, &pressEvent);
+                QApplication::processEvents();
+
+                reselectTriggered = waitForUiCondition(1200, [&]() {
+                    return !selectedExactRect().isEmpty();
+                });
+
+                QMouseEvent releaseEvent(QEvent::MouseButtonRelease,
+                                         pressPos,
+                                         Qt::LeftButton,
+                                         Qt::NoButton,
+                                         Qt::NoModifier);
+                QApplication::sendEvent(selectionButton, &releaseEvent);
+                QApplication::processEvents();
+            }
+        }
+
+        if (!reselectTriggered) {
+            qWarning() << "Touch smoke: selection-tool hold did not reselect last selection";
+#ifndef Q_OS_ANDROID
+            ok = false;
+#endif
+        }
+        report.step(QStringLiteral("selection_tool.hold_button_reselects_last_selection"), reselectTriggered);
+
         // Fill selection and validate pixels inside/outside change as expected.
         KisPaintDeviceSP dev = paintDeviceForTouchSmoke(mainWindow);
         const QPoint inside(bounds.left() + qRound(bounds.width() * 0.50),
