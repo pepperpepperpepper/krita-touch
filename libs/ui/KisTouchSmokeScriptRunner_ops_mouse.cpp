@@ -152,6 +152,7 @@ void sendMouseDragPath(QWidget *canvasWidget,
 
     if (holdMsAtEnd > 0) {
         QThread::msleep(holdMsAtEnd);
+        QApplication::processEvents();
     }
 
     sendTouchMouseEvent(QEvent::MouseButtonRelease, localPoints.last(), Qt::LeftButton, Qt::NoButton);

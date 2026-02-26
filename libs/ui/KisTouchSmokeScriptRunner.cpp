@@ -813,6 +813,7 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const int maxAlpha = step.value(QStringLiteral("max_alpha")).toInt(255);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1500);
             const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
+            const int holdMsAtEnd = step.value(QStringLiteral("hold_ms_at_end")).toInt(0);
             const bool requireInputManager = step.value(QStringLiteral("require_input_manager")).toBool(false);
             const QString shortcutName = step.value(QStringLiteral("fallback_shortcut")).toString();
             const int shortcut = touchShortcutFromString(shortcutName);
@@ -828,6 +829,7 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
                                                         timeoutMs,
                                                         shortcut,
                                                         stepMs,
+                                                        holdMsAtEnd,
                                                         requireInputManager,
                                                         &details,
                                                         &localError);

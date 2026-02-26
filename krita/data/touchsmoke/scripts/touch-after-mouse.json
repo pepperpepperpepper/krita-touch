@@ -64,8 +64,10 @@
       "fingers": 1,
       "require_input_manager": true,
       "fallback_shortcut": "",
+      "hold_ms_at_end": 200,
       "path": [
         { "space": "image", "x": 0.45, "y": 0.6 },
+        { "space": "image", "x": 0.5, "y": 0.6 },
         { "space": "image", "x": 0.55, "y": 0.6 }
       ],
       "sample_pos": { "space": "image", "x": 0.5, "y": 0.6 },
@@ -76,4 +78,3 @@
     }
   ]
 }
-

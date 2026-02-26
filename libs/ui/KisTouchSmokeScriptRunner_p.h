@@ -205,6 +205,7 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
                                             int timeoutMs,
                                             int fallbackShortcut,
                                             int stepMs,
+                                            int holdMsAtEnd,
                                             bool requireInputManager,
                                             QJsonObject *details,
                                             QString *errorOut);

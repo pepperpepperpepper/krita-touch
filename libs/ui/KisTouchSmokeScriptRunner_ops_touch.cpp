@@ -411,6 +411,8 @@ void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoi
         QApplication::processEvents();
     }
 
+    QApplication::processEvents();
+
     QList<QTouchEvent::TouchPoint> endPoints;
     endPoints.reserve(fingerCount);
     for (int i = 0; i < fingerCount; ++i) {
