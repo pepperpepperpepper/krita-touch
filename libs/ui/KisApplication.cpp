@@ -56,6 +56,7 @@
 #include <QImageReader>
 #include <QImageWriter>
 #include <QPixmap>
+#include <QPointer>
 #include <QTouchDevice>
 #include <QTouchEvent>
 #include <QThread>
@@ -7293,6 +7294,178 @@ KisApplication::KisApplication(const QString &key, int &argc, char **argv)
 
     this->installEventFilter(new PlatformWindowCreationFilter(this));
 #endif /* KRITA_USE_SURFACE_COLOR_MANAGEMENT_API */
+
+#ifndef Q_OS_ANDROID
+    /**
+     * Touch↔mouse coexistence on desktop (Pepper/Wayland regression guard):
+     *
+     * Some desktop Wayland/Qt setups can stop synthesizing mouse events from
+     * touch after the user uses a real mouse/stylus. That can make non-canvas
+     * widgets (menus/toolbars) ignore touch entirely, even though touch mode is
+     * enabled.
+     *
+     * Install a small event filter that translates single-finger touch events
+     * into mouse press/move/release for non-canvas widgets while Touch Mode is
+     * active. Canvas widgets handle touch directly via KisInputManager and
+     * must be excluded to avoid breaking touch painting and gestures.
+     */
+    struct TouchUiMouseFallbackFilter : QObject
+    {
+        using QObject::QObject;
+
+        QPointer<QWidget> m_targetWidget;
+        int m_touchId = -1;
+
+        bool shouldLog() const
+        {
+            return qEnvironmentVariableIsSet("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") &&
+                   qEnvironmentVariableIntValue("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") != 0;
+        }
+
+        static bool isCanvasWidget(QWidget *w)
+        {
+            return w && (w->inherits("KisOpenGLCanvas2") || w->inherits("KisQPainterCanvas"));
+        }
+
+        static bool isInCanvas(QWidget *w)
+        {
+            for (QWidget *p = w; p; p = p->parentWidget()) {
+                if (isCanvasWidget(p)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        static bool isTouchNativeWidget(QWidget *w)
+        {
+            // Touch widgets that implement their own touch interactions.
+            if (!w) {
+                return false;
+            }
+
+            if (w->objectName() == QLatin1String("touchColorPickerButton") ||
+                w->objectName() == QLatin1String("touchColorDropOverlay")) {
+                return true;
+            }
+
+            // Keep this generic so KisApplication.cpp doesn't need to depend on widget headers.
+            if (w->inherits("KisTouchColorPickerButton")) {
+                return true;
+            }
+
+            return false;
+        }
+
+        void resetEmulation()
+        {
+            m_targetWidget.clear();
+            m_touchId = -1;
+        }
+
+        void sendMouseEvent(QWidget *w,
+                            QTouchEvent *touchEvent,
+                            const QTouchEvent::TouchPoint &tp,
+                            QEvent::Type mouseType,
+                            Qt::MouseButton button,
+                            Qt::MouseButtons buttons) const
+        {
+            if (!w || !touchEvent) {
+                return;
+            }
+
+            // Use the same position for local/window coords; this matches existing
+            // touch-smoke injection patterns and is sufficient for widgets.
+            const QPointF localPos = tp.pos();
+            const QPointF windowPos = localPos;
+            const QPointF screenPos = tp.screenPos();
+
+            QMouseEvent mouseEvent(mouseType,
+                                   localPos,
+                                   windowPos,
+                                   screenPos,
+                                   button,
+                                   buttons,
+                                   touchEvent->modifiers(),
+                                   Qt::MouseEventSynthesizedByQt);
+            QApplication::sendEvent(w, &mouseEvent);
+        }
+
+        bool eventFilter(QObject *watched, QEvent *event) override
+        {
+            const QEvent::Type type = event ? event->type() : QEvent::None;
+            if (type != QEvent::TouchBegin &&
+                type != QEvent::TouchUpdate &&
+                type != QEvent::TouchEnd &&
+                type != QEvent::TouchCancel) {
+                return false;
+            }
+
+            if (!KisConfig(true).touchModeEnabled()) {
+                resetEmulation();
+                return false;
+            }
+
+            QWidget *widget = qobject_cast<QWidget *>(watched);
+            if (!widget || !event) {
+                resetEmulation();
+                return false;
+            }
+
+            if (isInCanvas(widget) || isTouchNativeWidget(widget)) {
+                // Canvas and dedicated touch widgets handle touch directly.
+                resetEmulation();
+                return false;
+            }
+
+            QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
+            const QList<QTouchEvent::TouchPoint> points = touchEvent->touchPoints();
+            if (points.size() != 1) {
+                resetEmulation();
+                return false;
+            }
+
+            const QTouchEvent::TouchPoint &tp = points.first();
+            const int tpId = tp.id();
+
+            if (type == QEvent::TouchBegin) {
+                m_targetWidget = widget;
+                m_touchId = tpId;
+
+                if (shouldLog()) {
+                    qWarning() << "Touch UI mouse fallback: begin"
+                               << widget->metaObject()->className()
+                               << widget->objectName();
+                }
+
+                sendMouseEvent(widget, touchEvent, tp,
+                               QEvent::MouseButtonPress, Qt::LeftButton, Qt::LeftButton);
+                event->accept();
+                return true;
+            }
+
+            if (m_targetWidget.isNull() || m_targetWidget != widget || (m_touchId >= 0 && tpId != m_touchId)) {
+                return false;
+            }
+
+            if (type == QEvent::TouchUpdate) {
+                sendMouseEvent(widget, touchEvent, tp,
+                               QEvent::MouseMove, Qt::NoButton, Qt::LeftButton);
+                event->accept();
+                return true;
+            }
+
+            // TouchEnd / TouchCancel.
+            sendMouseEvent(widget, touchEvent, tp,
+                           QEvent::MouseButtonRelease, Qt::LeftButton, Qt::NoButton);
+            resetEmulation();
+            event->accept();
+            return true;
+        }
+    };
+
+    installEventFilter(new TouchUiMouseFallbackFilter(this));
+#endif
 }
 
 #if defined(Q_OS_WIN) && defined(ENV32BIT)

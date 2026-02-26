@@ -10,6 +10,7 @@
         <file>scripts/quickmenu-hold-gating.json</file>
         <file>scripts/layer-add-remove.json</file>
         <file>scripts/rotate-with-pinch-gating.json</file>
+        <file>scripts/touch-after-mouse.json</file>
         <file>scripts/touch-painting-gating.json</file>
         <file>scripts/undo-redo-layer-gating.json</file>
     </qresource>

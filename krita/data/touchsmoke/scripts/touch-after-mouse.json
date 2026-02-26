@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "fail_fast": true,
+  "steps": [
+    {
+      "name": "touch_after_mouse.enable_touch_mode",
+      "op": "config.set_bool",
+      "key": "touch_mode_enabled",
+      "value": true
+    },
+    {
+      "name": "touch_after_mouse.enable_touch_painting",
+      "op": "action.ensure_checked",
+      "id": "touch_painting_enabled",
+      "expected": true,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_after_mouse.add_layer",
+      "op": "action.trigger_wait_layer_count_delta",
+      "id": "add_new_paint_layer",
+      "delta": 1,
+      "timeout_ms": 1500
+    },
+    {
+      "name": "touch_after_mouse.select_brush_tool",
+      "op": "action.trigger",
+      "id": "KritaShape/KisToolBrush"
+    },
+    {
+      "name": "touch_after_mouse.sample_mouse_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.4 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_after_mouse.sample_touch_starts_transparent",
+      "op": "image.wait_pixel_alpha_range",
+      "pos": { "space": "image", "x": 0.5, "y": 0.6 },
+      "min_alpha": 0,
+      "max_alpha": 10,
+      "timeout_ms": 900
+    },
+    {
+      "name": "touch_after_mouse.mouse_drag_paints",
+      "op": "mouse.drag_path_wait_pixel_alpha_range",
+      "mouse_source": "not_synthesized",
+      "path": [
+        { "space": "image", "x": 0.45, "y": 0.4 },
+        { "space": "image", "x": 0.55, "y": 0.4 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.4 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 1500,
+      "step_ms": 20,
+      "hold_ms_at_end": 200
+    },
+    {
+      "name": "touch_after_mouse.touch_drag_paints_after_mouse",
+      "op": "touch.drag_path_wait_pixel_alpha_with_fallback",
+      "fingers": 1,
+      "require_input_manager": true,
+      "fallback_shortcut": "",
+      "path": [
+        { "space": "image", "x": 0.45, "y": 0.6 },
+        { "space": "image", "x": 0.55, "y": 0.6 }
+      ],
+      "sample_pos": { "space": "image", "x": 0.5, "y": 0.6 },
+      "min_alpha": 1,
+      "max_alpha": 255,
+      "timeout_ms": 2000,
+      "step_ms": 20
+    }
+  ]
+}
+
