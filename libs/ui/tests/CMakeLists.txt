@@ -20,6 +20,7 @@ kis_add_tests(
     kis_shape_layer_test.cpp
     KisSafeDocumentLoaderTest.cpp
     KisSurfaceColorSpaceWrapperTest.cpp
+    kis_touch_ui_mouse_fallback_filter_test.cpp
 
     LINK_LIBRARIES kritaui kritatestsdk
     )
