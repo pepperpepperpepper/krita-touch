@@ -7,10 +7,10 @@
 #ifndef KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_H
 #define KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_H
 
+#include <QEvent>
 #include <QObject>
 #include <QPointer>
 
-class QEvent;
 class QPointF;
 class QWidget;
 
