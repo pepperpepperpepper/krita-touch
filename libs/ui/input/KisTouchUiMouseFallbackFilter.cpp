@@ -59,10 +59,31 @@ bool KisTouchUiMouseFallbackFilter::isTouchNativeWidget(QWidget *w)
     return false;
 }
 
+QWidget *KisTouchUiMouseFallbackFilter::closestCanvasWidget(QWidget *w)
+{
+    for (QWidget *p = w; p; p = p->parentWidget()) {
+        if (isCanvasWidget(p)) {
+            return p;
+        }
+    }
+    return nullptr;
+}
+
+QWidget *KisTouchUiMouseFallbackFilter::closestTouchNativeWidget(QWidget *w)
+{
+    for (QWidget *p = w; p; p = p->parentWidget()) {
+        if (isTouchNativeWidget(p)) {
+            return p;
+        }
+    }
+    return nullptr;
+}
+
 void KisTouchUiMouseFallbackFilter::resetEmulation()
 {
     m_targetWidget.clear();
     m_touchId = -1;
+    m_mode = EmulationMode::None;
 }
 
 void KisTouchUiMouseFallbackFilter::sendMouseEvent(QWidget *targetWidget,
@@ -91,6 +112,70 @@ void KisTouchUiMouseFallbackFilter::sendMouseEvent(QWidget *targetWidget,
     QApplication::sendEvent(targetWidget, &mouseEvent);
 }
 
+namespace
+{
+
+static QList<QTouchEvent::TouchPoint> mapTouchPointsToWidget(const QList<QTouchEvent::TouchPoint> &srcPoints, QWidget *targetWidget)
+{
+    QList<QTouchEvent::TouchPoint> mapped;
+    mapped.reserve(srcPoints.size());
+
+    for (const QTouchEvent::TouchPoint &src : srcPoints) {
+        QTouchEvent::TouchPoint tp = src;
+
+        const QPoint globalPoint = src.screenPos().toPoint();
+        const QPoint localPoint = targetWidget->mapFromGlobal(globalPoint);
+        tp.setPos(QPointF(localPoint));
+
+        const QPoint globalStartPoint = src.startScreenPos().toPoint();
+        const QPoint localStartPoint = targetWidget->mapFromGlobal(globalStartPoint);
+        tp.setStartPos(QPointF(localStartPoint));
+
+        const QPoint globalLastPoint = src.lastScreenPos().toPoint();
+        const QPoint localLastPoint = targetWidget->mapFromGlobal(globalLastPoint);
+        tp.setLastPos(QPointF(localLastPoint));
+
+        mapped.append(tp);
+    }
+
+    return mapped;
+}
+
+static void sendMappedTouchEvent(QWidget *targetWidget, QTouchEvent *srcEvent)
+{
+    if (!targetWidget || !srcEvent) {
+        return;
+    }
+
+    const QList<QTouchEvent::TouchPoint> mappedPoints =
+        mapTouchPointsToWidget(srcEvent->touchPoints(), targetWidget);
+
+    QTouchEvent mappedEvent(srcEvent->type(),
+                            srcEvent->device(),
+                            srcEvent->modifiers(),
+                            srcEvent->touchPointStates(),
+                            mappedPoints);
+    mappedEvent.setTimestamp(srcEvent->timestamp());
+
+    QApplication::sendEvent(targetWidget, &mappedEvent);
+}
+
+static bool watchedIsWidgetInSubtree(QObject *watched, QWidget *targetWidget)
+{
+    QWidget *watchedWidget = qobject_cast<QWidget *>(watched);
+    if (!watchedWidget || !targetWidget) {
+        return false;
+    }
+
+    if (watchedWidget == targetWidget) {
+        return true;
+    }
+
+    return targetWidget->isAncestorOf(watchedWidget);
+}
+
+}
+
 bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
 {
     const QEvent::Type type = event ? event->type() : QEvent::None;
@@ -112,17 +197,18 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
         return false;
     }
 
-    const QList<QTouchEvent::TouchPoint> points = touchEvent->touchPoints();
-    if (points.size() != 1) {
-        resetEmulation();
-        return false;
-    }
-
-    const QTouchEvent::TouchPoint &tp = points.first();
-    const int tpId = tp.id();
-    const QPointF screenPos = tp.screenPos();
-
     if (type == QEvent::TouchBegin) {
+        resetEmulation();
+
+        const QList<QTouchEvent::TouchPoint> points = touchEvent->touchPoints();
+        if (points.isEmpty()) {
+            return false;
+        }
+
+        const QTouchEvent::TouchPoint &tp = points.first();
+        const int tpId = tp.id();
+        const QPointF screenPos = tp.screenPos();
+
         QWidget *targetWidget = QApplication::widgetAt(screenPos.toPoint());
 
         // If we can't resolve a widget, don't interfere.
@@ -131,13 +217,54 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
             return false;
         }
 
+        if (isInCanvas(targetWidget)) {
+            QWidget *canvasWidget = closestCanvasWidget(targetWidget);
+            if (canvasWidget) {
+                targetWidget = canvasWidget;
+            }
+        } else if (isTouchNativeWidget(targetWidget)) {
+            QWidget *nativeWidget = closestTouchNativeWidget(targetWidget);
+            if (nativeWidget) {
+                targetWidget = nativeWidget;
+            }
+        }
+
         if (isInCanvas(targetWidget) || isTouchNativeWidget(targetWidget)) {
+            // Touch painting and touch-native widgets require real touch events.
+            //
+            // On Wayland/Qt, touch can arrive on a QWindow (QWidgetWindow) instead of the actual
+            // widget hierarchy; in that case the canvas/widgets never see the event. Retarget
+            // the touch sequence to the widget under the touch to keep touch painting stable.
+            if (!watchedIsWidgetInSubtree(watched, targetWidget)) {
+                m_targetWidget = targetWidget;
+                m_mode = EmulationMode::TouchForward;
+
+                if (debugLoggingEnabled()) {
+                    qWarning() << "Touch UI mouse fallback: forward begin"
+                               << "watched=" << (watched ? watched->metaObject()->className() : "null")
+                               << (watched ? watched->objectName() : QString())
+                               << "target=" << targetWidget->metaObject()->className()
+                               << targetWidget->objectName()
+                               << "screen=" << screenPos;
+                }
+
+                sendMappedTouchEvent(targetWidget, touchEvent);
+                event->accept();
+                return true;
+            }
+
+            resetEmulation();
+            return false;
+        }
+
+        if (points.size() != 1) {
             resetEmulation();
             return false;
         }
 
         m_targetWidget = targetWidget;
         m_touchId = tpId;
+        m_mode = EmulationMode::Mouse;
 
         if (debugLoggingEnabled()) {
             qWarning() << "Touch UI mouse fallback: begin"
@@ -158,7 +285,36 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
         return true;
     }
 
-    if (m_targetWidget.isNull() || (m_touchId >= 0 && tpId != m_touchId)) {
+    if (m_mode == EmulationMode::None) {
+        return false;
+    }
+
+    if (m_targetWidget.isNull()) {
+        resetEmulation();
+        return false;
+    }
+
+    if (m_mode == EmulationMode::TouchForward) {
+        sendMappedTouchEvent(m_targetWidget.data(), touchEvent);
+        if (type == QEvent::TouchEnd || type == QEvent::TouchCancel) {
+            resetEmulation();
+        }
+        event->accept();
+        return true;
+    }
+
+    // Mouse emulation mode: single-finger only.
+    const QList<QTouchEvent::TouchPoint> points = touchEvent->touchPoints();
+    if (points.size() != 1) {
+        resetEmulation();
+        return false;
+    }
+
+    const QTouchEvent::TouchPoint &tp = points.first();
+    const int tpId = tp.id();
+    const QPointF screenPos = tp.screenPos();
+
+    if (m_touchId >= 0 && tpId != m_touchId) {
         return false;
     }
 
@@ -184,4 +340,3 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
     event->accept();
     return true;
 }
-

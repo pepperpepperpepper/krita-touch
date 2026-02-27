@@ -14,7 +14,7 @@ class KisTouchUiMouseFallbackFilterTest : public QObject
     Q_OBJECT
 private Q_SLOTS:
     void testTouchOnWindowClicksButton();
+    void testTouchOnWindowForwardsTouchToTouchNativeWidget();
 };
 
 #endif // KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_TEST_H
-

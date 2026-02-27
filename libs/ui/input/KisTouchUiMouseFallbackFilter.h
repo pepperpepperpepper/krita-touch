@@ -37,11 +37,19 @@ protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    enum class EmulationMode {
+        None,
+        Mouse,
+        TouchForward,
+    };
+
     static bool debugLoggingEnabled();
 
     static bool isCanvasWidget(QWidget *w);
     static bool isInCanvas(QWidget *w);
     static bool isTouchNativeWidget(QWidget *w);
+    static QWidget *closestCanvasWidget(QWidget *w);
+    static QWidget *closestTouchNativeWidget(QWidget *w);
 
     void resetEmulation();
 
@@ -55,6 +63,7 @@ private:
 private:
     QPointer<QWidget> m_targetWidget;
     int m_touchId{-1};
+    EmulationMode m_mode{EmulationMode::None};
 };
 
 #endif // KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_H

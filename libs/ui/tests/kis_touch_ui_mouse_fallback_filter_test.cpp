@@ -57,6 +57,37 @@ static void sendSingleTouch(QWindow *window, QEvent::Type type, const QPointF &s
     QCoreApplication::sendEvent(window, &ev);
 }
 
+class RecordingTouchWidget : public QWidget
+{
+public:
+    int touchBeginCount{0};
+    int touchUpdateCount{0};
+    int touchEndCount{0};
+    int touchCancelCount{0};
+
+protected:
+    bool event(QEvent *event) override
+    {
+        switch (event->type()) {
+        case QEvent::TouchBegin:
+            touchBeginCount++;
+            break;
+        case QEvent::TouchUpdate:
+            touchUpdateCount++;
+            break;
+        case QEvent::TouchEnd:
+            touchEndCount++;
+            break;
+        case QEvent::TouchCancel:
+            touchCancelCount++;
+            break;
+        default:
+            break;
+        }
+        return QWidget::event(event);
+    }
+};
+
 }
 
 void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowClicksButton()
@@ -64,7 +95,8 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowClicksButton()
     KisConfig cfg(false);
     cfg.setTouchModeEnabled(true);
 
-    qApp->installEventFilter(new KisTouchUiMouseFallbackFilter(qApp));
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
 
     QWidget window;
     window.resize(320, 240);
@@ -94,6 +126,49 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowClicksButton()
     QApplication::processEvents();
 
     QVERIFY(clickedSpy.count() >= 1);
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
+}
+
+void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardsTouchToTouchNativeWidget()
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
+
+    QWidget window;
+    window.resize(320, 240);
+
+    RecordingTouchWidget touchNative(&window);
+    touchNative.setObjectName(QStringLiteral("touchColorPickerButton"));
+    touchNative.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    touchNative.resize(160, 80);
+    touchNative.move(20, 20);
+
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    window.winId();
+    QWindow *windowHandle = window.windowHandle();
+    QVERIFY(windowHandle);
+
+    const QPoint globalPos = touchNative.mapToGlobal(touchNative.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalPos), &touchNative);
+
+    const QPointF screenPos(globalPos);
+    sendSingleTouch(windowHandle, QEvent::TouchBegin, screenPos, Qt::TouchPointPressed);
+    QApplication::processEvents();
+    sendSingleTouch(windowHandle, QEvent::TouchEnd, screenPos, Qt::TouchPointReleased);
+    QApplication::processEvents();
+
+    QVERIFY(touchNative.touchBeginCount >= 1);
+    QVERIFY(touchNative.touchEndCount >= 1);
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
 }
 
 SIMPLE_TEST_MAIN(KisTouchUiMouseFallbackFilterTest)
