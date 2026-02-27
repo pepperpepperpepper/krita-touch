@@ -37,18 +37,22 @@ static QList<QTouchEvent::TouchPoint> singleTouchPoint(const QPointF &localPos, 
     QTouchEvent::TouchPoint tp(0);
     tp.setState(state);
     tp.setPos(localPos);
+    tp.setScenePos(localPos);
     tp.setScreenPos(screenPos);
     tp.setStartPos(localPos);
+    tp.setStartScenePos(localPos);
     tp.setStartScreenPos(screenPos);
     tp.setLastPos(localPos);
+    tp.setLastScenePos(localPos);
     tp.setLastScreenPos(screenPos);
     return {tp};
 }
 
 static void sendSingleTouch(QWindow *window, QEvent::Type type, const QPointF &screenPos, Qt::TouchPointState state)
 {
-    // The filter uses `screenPos` + `QApplication::widgetAt()`; the local pos is irrelevant.
-    const QPointF localPos = screenPos;
+    // The filter may use `scenePos()` (window-local) to resolve widgets, so populate it.
+    const QPoint localPoint = window->mapFromGlobal(screenPos.toPoint());
+    const QPointF localPos(localPoint);
     QTouchEvent ev(type,
                    testTouchDevice(),
                    Qt::NoModifier,

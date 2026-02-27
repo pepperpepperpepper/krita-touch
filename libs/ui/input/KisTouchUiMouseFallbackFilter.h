@@ -54,6 +54,7 @@ private:
     void resetEmulation();
 
     void sendMouseEvent(QWidget *targetWidget,
+                        const QPointF &windowPos,
                         const QPointF &screenPos,
                         Qt::KeyboardModifiers modifiers,
                         QEvent::Type mouseType,
