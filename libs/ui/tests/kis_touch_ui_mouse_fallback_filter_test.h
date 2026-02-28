@@ -17,6 +17,7 @@ private Q_SLOTS:
     void testTouchOnWindowForwardsTouchToTouchNativeWidget();
     void testTouchOnWindowForwardedTouchUsesWindowCoordsForMapping();
     void testTouchOnWindowForwardedTouchUsesPosWhenScenePosIsBogus();
+    void testTouchOnWindowForwardedTouchUsesScreenPosWhenPosIsBogus();
 };
 
 #endif // KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_TEST_H

@@ -121,6 +121,47 @@ void KisTouchUiMouseFallbackFilter::sendMouseEvent(QWidget *targetWidget,
 namespace
 {
 
+static bool globalPosLooksInside(QWidget *topLevelWidget, const QPointF &globalPos)
+{
+    if (!topLevelWidget) {
+        return false;
+    }
+
+    const QPoint windowPoint = topLevelWidget->mapFromGlobal(globalPos.toPoint());
+    return topLevelWidget->rect().contains(windowPoint);
+}
+
+static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
+                                           const QPointF &pos,
+                                           const QPointF &screenPos,
+                                           QWidget *topLevelWidget)
+{
+    if (!sourceWindow) {
+        return screenPos;
+    }
+
+    // Primary: derive global position from the window-local `pos` using QWindow mapping.
+    // This is required for our Wayland simulation where TouchPoint::screenPos may actually
+    // contain window-local coordinates.
+    const QPointF globalFromPos(sourceWindow->mapToGlobal(pos.toPoint()));
+
+    // Fallback: if mapping from `pos` looks implausible for the top-level widget, prefer the
+    // event-provided screenPos (useful when a platform reports bogus `pos` values).
+    if (topLevelWidget) {
+        const bool posInside = globalPosLooksInside(topLevelWidget, globalFromPos);
+        if (posInside) {
+            return globalFromPos;
+        }
+
+        const bool screenInside = globalPosLooksInside(topLevelWidget, screenPos);
+        if (screenInside) {
+            return screenPos;
+        }
+    }
+
+    return globalFromPos;
+}
+
 static QWidget *topLevelWidgetForWatched(QObject *watched)
 {
     if (QWidget *watchedWidget = qobject_cast<QWidget *>(watched)) {
@@ -265,17 +306,19 @@ static QList<QTouchEvent::TouchPoint> mapTouchPointsToWidget(const QList<QTouchE
         QPointF lastScreenPos;
 
         if (sourceWindow && windowWidget) {
-            const QPoint globalPos = sourceWindow->mapToGlobal(src.pos().toPoint());
-            const QPoint globalStartPos = sourceWindow->mapToGlobal(src.startPos().toPoint());
-            const QPoint globalLastPos = sourceWindow->mapToGlobal(src.lastPos().toPoint());
+            const QPointF bestGlobalPos = bestGlobalPosForWindowTouch(sourceWindow, src.pos(), src.screenPos(), windowWidget);
+            const QPointF bestGlobalStartPos =
+                bestGlobalPosForWindowTouch(sourceWindow, src.startPos(), src.startScreenPos(), windowWidget);
+            const QPointF bestGlobalLastPos =
+                bestGlobalPosForWindowTouch(sourceWindow, src.lastPos(), src.lastScreenPos(), windowWidget);
 
-            windowPos = QPointF(windowWidget->mapFromGlobal(globalPos));
-            startWindowPos = QPointF(windowWidget->mapFromGlobal(globalStartPos));
-            lastWindowPos = QPointF(windowWidget->mapFromGlobal(globalLastPos));
+            windowPos = QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
+            startWindowPos = QPointF(windowWidget->mapFromGlobal(bestGlobalStartPos.toPoint()));
+            lastWindowPos = QPointF(windowWidget->mapFromGlobal(bestGlobalLastPos.toPoint()));
 
-            screenPos = QPointF(globalPos);
-            startScreenPos = QPointF(globalStartPos);
-            lastScreenPos = QPointF(globalLastPos);
+            screenPos = bestGlobalPos;
+            startScreenPos = bestGlobalStartPos;
+            lastScreenPos = bestGlobalLastPos;
         } else {
             // QWidget delivery: scenePos is window-local.
             windowPos = src.scenePos();
@@ -423,26 +466,27 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
 
         QWidget *topLevelWidget = nullptr;
         QWidget *targetWidget = resolveWidgetAtTouchPoint(watched, tp, &topLevelWidget);
+        QWidget *windowWidget = topLevelWidget ? topLevelWidget : (targetWidget ? targetWidget->window() : nullptr);
 
-        const QPointF screenPos = [&]() -> QPointF {
+        const QPointF bestGlobalPos = [&]() -> QPointF {
             if (sourceWindow) {
-                return QPointF(sourceWindow->mapToGlobal(tp.pos().toPoint()));
+                return bestGlobalPosForWindowTouch(sourceWindow, tp.pos(), tp.screenPos(), windowWidget);
             }
-            if (topLevelWidget) {
-                return QPointF(topLevelWidget->mapToGlobal(tp.scenePos().toPoint()));
+            if (windowWidget) {
+                return QPointF(windowWidget->mapToGlobal(tp.scenePos().toPoint()));
             }
             return tp.screenPos();
         }();
 
+        const QPointF screenPos = [&]() -> QPointF {
+            return bestGlobalPos;
+        }();
+
         const QPointF windowPos = [&]() -> QPointF {
-            if (sourceWindow) {
-                const QPoint global = sourceWindow->mapToGlobal(tp.pos().toPoint());
-                if (topLevelWidget) {
-                    return QPointF(topLevelWidget->mapFromGlobal(global));
-                }
-                return tp.pos();
+            if (windowWidget) {
+                return QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
             }
-            return tp.scenePos();
+            return sourceWindow ? tp.pos() : tp.scenePos();
         }();
 
         if (debugLoggingEnabled()) {
@@ -578,27 +622,27 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
     const QTouchEvent::TouchPoint &tp = points.first();
     const int tpId = tp.id();
     QWindow *sourceWindow = qobject_cast<QWindow *>(watched);
-    const QPointF screenPos = [&]() -> QPointF {
+
+    QWidget *windowWidget = m_targetWidget ? m_targetWidget->window() : nullptr;
+    const QPointF bestGlobalPos = [&]() -> QPointF {
         if (sourceWindow) {
-            return QPointF(sourceWindow->mapToGlobal(tp.pos().toPoint()));
+            return bestGlobalPosForWindowTouch(sourceWindow, tp.pos(), tp.screenPos(), windowWidget);
         }
-        QWidget *topLevelWidget = m_targetWidget ? m_targetWidget->window() : nullptr;
-        if (topLevelWidget) {
-            return QPointF(topLevelWidget->mapToGlobal(tp.scenePos().toPoint()));
+        if (windowWidget) {
+            return QPointF(windowWidget->mapToGlobal(tp.scenePos().toPoint()));
         }
         return tp.screenPos();
     }();
 
+    const QPointF screenPos = [&]() -> QPointF {
+        return bestGlobalPos;
+    }();
+
     const QPointF windowPos = [&]() -> QPointF {
-        if (sourceWindow) {
-            const QPoint global = sourceWindow->mapToGlobal(tp.pos().toPoint());
-            QWidget *topLevelWidget = m_targetWidget ? m_targetWidget->window() : nullptr;
-            if (topLevelWidget) {
-                return QPointF(topLevelWidget->mapFromGlobal(global));
-            }
-            return tp.pos();
+        if (windowWidget) {
+            return QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
         }
-        return tp.scenePos();
+        return sourceWindow ? tp.pos() : tp.scenePos();
     }();
 
     if (m_touchId >= 0 && tpId != m_touchId) {

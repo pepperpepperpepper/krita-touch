@@ -364,4 +364,57 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesPosWh
     filter->deleteLater();
 }
 
+void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesScreenPosWhenPosIsBogus()
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+    QVERIFY(KisConfig(true).touchModeEnabled());
+
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
+
+    QWidget window;
+    window.resize(320, 240);
+
+    RecordingTouchWidget touchNative(&window);
+    touchNative.setObjectName(QStringLiteral("touchColorPickerButton"));
+    touchNative.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    touchNative.resize(160, 80);
+    touchNative.move(20, 20);
+
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    window.winId();
+    QWindow *windowHandle = window.windowHandle();
+    QVERIFY(windowHandle);
+
+    const QPoint globalPos = touchNative.mapToGlobal(touchNative.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalPos), &touchNative);
+
+    const QPoint windowPos = windowHandle->mapFromGlobal(globalPos);
+    const QPoint expectedLocal = touchNative.mapFrom(&window, windowPos);
+    QVERIFY(window.rect().contains(windowPos));
+    QCOMPARE(window.childAt(windowPos), &touchNative);
+
+    // Simulate a failure mode where the touch sequence is delivered to the window handle and
+    // TouchPoint::pos() is bogus while TouchPoint::screenPos() is correct global.
+    const QPointF bogusPos(windowPos + QPoint(1000, 1000));
+    const QPointF bogusScenePos(bogusPos);
+    const QPointF screenPos(globalPos);
+
+    sendSingleTouchCustomPosScene(windowHandle, QEvent::TouchBegin, bogusPos, bogusScenePos, screenPos, Qt::TouchPointPressed);
+    QApplication::processEvents();
+    sendSingleTouchCustomPosScene(windowHandle, QEvent::TouchEnd, bogusPos, bogusScenePos, screenPos, Qt::TouchPointReleased);
+    QApplication::processEvents();
+
+    QVERIFY(touchNative.touchBeginCount >= 1);
+    QVERIFY(touchNative.touchEndCount >= 1);
+    QVERIFY(touchNative.hasLastBeginPos);
+    QCOMPARE(touchNative.lastBeginPos, QPointF(expectedLocal));
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
+}
+
 SIMPLE_TEST_MAIN(KisTouchUiMouseFallbackFilterTest)
