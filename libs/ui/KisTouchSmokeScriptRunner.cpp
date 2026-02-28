@@ -163,6 +163,7 @@ using KisTouchSmokeScriptRunnerDetail::touchHoldOverlayNoChange;
 using KisTouchSmokeScriptRunnerDetail::touchHoldWaitOverlayVisibleWithFallback;
 using KisTouchSmokeScriptRunnerDetail::touchTapCheckableActionNoChange;
 using KisTouchSmokeScriptRunnerDetail::touchTapCheckableActionWithFallback;
+using KisTouchSmokeScriptRunnerDetail::touchUiTapActionWidget;
 using KisTouchSmokeScriptRunnerDetail::touchTapLayerCountNoChange;
 using KisTouchSmokeScriptRunnerDetail::touchTapLayerCountWithFallback;
 using KisTouchSmokeScriptRunnerDetail::touchShortcutFromString;
@@ -542,6 +543,11 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const bool expected = step.value(QStringLiteral("expected")).toBool(false);
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(500);
             ok = assertActiveToolMaskSyntheticEvents(mainWindow, expected, timeoutMs, &details, &localError);
+        } else if (op == QStringLiteral("touch.ui_tap_action_widget")) {
+            const QString actionId = step.value(QStringLiteral("action_id")).toString();
+            const bool deliverToWindowHandle = step.value(QStringLiteral("deliver_to_window_handle")).toBool(true);
+            const bool useWindowLocalScreenPos = step.value(QStringLiteral("use_window_local_screen_pos")).toBool(false);
+            ok = touchUiTapActionWidget(mainWindow, actionId, deliverToWindowHandle, useWindowLocalScreenPos, &details, &localError);
         } else if (op == QStringLiteral("touch.tap_checkable_action_with_fallback")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
             const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();

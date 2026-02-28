@@ -156,6 +156,15 @@ static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
     // contain window-local coordinates.
     const QPointF globalFromPos(sourceWindow->mapToGlobal(pos.toPoint()));
 
+    const QPointF windowOriginGlobal(sourceWindow->mapToGlobal(QPoint(0, 0)));
+    const QPointF originDelta = globalFromPos - screenPos;
+    const bool screenPosLooksWindowLocal =
+        qAbs(originDelta.x() - windowOriginGlobal.x()) <= 2.0 &&
+        qAbs(originDelta.y() - windowOriginGlobal.y()) <= 2.0;
+    if (screenPosLooksWindowLocal) {
+        return globalFromPos;
+    }
+
     const bool posInside = topLevelWidget ? globalPosLooksInside(topLevelWidget, globalFromPos) : false;
     const bool screenInside = topLevelWidget ? globalPosLooksInside(topLevelWidget, screenPos) : false;
 
@@ -254,6 +263,14 @@ static QWidget *resolveWidgetAtTouchPoint(QObject *watched,
         // event-provided screenPos/scenePos fields (which can be unreliable).
         if (watchedWindow) {
             const QPointF bestGlobalPos = bestGlobalPosForWindowTouch(watchedWindow, tp.pos(), tp.screenPos(), topLevelWidget);
+            // Prefer QApplication::widgetAt() for the final pick so we ignore hidden overlays
+            // (e.g. a popup that was shown then hidden but still occupies geometry).
+            if (QWidget *w = QApplication::widgetAt(bestGlobalPos.toPoint())) {
+                if (outTopLevelWidget) {
+                    *outTopLevelWidget = w->window();
+                }
+                return w;
+            }
             const QPoint windowPoint = topLevelWidget->mapFromGlobal(bestGlobalPos.toPoint());
             if (QWidget *w = widgetAtWindowPoint(windowPoint)) {
                 return w;

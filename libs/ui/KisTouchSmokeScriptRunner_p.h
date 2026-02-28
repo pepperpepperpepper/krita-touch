@@ -145,6 +145,13 @@ bool touchTapCheckableActionNoChange(KisMainWindow *mainWindow,
                                     QJsonObject *details,
                                     QString *errorOut);
 
+bool touchUiTapActionWidget(KisMainWindow *mainWindow,
+                            const QString &actionId,
+                            bool deliverToWindowHandle,
+                            bool useWindowLocalScreenPos,
+                            QJsonObject *details,
+                            QString *errorOut);
+
 bool touchTapLayerCountWithFallback(KisMainWindow *mainWindow,
                                    int fingerCount,
                                    const QJsonObject &posObj,

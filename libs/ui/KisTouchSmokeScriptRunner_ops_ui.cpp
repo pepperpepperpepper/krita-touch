@@ -10,7 +10,9 @@
 #include <QAction>
 #include <QTouchDevice>
 #include <QTouchEvent>
+#include <QToolBar>
 #include <QWidget>
+#include <QWindow>
 
 #include <KoCanvasResourcesIds.h>
 #include <KoToolBase.h>
@@ -540,6 +542,141 @@ bool touchTapCheckableActionNoChange(KisMainWindow *mainWindow,
     }
 
     return blocked;
+}
+
+bool touchUiTapActionWidget(KisMainWindow *mainWindow,
+                            const QString &actionId,
+                            bool deliverToWindowHandle,
+                            bool useWindowLocalScreenPos,
+                            QJsonObject *details,
+                            QString *errorOut)
+{
+    if (!mainWindow || !mainWindow->actionCollection()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing action collection");
+        }
+        return false;
+    }
+
+    QAction *action = mainWindow->actionCollection()->action(actionId);
+    if (!action) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Action not found: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    QWidget *targetWidget = nullptr;
+
+    // Prefer the widget in the Touch Top Bar when available.
+    if (QToolBar *touchTopBar = mainWindow->findChild<QToolBar *>(QStringLiteral("touchTopBar"))) {
+        if (touchTopBar->actions().contains(action)) {
+            targetWidget = touchTopBar->widgetForAction(action);
+        }
+    }
+
+    if (!targetWidget) {
+        const QList<QWidget *> associated = action->associatedWidgets();
+        for (QWidget *w : associated) {
+            if (!w) {
+                continue;
+            }
+
+            if (QToolBar *tb = qobject_cast<QToolBar *>(w)) {
+                if (QWidget *button = tb->widgetForAction(action)) {
+                    targetWidget = button;
+                    break;
+                }
+            }
+
+            targetWidget = w;
+            break;
+        }
+    }
+
+    if (!targetWidget) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("No associated widget for action: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    if (!targetWidget->isVisible()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Action widget not visible: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    mainWindow->winId();
+    QWindow *windowHandle = targetWidget->window() ? targetWidget->window()->windowHandle() : nullptr;
+    if (!windowHandle) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing window handle for action widget: %1").arg(actionId);
+        }
+        return false;
+    }
+
+    QTouchDevice *device = touchDevice();
+    if (!device) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("Missing touch device");
+        }
+        return false;
+    }
+
+    const QPoint globalCenter = targetWidget->mapToGlobal(targetWidget->rect().center());
+    const QPoint windowPos = windowHandle->mapFromGlobal(globalCenter);
+    const QPointF windowPosF(windowPos);
+    const QPointF screenPosF = useWindowLocalScreenPos ? QPointF(windowPos) : QPointF(globalCenter);
+
+    if (details) {
+        details->insert(QStringLiteral("action_id"), actionId);
+        details->insert(QStringLiteral("deliver_to_window_handle"), deliverToWindowHandle);
+        details->insert(QStringLiteral("use_window_local_screen_pos"), useWindowLocalScreenPos);
+        details->insert(QStringLiteral("target_class"), QString::fromLatin1(targetWidget->metaObject()->className()));
+        details->insert(QStringLiteral("target_object_name"), targetWidget->objectName());
+        details->insert(QStringLiteral("global_x"), globalCenter.x());
+        details->insert(QStringLiteral("global_y"), globalCenter.y());
+        details->insert(QStringLiteral("window_x"), windowPos.x());
+        details->insert(QStringLiteral("window_y"), windowPos.y());
+    }
+
+    auto buildPoint = [&](Qt::TouchPointState state, qreal pressure) {
+        QTouchEvent::TouchPoint tp(0);
+        tp.setState(state);
+        tp.setPos(windowPosF);
+        tp.setScenePos(windowPosF);
+        tp.setScreenPos(screenPosF);
+        tp.setStartPos(windowPosF);
+        tp.setStartScenePos(windowPosF);
+        tp.setStartScreenPos(screenPosF);
+        tp.setLastPos(windowPosF);
+        tp.setLastScenePos(windowPosF);
+        tp.setLastScreenPos(screenPosF);
+        tp.setPressure(pressure);
+        return tp;
+    };
+
+    QList<QTouchEvent::TouchPoint> beginPoints = {buildPoint(Qt::TouchPointPressed, 1.0)};
+    QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+    if (deliverToWindowHandle) {
+        QApplication::sendEvent(windowHandle, &beginEvent);
+    } else {
+        QApplication::sendEvent(targetWidget, &beginEvent);
+    }
+    QApplication::processEvents();
+
+    QList<QTouchEvent::TouchPoint> endPoints = {buildPoint(Qt::TouchPointReleased, 0.0)};
+    QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+    if (deliverToWindowHandle) {
+        QApplication::sendEvent(windowHandle, &endEvent);
+    } else {
+        QApplication::sendEvent(targetWidget, &endEvent);
+    }
+    QApplication::processEvents();
+
+    return true;
 }
 
 bool actionTriggerWaitLayerCountDelta(KisMainWindow *mainWindow,

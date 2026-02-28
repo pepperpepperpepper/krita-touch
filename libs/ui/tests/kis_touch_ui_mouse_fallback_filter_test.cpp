@@ -296,6 +296,66 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesWindo
     filter->deleteLater();
 }
 
+void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesWindowCoordsWhenScreenPosLooksPlausible()
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
+
+    QWidget window;
+    window.setGeometry(50, 50, 800, 600);
+
+    RecordingTouchWidget touchNative(&window);
+    touchNative.setObjectName(QStringLiteral("touchColorPickerButton"));
+    touchNative.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    touchNative.resize(160, 80);
+    touchNative.move(200, 200);
+
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    window.winId();
+    QWindow *windowHandle = window.windowHandle();
+    QVERIFY(windowHandle);
+
+    const QPoint globalPos = touchNative.mapToGlobal(touchNative.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalPos), &touchNative);
+
+    const QPoint windowPos = windowHandle->mapFromGlobal(globalPos);
+    const QPoint expectedLocal = touchNative.mapFrom(&window, windowPos);
+
+    // Some environments place windows at 0,0 even if a position is requested; nudge it so that
+    // a window-local screenPos can look plausible as a global coordinate.
+    if (windowHandle->mapToGlobal(QPoint(0, 0)) == QPoint(0, 0)) {
+        window.move(50, 50);
+        QApplication::processEvents();
+    }
+
+    const QPoint localFromBogusGlobal = windowHandle->mapFromGlobal(windowPos);
+    const QRect windowLocalRect(QPoint(0, 0), windowHandle->size());
+    QVERIFY(windowLocalRect.contains(localFromBogusGlobal));
+
+    // Send a bogus screenPos that is actually window-local, but would still look plausible as a
+    // global point for many window placements.
+    const QPointF scenePos(windowPos);
+    const QPointF bogusScreenPos(windowPos);
+
+    sendSingleTouchCustom(windowHandle, QEvent::TouchBegin, scenePos, bogusScreenPos, Qt::TouchPointPressed);
+    QApplication::processEvents();
+    sendSingleTouchCustom(windowHandle, QEvent::TouchEnd, scenePos, bogusScreenPos, Qt::TouchPointReleased);
+    QApplication::processEvents();
+
+    QVERIFY(touchNative.touchBeginCount >= 1);
+    QVERIFY(touchNative.touchEndCount >= 1);
+    QVERIFY(touchNative.hasLastBeginPos);
+    QCOMPARE(touchNative.lastBeginPos, QPointF(expectedLocal));
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
+}
+
 void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesPosWhenScenePosIsBogus()
 {
     KisConfig cfg(false);

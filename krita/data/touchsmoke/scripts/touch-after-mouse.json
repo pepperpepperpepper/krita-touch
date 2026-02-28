@@ -75,6 +75,32 @@
       "hold_ms_at_end": 200
     },
     {
+      "name": "touch_after_mouse.ui_touch_actions_sheet_after_mouse",
+      "op": "touch.ui_tap_action_widget",
+      "action_id": "touch_actions_sheet",
+      "deliver_to_window_handle": true,
+      "use_window_local_screen_pos": true
+    },
+    {
+      "name": "touch_after_mouse.ui_actions_sheet_visible_after_mouse",
+      "op": "ui.wait_overlay_visible",
+      "object_name": "kisTouchActionsSheet",
+      "expected": true,
+      "timeout_ms": 2000
+    },
+    {
+      "name": "touch_after_mouse.ui_actions_sheet_hide_after_mouse",
+      "op": "ui.overlay.hide",
+      "object_name": "kisTouchActionsSheet"
+    },
+    {
+      "name": "touch_after_mouse.ui_actions_sheet_hidden_after_mouse",
+      "op": "ui.wait_overlay_visible",
+      "object_name": "kisTouchActionsSheet",
+      "expected": false,
+      "timeout_ms": 2000
+    },
+    {
       "name": "touch_after_mouse.touch_drag_paints_1_after_mouse",
       "op": "touch.drag_path_wait_pixel_alpha_with_fallback",
       "fingers": 1,

@@ -16,6 +16,7 @@ private Q_SLOTS:
     void testTouchOnWindowClicksButton();
     void testTouchOnWindowForwardsTouchToTouchNativeWidget();
     void testTouchOnWindowForwardedTouchUsesWindowCoordsForMapping();
+    void testTouchOnWindowForwardedTouchUsesWindowCoordsWhenScreenPosLooksPlausible();
     void testTouchOnWindowForwardedTouchUsesPosWhenScenePosIsBogus();
     void testTouchOnWindowForwardedTouchUsesScreenPosWhenPosIsBogus();
     void testTouchOnWindowForwardedTouchUsesScreenPosWhenPosIsWrongButInside();
