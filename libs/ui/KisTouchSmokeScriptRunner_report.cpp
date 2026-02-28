@@ -288,6 +288,8 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
                                             int fallbackShortcut,
                                             int stepMs,
                                             int holdMsAtEnd,
+                                            bool deliverToWindowHandle,
+                                            bool useWindowLocalScreenPos,
                                             bool requireInputManager,
                                             QJsonObject *details,
                                             QString *errorOut)
@@ -329,7 +331,11 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
     bool okViaDirectAction = false;
 
     QJsonObject injectDetails;
-    sendTouchDragPath(canvasWidget, pathPoints, stepMs, holdMsAtEnd, &injectDetails);
+    if (deliverToWindowHandle) {
+        sendTouchDragPathToWindowHandle(canvasWidget, pathPoints, stepMs, holdMsAtEnd, useWindowLocalScreenPos, &injectDetails);
+    } else {
+        sendTouchDragPath(canvasWidget, pathPoints, stepMs, holdMsAtEnd, &injectDetails);
+    }
     okViaInputManager = waitForPixelAlphaInRange(mainWindow, samplePosObj, minAlpha, maxAlpha, timeoutMs, nullptr, nullptr);
 
     if (!okViaInputManager && !requireInputManager) {
@@ -347,6 +353,8 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
         details->insert(QStringLiteral("timeout_ms"), timeoutMs);
         details->insert(QStringLiteral("step_ms"), stepMs);
         details->insert(QStringLiteral("hold_ms_at_end"), holdMsAtEnd);
+        details->insert(QStringLiteral("deliver_to_window_handle"), deliverToWindowHandle);
+        details->insert(QStringLiteral("use_window_local_screen_pos"), useWindowLocalScreenPos);
         details->insert(QStringLiteral("require_input_manager"), requireInputManager);
         details->insert(QStringLiteral("input_manager_ok"), okViaInputManager);
         details->insert(QStringLiteral("direct_action_ok"), okViaDirectAction);

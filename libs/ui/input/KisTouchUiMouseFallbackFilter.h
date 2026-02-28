@@ -10,6 +10,7 @@
 #include <QEvent>
 #include <QObject>
 #include <QPointer>
+#include <kritaui_export.h>
 
 class QPointF;
 class QWidget;
@@ -26,7 +27,7 @@ class QWidget;
  * - Canvas widgets must be excluded to avoid breaking touch painting/gestures.
  * - Enable debug logging via `KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG=1`.
  */
-class KisTouchUiMouseFallbackFilter : public QObject
+class KRITAUI_EXPORT KisTouchUiMouseFallbackFilter : public QObject
 {
     Q_OBJECT
 
@@ -65,6 +66,7 @@ private:
     QPointer<QWidget> m_targetWidget;
     int m_touchId{-1};
     EmulationMode m_mode{EmulationMode::None};
+    int m_forwardingDepth{0};
 };
 
 #endif // KIS_TOUCH_UI_MOUSE_FALLBACK_FILTER_H

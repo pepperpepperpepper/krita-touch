@@ -8,6 +8,7 @@
 
 #include <QApplication>
 #include <QMouseEvent>
+#include <QScopedValueRollback>
 #include <QTouchEvent>
 #include <QWidget>
 #include <QWindow>
@@ -235,6 +236,15 @@ static void sendMappedTouchEvent(QWidget *targetWidget, QTouchEvent *srcEvent, Q
                             mappedPoints);
     mappedEvent.setTimestamp(srcEvent->timestamp());
 
+    if (qEnvironmentVariableIsSet("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") &&
+        qEnvironmentVariableIntValue("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") != 0) {
+        qWarning() << "Touch UI mouse fallback: send mapped touch"
+                   << "type=" << srcEvent->type()
+                   << "points=" << mappedPoints.size()
+                   << "target=" << targetWidget->metaObject()->className()
+                   << targetWidget->objectName();
+    }
+
     QApplication::sendEvent(targetWidget, &mappedEvent);
 }
 
@@ -264,6 +274,19 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
         return false;
     }
 
+    // We forward touch events by sending a mapped QTouchEvent directly to the widget that
+    // needs it (canvas or touch-native widgets). That send path will re-enter this filter;
+    // ignore forwarded events to avoid resetting state mid-sequence or recursively forwarding.
+    if (m_forwardingDepth > 0) {
+        if (debugLoggingEnabled()) {
+            qWarning() << "Touch UI mouse fallback: skip forwarded"
+                       << "watched=" << (watched ? watched->metaObject()->className() : "null")
+                       << (watched ? watched->objectName() : QString())
+                       << "type=" << type;
+        }
+        return false;
+    }
+
     if (!KisConfig(true).touchModeEnabled()) {
         resetEmulation();
         return false;
@@ -273,6 +296,15 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
     if (!touchEvent) {
         resetEmulation();
         return false;
+    }
+
+    if (debugLoggingEnabled() && type != QEvent::TouchBegin) {
+        qWarning() << "Touch UI mouse fallback: touch"
+                   << "watched=" << (watched ? watched->metaObject()->className() : "null")
+                   << (watched ? watched->objectName() : QString())
+                   << "type=" << type
+                   << "mode=" << static_cast<int>(m_mode)
+                   << "targetNull=" << m_targetWidget.isNull();
     }
 
     if (type == QEvent::TouchBegin) {
@@ -329,6 +361,7 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
                                << "screen=" << screenPos;
                 }
 
+                const QScopedValueRollback<int> forwardingGuard(m_forwardingDepth, m_forwardingDepth + 1);
                 sendMappedTouchEvent(targetWidget, touchEvent, topLevelWidget);
                 event->accept();
                 return true;
@@ -378,6 +411,7 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
     }
 
     if (m_mode == EmulationMode::TouchForward) {
+        const QScopedValueRollback<int> forwardingGuard(m_forwardingDepth, m_forwardingDepth + 1);
         sendMappedTouchEvent(m_targetWidget.data(), touchEvent, m_targetWidget->window());
         if (type == QEvent::TouchEnd || type == QEvent::TouchCancel) {
             resetEmulation();

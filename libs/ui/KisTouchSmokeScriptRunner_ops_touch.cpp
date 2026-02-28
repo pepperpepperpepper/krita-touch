@@ -13,6 +13,7 @@
 #include <QTouchDevice>
 #include <QTouchEvent>
 #include <QWidget>
+#include <QWindow>
 
 #include "input/KisTouchGestureAction.h"
 #include "input/kis_input_profile_manager.h"
@@ -435,6 +436,185 @@ void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoi
     if (details) {
         const QRect r = canvasWidget->rect();
         details->insert(QStringLiteral("sent"), true);
+        details->insert(QStringLiteral("step_ms"), stepMs);
+        details->insert(QStringLiteral("hold_ms_at_end"), holdMsAtEnd);
+        details->insert(QStringLiteral("steps"), steps);
+        details->insert(QStringLiteral("fingers"), fingerCount);
+        details->insert(QStringLiteral("canvas_w"), r.width());
+        details->insert(QStringLiteral("canvas_h"), r.height());
+    }
+}
+
+void sendTouchDragPathToWindowHandle(QWidget *canvasWidget,
+                                     const TouchDragPathPoints &pathPoints,
+                                     int stepMs,
+                                     int holdMsAtEnd,
+                                     bool useWindowLocalScreenPos,
+                                     QJsonObject *details)
+{
+    if (!canvasWidget) {
+        if (details) {
+            details->insert(QStringLiteral("sent"), false);
+            details->insert(QStringLiteral("error"), QStringLiteral("missing canvas widget"));
+        }
+        return;
+    }
+
+    QTouchDevice *device = touchDevice();
+    if (!device) {
+        if (details) {
+            details->insert(QStringLiteral("sent"), false);
+            details->insert(QStringLiteral("error"), QStringLiteral("missing touch device"));
+        }
+        return;
+    }
+
+    QWidget *windowWidget = canvasWidget->window();
+    if (!windowWidget) {
+        if (details) {
+            details->insert(QStringLiteral("sent"), false);
+            details->insert(QStringLiteral("error"), QStringLiteral("missing window widget"));
+        }
+        return;
+    }
+
+    // Ensure the underlying QWindow handle exists.
+    windowWidget->winId();
+    QWindow *windowHandle = windowWidget->windowHandle();
+    if (!windowHandle) {
+        if (details) {
+            details->insert(QStringLiteral("sent"), false);
+            details->insert(QStringLiteral("error"), QStringLiteral("missing window handle"));
+        }
+        return;
+    }
+
+    const int steps = pathPoints.localPoints.size();
+    if (steps < 2) {
+        if (details) {
+            details->insert(QStringLiteral("sent"), false);
+            details->insert(QStringLiteral("error"), QStringLiteral("invalid path"));
+        }
+        return;
+    }
+
+    const int fingerCount = pathPoints.localPoints.first().size();
+
+    auto windowPointAt = [&](int stepIndex, int fingerIndex) -> QPointF {
+        const QPoint local = pathPoints.localPoints.at(stepIndex).at(fingerIndex).toPoint();
+        return QPointF(canvasWidget->mapTo(windowWidget, local));
+    };
+
+    auto screenPointAt = [&](int stepIndex, int fingerIndex) -> QPointF {
+        if (useWindowLocalScreenPos) {
+            // Simulate a Wayland-like failure mode where QTouchEvent::screenPos is effectively
+            // window-local (so mapping via mapFromGlobal() would produce incorrect local coords).
+            return windowPointAt(stepIndex, fingerIndex);
+        }
+        return pathPoints.globalPoints.at(stepIndex).at(fingerIndex);
+    };
+
+    canvasWidget->setAttribute(Qt::WA_AcceptTouchEvents, true);
+
+    QList<QTouchEvent::TouchPoint> beginPoints;
+    beginPoints.reserve(fingerCount);
+    for (int i = 0; i < fingerCount; ++i) {
+        const QPointF windowPos = windowPointAt(0, i);
+        const QPointF screenPos = screenPointAt(0, i);
+
+        QTouchEvent::TouchPoint tp(i);
+        tp.setState(Qt::TouchPointPressed);
+        tp.setPos(windowPos);
+        tp.setScenePos(windowPos);
+        tp.setScreenPos(screenPos);
+        tp.setStartPos(windowPos);
+        tp.setStartScenePos(windowPos);
+        tp.setStartScreenPos(screenPos);
+        tp.setLastPos(windowPos);
+        tp.setLastScenePos(windowPos);
+        tp.setLastScreenPos(screenPos);
+        tp.setPressure(1.0);
+        beginPoints.append(tp);
+    }
+
+    QTouchEvent beginEvent(QEvent::TouchBegin, device, Qt::NoModifier, Qt::TouchPointPressed, beginPoints);
+    QApplication::sendEvent(windowHandle, &beginEvent);
+    QApplication::processEvents();
+
+    for (int step = 1; step < steps; ++step) {
+        QList<QTouchEvent::TouchPoint> updatePoints;
+        updatePoints.reserve(fingerCount);
+        for (int i = 0; i < fingerCount; ++i) {
+            const QPointF windowPos = windowPointAt(step, i);
+            const QPointF screenPos = screenPointAt(step, i);
+            const QPointF startWindowPos = windowPointAt(0, i);
+            const QPointF startScreenPos = screenPointAt(0, i);
+            const QPointF lastWindowPos = windowPointAt(step - 1, i);
+            const QPointF lastScreenPos = screenPointAt(step - 1, i);
+
+            QTouchEvent::TouchPoint tp(i);
+            tp.setState(Qt::TouchPointMoved);
+            tp.setPos(windowPos);
+            tp.setScenePos(windowPos);
+            tp.setScreenPos(screenPos);
+            tp.setStartPos(startWindowPos);
+            tp.setStartScenePos(startWindowPos);
+            tp.setStartScreenPos(startScreenPos);
+            tp.setLastPos(lastWindowPos);
+            tp.setLastScenePos(lastWindowPos);
+            tp.setLastScreenPos(lastScreenPos);
+            tp.setPressure(1.0);
+            updatePoints.append(tp);
+        }
+        QTouchEvent updateEvent(QEvent::TouchUpdate, device, Qt::NoModifier, Qt::TouchPointMoved, updatePoints);
+        QApplication::sendEvent(windowHandle, &updateEvent);
+        QApplication::processEvents();
+        if (stepMs > 0) {
+            QThread::msleep(stepMs);
+        }
+    }
+
+    if (holdMsAtEnd > 0) {
+        QThread::msleep(holdMsAtEnd);
+        QApplication::processEvents();
+    }
+
+    QApplication::processEvents();
+
+    QList<QTouchEvent::TouchPoint> endPoints;
+    endPoints.reserve(fingerCount);
+    for (int i = 0; i < fingerCount; ++i) {
+        const QPointF windowPos = windowPointAt(steps - 1, i);
+        const QPointF screenPos = screenPointAt(steps - 1, i);
+        const QPointF startWindowPos = windowPointAt(0, i);
+        const QPointF startScreenPos = screenPointAt(0, i);
+        const QPointF lastWindowPos = windowPointAt(steps - 1, i);
+        const QPointF lastScreenPos = screenPointAt(steps - 1, i);
+
+        QTouchEvent::TouchPoint tp(i);
+        tp.setState(Qt::TouchPointReleased);
+        tp.setPos(windowPos);
+        tp.setScenePos(windowPos);
+        tp.setScreenPos(screenPos);
+        tp.setStartPos(startWindowPos);
+        tp.setStartScenePos(startWindowPos);
+        tp.setStartScreenPos(startScreenPos);
+        tp.setLastPos(lastWindowPos);
+        tp.setLastScenePos(lastWindowPos);
+        tp.setLastScreenPos(lastScreenPos);
+        tp.setPressure(0.0);
+        endPoints.append(tp);
+    }
+
+    QTouchEvent endEvent(QEvent::TouchEnd, device, Qt::NoModifier, Qt::TouchPointReleased, endPoints);
+    QApplication::sendEvent(windowHandle, &endEvent);
+    QApplication::processEvents();
+
+    if (details) {
+        const QRect r = canvasWidget->rect();
+        details->insert(QStringLiteral("sent"), true);
+        details->insert(QStringLiteral("target"), QStringLiteral("window_handle"));
+        details->insert(QStringLiteral("use_window_local_screen_pos"), useWindowLocalScreenPos);
         details->insert(QStringLiteral("step_ms"), stepMs);
         details->insert(QStringLiteral("hold_ms_at_end"), holdMsAtEnd);
         details->insert(QStringLiteral("steps"), steps);

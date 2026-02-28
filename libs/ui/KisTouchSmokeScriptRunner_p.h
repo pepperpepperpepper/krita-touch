@@ -98,6 +98,13 @@ bool buildTouchDragPathPoints(KisMainWindow *mainWindow,
 
 void sendTouchDragPath(QWidget *canvasWidget, const TouchDragPathPoints &pathPoints, int stepMs, int holdMsAtEnd, QJsonObject *details);
 
+void sendTouchDragPathToWindowHandle(QWidget *canvasWidget,
+                                     const TouchDragPathPoints &pathPoints,
+                                     int stepMs,
+                                     int holdMsAtEnd,
+                                     bool useWindowLocalScreenPos,
+                                     QJsonObject *details);
+
 void performTouchDragPathViaGestureAction(int shortcut, const TouchDragPathPoints &pathPoints, QJsonObject *details);
 
 bool performTouchGestureShortcut(int shortcut, QJsonObject *details, QString *errorOut);
@@ -206,6 +213,8 @@ bool touchDragPathWaitPixelAlphaWithFallback(KisMainWindow *mainWindow,
                                             int fallbackShortcut,
                                             int stepMs,
                                             int holdMsAtEnd,
+                                            bool deliverToWindowHandle,
+                                            bool useWindowLocalScreenPos,
                                             bool requireInputManager,
                                             QJsonObject *details,
                                             QString *errorOut);

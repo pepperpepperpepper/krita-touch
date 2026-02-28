@@ -814,6 +814,8 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(1500);
             const int stepMs = step.value(QStringLiteral("step_ms")).toInt(20);
             const int holdMsAtEnd = step.value(QStringLiteral("hold_ms_at_end")).toInt(0);
+            const bool deliverToWindowHandle = step.value(QStringLiteral("deliver_to_window_handle")).toBool(false);
+            const bool useWindowLocalScreenPos = step.value(QStringLiteral("use_window_local_screen_pos")).toBool(false);
             const bool requireInputManager = step.value(QStringLiteral("require_input_manager")).toBool(false);
             const QString shortcutName = step.value(QStringLiteral("fallback_shortcut")).toString();
             const int shortcut = touchShortcutFromString(shortcutName);
@@ -830,6 +832,8 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
                                                         shortcut,
                                                         stepMs,
                                                         holdMsAtEnd,
+                                                        deliverToWindowHandle,
+                                                        useWindowLocalScreenPos,
                                                         requireInputManager,
                                                         &details,
                                                         &localError);
