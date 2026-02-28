@@ -417,4 +417,77 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesScree
     filter->deleteLater();
 }
 
+void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesScreenPosWhenPosIsWrongButInside()
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+    QVERIFY(KisConfig(true).touchModeEnabled());
+
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
+
+    QWidget window;
+    window.resize(460, 240);
+
+    RecordingTouchWidget expected(&window);
+    expected.setObjectName(QStringLiteral("touchColorPickerButton"));
+    expected.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    expected.resize(180, 80);
+    expected.move(20, 20);
+
+    RecordingTouchWidget wrong(&window);
+    wrong.setObjectName(QStringLiteral("touchColorPickerButton"));
+    wrong.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    wrong.resize(180, 80);
+    wrong.move(240, 20);
+
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    window.winId();
+    QWindow *windowHandle = window.windowHandle();
+    QVERIFY(windowHandle);
+
+    const QPoint globalExpected = expected.mapToGlobal(expected.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalExpected), &expected);
+
+    const QPoint globalWrong = wrong.mapToGlobal(wrong.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalWrong), &wrong);
+
+    const QPoint windowPosWrong = windowHandle->mapFromGlobal(globalWrong);
+    const QPoint expectedLocal = expected.mapFromGlobal(globalExpected);
+
+    // Simulate a failure mode where the touch sequence is delivered to the window handle and
+    // TouchPoint::pos()/scenePos() are plausible-but-wrong window-local coordinates while
+    // screenPos is correct global.
+    const QPointF posWrong(windowPosWrong);
+    const QPointF screenPosCorrect(globalExpected);
+
+    sendSingleTouchCustomPosScene(windowHandle,
+                                  QEvent::TouchBegin,
+                                  posWrong,
+                                  posWrong /* scenePos */,
+                                  screenPosCorrect,
+                                  Qt::TouchPointPressed);
+    QApplication::processEvents();
+    sendSingleTouchCustomPosScene(windowHandle,
+                                  QEvent::TouchEnd,
+                                  posWrong,
+                                  posWrong /* scenePos */,
+                                  screenPosCorrect,
+                                  Qt::TouchPointReleased);
+    QApplication::processEvents();
+
+    QVERIFY(expected.touchBeginCount >= 1);
+    QVERIFY(expected.touchEndCount >= 1);
+    QVERIFY(expected.hasLastBeginPos);
+    QCOMPARE(expected.lastBeginPos, QPointF(expectedLocal));
+
+    QCOMPARE(wrong.touchBeginCount, 0);
+    QCOMPARE(wrong.touchEndCount, 0);
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
+}
+
 SIMPLE_TEST_MAIN(KisTouchUiMouseFallbackFilterTest)

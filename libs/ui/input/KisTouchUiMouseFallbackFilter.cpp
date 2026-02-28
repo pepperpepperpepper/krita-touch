@@ -131,6 +131,17 @@ static bool globalPosLooksInside(QWidget *topLevelWidget, const QPointF &globalP
     return topLevelWidget->rect().contains(windowPoint);
 }
 
+static bool globalPosLooksInsideWindow(QWindow *sourceWindow, const QPointF &globalPos)
+{
+    if (!sourceWindow) {
+        return false;
+    }
+
+    const QPoint localPoint = sourceWindow->mapFromGlobal(globalPos.toPoint());
+    const QRect localRect(QPoint(0, 0), sourceWindow->size());
+    return localRect.contains(localPoint);
+}
+
 static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
                                            const QPointF &pos,
                                            const QPointF &screenPos,
@@ -145,21 +156,29 @@ static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
     // contain window-local coordinates.
     const QPointF globalFromPos(sourceWindow->mapToGlobal(pos.toPoint()));
 
-    // Fallback: if mapping from `pos` looks implausible for the top-level widget, prefer the
-    // event-provided screenPos (useful when a platform reports bogus `pos` values).
-    if (topLevelWidget) {
-        const bool posInside = globalPosLooksInside(topLevelWidget, globalFromPos);
-        if (posInside) {
-            return globalFromPos;
-        }
+    const bool posInside = topLevelWidget ? globalPosLooksInside(topLevelWidget, globalFromPos) : false;
+    const bool screenInside = topLevelWidget ? globalPosLooksInside(topLevelWidget, screenPos) : false;
 
-        const bool screenInside = globalPosLooksInside(topLevelWidget, screenPos);
-        if (screenInside) {
-            return screenPos;
-        }
+    // Prefer whichever coordinate set looks plausible for the relevant window. When both look
+    // plausible but conflict, screenPos is often the more reliable global coordinate on desktop
+    // Wayland (we've observed platforms reporting a bogus `pos` after switching input devices).
+    const bool posPlausible = posInside || globalPosLooksInsideWindow(sourceWindow, globalFromPos);
+    const bool screenPlausible = screenInside || globalPosLooksInsideWindow(sourceWindow, screenPos);
+
+    if (screenPlausible && !posPlausible) {
+        return screenPos;
+    }
+    if (posPlausible && !screenPlausible) {
+        return globalFromPos;
     }
 
-    return globalFromPos;
+    if (screenPlausible && posPlausible) {
+        const QPointF delta = globalFromPos - screenPos;
+        const bool essentiallySame = qAbs(delta.x()) <= 2.0 && qAbs(delta.y()) <= 2.0;
+        return essentiallySame ? globalFromPos : screenPos;
+    }
+
+    return globalFromPos; // Best-effort.
 }
 
 static QWidget *topLevelWidgetForWatched(QObject *watched)
@@ -234,8 +253,8 @@ static QWidget *resolveWidgetAtTouchPoint(QObject *watched,
         // QWindow::mapToGlobal() and QWidget::mapFromGlobal() so we don't depend on the
         // event-provided screenPos/scenePos fields (which can be unreliable).
         if (watchedWindow) {
-            const QPoint globalFromPos = watchedWindow->mapToGlobal(tp.pos().toPoint());
-            const QPoint windowPoint = topLevelWidget->mapFromGlobal(globalFromPos);
+            const QPointF bestGlobalPos = bestGlobalPosForWindowTouch(watchedWindow, tp.pos(), tp.screenPos(), topLevelWidget);
+            const QPoint windowPoint = topLevelWidget->mapFromGlobal(bestGlobalPos.toPoint());
             if (QWidget *w = widgetAtWindowPoint(windowPoint)) {
                 return w;
             }
@@ -255,8 +274,8 @@ static QWidget *resolveWidgetAtTouchPoint(QObject *watched,
     }
 
     if (watchedWindow) {
-        const QPoint globalFromPos = watchedWindow->mapToGlobal(tp.pos().toPoint());
-        if (QWidget *w = QApplication::widgetAt(globalFromPos)) {
+        const QPointF bestGlobalPos = bestGlobalPosForWindowTouch(watchedWindow, tp.pos(), tp.screenPos(), topLevelWidget);
+        if (QWidget *w = QApplication::widgetAt(bestGlobalPos.toPoint())) {
             if (outTopLevelWidget) {
                 *outTopLevelWidget = w->window();
             }
