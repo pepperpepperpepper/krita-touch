@@ -48,6 +48,25 @@ static QList<QTouchEvent::TouchPoint> singleTouchPoint(const QPointF &localPos, 
     return {tp};
 }
 
+static QList<QTouchEvent::TouchPoint> singleTouchPointCustomPosScene(const QPointF &pos,
+                                                                     const QPointF &scenePos,
+                                                                     const QPointF &screenPos,
+                                                                     Qt::TouchPointState state)
+{
+    QTouchEvent::TouchPoint tp(0);
+    tp.setState(state);
+    tp.setPos(pos);
+    tp.setScenePos(scenePos);
+    tp.setScreenPos(screenPos);
+    tp.setStartPos(pos);
+    tp.setStartScenePos(scenePos);
+    tp.setStartScreenPos(screenPos);
+    tp.setLastPos(pos);
+    tp.setLastScenePos(scenePos);
+    tp.setLastScreenPos(screenPos);
+    return {tp};
+}
+
 static void sendSingleTouch(QWindow *window, QEvent::Type type, const QPointF &screenPos, Qt::TouchPointState state)
 {
     // The filter may use `scenePos()` (window-local) to resolve widgets, so populate it.
@@ -72,6 +91,21 @@ static void sendSingleTouchCustom(QWindow *window,
                    Qt::NoModifier,
                    Qt::TouchPointStates(state),
                    singleTouchPoint(scenePos, screenPos, state));
+    QCoreApplication::sendEvent(window, &ev);
+}
+
+static void sendSingleTouchCustomPosScene(QWindow *window,
+                                          QEvent::Type type,
+                                          const QPointF &pos,
+                                          const QPointF &scenePos,
+                                          const QPointF &screenPos,
+                                          Qt::TouchPointState state)
+{
+    QTouchEvent ev(type,
+                   testTouchDevice(),
+                   Qt::NoModifier,
+                   Qt::TouchPointStates(state),
+                   singleTouchPointCustomPosScene(pos, scenePos, screenPos, state));
     QCoreApplication::sendEvent(window, &ev);
 }
 
@@ -240,7 +274,7 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesWindo
     const QPoint globalPos = touchNative.mapToGlobal(touchNative.rect().center());
     QCOMPARE(QApplication::widgetAt(globalPos), &touchNative);
 
-    const QPoint windowPos = window.mapFromGlobal(globalPos);
+    const QPoint windowPos = windowHandle->mapFromGlobal(globalPos);
     const QPoint expectedLocal = touchNative.mapFrom(&window, windowPos);
 
     // Deliberately send a bogus screenPos (window-local) to ensure the forwarding path
@@ -251,6 +285,74 @@ void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesWindo
     sendSingleTouchCustom(windowHandle, QEvent::TouchBegin, scenePos, bogusScreenPos, Qt::TouchPointPressed);
     QApplication::processEvents();
     sendSingleTouchCustom(windowHandle, QEvent::TouchEnd, scenePos, bogusScreenPos, Qt::TouchPointReleased);
+    QApplication::processEvents();
+
+    QVERIFY(touchNative.touchBeginCount >= 1);
+    QVERIFY(touchNative.touchEndCount >= 1);
+    QVERIFY(touchNative.hasLastBeginPos);
+    QCOMPARE(touchNative.lastBeginPos, QPointF(expectedLocal));
+
+    qApp->removeEventFilter(filter);
+    filter->deleteLater();
+}
+
+void KisTouchUiMouseFallbackFilterTest::testTouchOnWindowForwardedTouchUsesPosWhenScenePosIsBogus()
+{
+    KisConfig cfg(false);
+    cfg.setTouchModeEnabled(true);
+    QVERIFY(KisConfig(true).touchModeEnabled());
+
+    auto *filter = new KisTouchUiMouseFallbackFilter(qApp);
+    qApp->installEventFilter(filter);
+
+    QWidget window;
+    window.resize(320, 240);
+
+    RecordingTouchWidget touchNative(&window);
+    touchNative.setObjectName(QStringLiteral("touchColorPickerButton"));
+    touchNative.setAttribute(Qt::WA_AcceptTouchEvents, true);
+    touchNative.resize(160, 80);
+    touchNative.move(20, 20);
+
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    window.winId();
+    QWindow *windowHandle = window.windowHandle();
+    QVERIFY(windowHandle);
+
+    const QPoint globalPos = touchNative.mapToGlobal(touchNative.rect().center());
+    QCOMPARE(QApplication::widgetAt(globalPos), &touchNative);
+
+    const QPoint windowPos = windowHandle->mapFromGlobal(globalPos);
+    const QPoint expectedLocal = touchNative.mapFrom(&window, windowPos);
+    QVERIFY(window.rect().contains(windowPos));
+    QCOMPARE(window.childAt(windowPos), &touchNative);
+
+    QWidget *foundTopLevel = nullptr;
+    for (QWidget *tl : QApplication::topLevelWidgets()) {
+        if (!tl) {
+            continue;
+        }
+        if (tl->windowHandle() == windowHandle) {
+            foundTopLevel = tl;
+            break;
+        }
+    }
+    QCOMPARE(foundTopLevel, &window);
+
+    // Simulate a failure mode where the touch sequence is delivered to the window handle and
+    // TouchPoint::scenePos() is bogus while TouchPoint::pos() is correct window-local.
+    const QPointF pos(windowPos);
+    const QPointF bogusScenePos(windowPos + QPoint(1000, 1000));
+    const QPointF bogusScreenPos(99999.0, 99999.0);
+
+    const QPoint globalFromPos = windowHandle->mapToGlobal(windowPos);
+    QCOMPARE(QApplication::widgetAt(globalFromPos), &touchNative);
+
+    sendSingleTouchCustomPosScene(windowHandle, QEvent::TouchBegin, pos, bogusScenePos, bogusScreenPos, Qt::TouchPointPressed);
+    QApplication::processEvents();
+    sendSingleTouchCustomPosScene(windowHandle, QEvent::TouchEnd, pos, bogusScenePos, bogusScreenPos, Qt::TouchPointReleased);
     QApplication::processEvents();
 
     QVERIFY(touchNative.touchBeginCount >= 1);
