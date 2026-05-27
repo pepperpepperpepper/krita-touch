@@ -39,10 +39,14 @@
 
 namespace {
 
+#ifdef KRITA_TOUCH_SMOKE
 bool isTouchSmokeRun()
 {
     return qApp && qApp->property("krita_touch_smoke").toBool();
 }
+#else
+constexpr bool isTouchSmokeRun() { return false; }
+#endif
 
 } // namespace
 
