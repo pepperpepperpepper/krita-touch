@@ -427,7 +427,6 @@ set(kritaui_LIB_SRCS
 
     KisPlatformPluginInterfaceFactory.cpp
     KisApplication.cpp
-    KisTouchSmokeScriptRunner.cpp
     KisAutoSaveRecoveryDialog.cpp
     KisDetailsPane.cpp
     KisDocument.cpp
@@ -490,6 +489,12 @@ set(kritaui_LIB_SRCS
     KisNodeActivationActionCreatorVisitor.cpp
     KisAndroidFileProxy.cpp
 )
+
+if (BUILD_TOUCH_SMOKE)
+    set(kritaui_LIB_SRCS ${kritaui_LIB_SRCS}
+        KisTouchSmokeScriptRunner.cpp
+    )
+endif()
 
 if (KSeExpr_FOUND)
     set(kritaui_LIB_SRCS ${kritaui_LIB_SRCS}

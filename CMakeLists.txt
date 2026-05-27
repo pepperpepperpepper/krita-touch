@@ -332,6 +332,12 @@ add_feature_info("Limit long tests" LIMIT_LONG_TESTS "Run long running unittests
 option(BUILD_KRITA_QT_DESIGNER_PLUGINS "Build Qt Designer plugins for Krita widgets" OFF)
 add_feature_info("Build Qt Designer plugins" BUILD_KRITA_QT_DESIGNER_PLUGINS "Builds Qt Designer plugins for Krita widgets (use -DBUILD_KRITA_QT_DESIGNER_PLUGINS=ON to enable).")
 
+option(BUILD_TOUCH_SMOKE "Build the in-app touch UI smoke harness (--touch-smoke CLI / KRITA_TOUCH_SMOKE env / Android intent). Must be OFF for release artifacts." OFF)
+add_feature_info("Build touch smoke harness" BUILD_TOUCH_SMOKE "Compiles the in-app touch UI smoke harness. Release builds must leave this OFF.")
+if (BUILD_TOUCH_SMOKE)
+    add_compile_definitions(KRITA_TOUCH_SMOKE)
+endif()
+
 option(ENABLE_UPDATERS "Enable updaters/update notifications" ON)
 configure_file(config-updaters.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-updaters.h)
 add_feature_info("Enable updaters" ENABLE_UPDATERS "Enable updaters/update notifications.")

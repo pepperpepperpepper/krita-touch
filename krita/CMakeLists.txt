@@ -120,7 +120,6 @@ set(krita_QRCS
     ${CMAKE_SOURCE_DIR}/krita/data/shaders/shaders.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/cursors/cursors.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/gamutmasks/gamutmasks.qrc
-    ${CMAKE_SOURCE_DIR}/krita/data/touchsmoke/touchsmoke.qrc
     ${CMAKE_SOURCE_DIR}/plugins/paintops/defaultpresets/defaultpresets.qrc
     ${CMAKE_SOURCE_DIR}/krita/pics/branding/${BRANDING}/branding.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/splash/splash.qrc
@@ -130,6 +129,10 @@ set(krita_QRCS
 
 if (QT_MAJOR_VERSION STREQUAL "6")
     list(APPEND krita_QRCS ${CMAKE_SOURCE_DIR}/krita/data/mime-database/mime-database.qrc)
+endif()
+
+if (BUILD_TOUCH_SMOKE)
+    list(APPEND krita_QRCS ${CMAKE_SOURCE_DIR}/krita/data/touchsmoke/touchsmoke.qrc)
 endif()
 
 qt_add_resources(krita_SRCS ${krita_QRCS})

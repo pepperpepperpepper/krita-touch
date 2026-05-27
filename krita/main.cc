@@ -201,6 +201,7 @@ Java_org_krita_android_JNIWrappers_openFileFromIntent(JNIEnv* /*env*/,
     }
 }
 
+#ifdef KRITA_TOUCH_SMOKE
 extern "C" JNIEXPORT void JNICALL
 Java_org_krita_android_JNIWrappers_runTouchSmokeFromIntent(JNIEnv* /*env*/,
                                                            jobject /*obj*/,
@@ -213,6 +214,7 @@ Java_org_krita_android_JNIWrappers_runTouchSmokeFromIntent(JNIEnv* /*env*/,
                                   Qt::QueuedConnection, Q_ARG(QString, scenario));
     }
 }
+#endif
 
 #define MAIN_EXPORT __attribute__ ((visibility ("default")))
 #define MAIN_FN main

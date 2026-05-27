@@ -88,6 +88,7 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("canvasonly"), i18n("Start Krita in canvas-only mode")));
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("nosplash"), i18n("Do not show the splash screen")));
     parser.addOption(QCommandLineOption(QStringList() << QLatin1String("fullscreen"), i18n("Start Krita in full-screen mode")));
+#ifdef KRITA_TOUCH_SMOKE
     {
         QCommandLineOption opt(QStringList() << QLatin1String("touch-smoke"),
                                i18n("Run a deterministic touch UI scenario for headless smoke tests"),
@@ -95,6 +96,7 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
         opt.setFlags(QCommandLineOption::HiddenFromHelp);
         parser.addOption(opt);
     }
+#endif
     {
         QCommandLineOption opt(QStringList() << QLatin1String("dpi"), i18n("Override display DPI"), QLatin1String("dpiX,dpiY"));
         opt.setFlags(QCommandLineOption::HiddenFromHelp);
@@ -191,7 +193,9 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
     d->workspace = parser.value("workspace");
     d->windowLayout = parser.value("windowlayout");
     d->session = parser.value("load-session");
+#ifdef KRITA_TOUCH_SMOKE
     d->touchSmokeScenario = parser.value("touch-smoke").trimmed();
+#endif
     d->doTemplate = parser.isSet("template");
     d->exportAs = parser.isSet("export");
     d->exportSequence = parser.isSet("export-sequence");
@@ -199,9 +203,11 @@ KisApplicationArguments::KisApplicationArguments(const QApplication &app)
     d->noSplash = parser.isSet("nosplash");
     d->fullScreen = parser.isSet("fullscreen");
 
+#ifdef KRITA_TOUCH_SMOKE
     if (d->touchSmokeScenario.isEmpty()) {
         d->touchSmokeScenario = QString::fromUtf8(qgetenv("KRITA_TOUCH_SMOKE")).trimmed();
     }
+#endif
 
     KoResourcePaths::s_overrideAppDataLocation = parser.value("resource-location");
 

@@ -130,7 +130,9 @@
 #include "input/KisTouchUiMouseFallbackFilter.h"
 #include "input/kis_input_profile_manager.h"
 #include "widgets/kis_touch_copypaste_overlay.h"
+#ifdef KRITA_TOUCH_SMOKE
 #include "KisTouchSmokeScriptRunner.h"
+#endif
 
 #include <KritaVersionWrapper.h>
 #include <dialogs/KisSessionManagerDialog.h>
@@ -1610,6 +1612,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         return condition();
     };
 
+#ifdef KRITA_TOUCH_SMOKE
     if (KisTouchSmokeScriptRunner::isScriptScenarioSpec(scenarioTrimmed)) {
         QJsonObject script;
         QString loadError;
@@ -1642,6 +1645,7 @@ void runTouchSmokeScenario(const QString &scenario, KisMainWindow *mainWindow)
         finalizeSmoke(ok);
         return;
     }
+#endif
 
     const bool isTopBarScenario = normalizedScenario == "top-bar" || normalizedScenario == "top_bar" || normalizedScenario == "topbar";
     if (isTopBarScenario || useLightTouchTheme) {
@@ -8097,11 +8101,15 @@ void KisApplication::fileOpenRequested(const QString &url)
 
 void KisApplication::touchSmokeScenarioRequested(const QString &scenario)
 {
+#ifdef KRITA_TOUCH_SMOKE
     if (!d->mainWindow) {
         return;
     }
 
     runTouchSmokeScenario(scenario, d->mainWindow);
+#else
+    Q_UNUSED(scenario);
+#endif
 }
 
 
