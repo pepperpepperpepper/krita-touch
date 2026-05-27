@@ -492,6 +492,7 @@ set(kritaui_LIB_SRCS
 
 if (BUILD_TOUCH_SMOKE)
     set(kritaui_LIB_SRCS ${kritaui_LIB_SRCS}
+        KisTouchSmokeRunner.cpp
         KisTouchSmokeScriptRunner.cpp
     )
 endif()
