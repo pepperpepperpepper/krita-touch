@@ -216,10 +216,20 @@ android {
         versionName "5.3.0-prealpha"
         def unstableSuffix = System.getenv('KRITA_UNSTABLE_PACKAGE_SUFFIX')
         archivesBaseName = System.getenv('KRITA_BUILD_APPBUNDLE') ? "krita-$versionName$unstableSuffix" : "krita-$abi-$versionName$unstableSuffix"
+
+        // Mirrors the C++ cmake option BUILD_TOUCH_SMOKE. Set env var
+        // BUILD_TOUCH_SMOKE=ON (or pass -PBUILD_TOUCH_SMOKE=ON to gradle) to
+        // enable the in-app touch smoke harness path on the Java side. Default
+        // OFF: release APKs do not invoke the harness even if a smoke intent
+        // fires.
+        def _bts = (System.getenv('BUILD_TOUCH_SMOKE') ?: project.findProperty('BUILD_TOUCH_SMOKE') ?: 'OFF').toString()
+        buildConfigField "boolean", "BUILD_TOUCH_SMOKE",
+            (_bts == 'ON' || _bts == 'true' || _bts == '1') ? "true" : "false"
     }
     buildFeatures {
         renderScript true
         aidl true
+        buildConfig true
     }
 
     // This is needed because, gradle by default ignores hidden assets.

@@ -27,6 +27,8 @@ import org.qtproject.qt5.android.bindings.QtActivity;
 
 import org.libsdl.app.SDLAudioManager;
 
+import org.krita.BuildConfig;
+
 public class MainActivity extends QtActivity {
 
     private static final String TAG = "krita.MainActivity";
@@ -41,7 +43,7 @@ public class MainActivity extends QtActivity {
         // we have to do this before loading main()
         Intent i = getIntent();
         String uri = getUri(i);
-        String touchSmokeScenario = (i != null) ? i.getStringExtra("KRITA_TOUCH_SMOKE") : null;
+        String touchSmokeScenario = (BuildConfig.BUILD_TOUCH_SMOKE && i != null) ? i.getStringExtra("KRITA_TOUCH_SMOKE") : null;
         StringBuilder appArgs = new StringBuilder();
         if (touchSmokeScenario != null && !touchSmokeScenario.isEmpty()) {
             appArgs.append("--touch-smoke=").append(touchSmokeScenario);
@@ -99,7 +101,7 @@ public class MainActivity extends QtActivity {
             JNIWrappers.openFileFromIntent(uri);
         }
 
-        if (intent != null) {
+        if (BuildConfig.BUILD_TOUCH_SMOKE && intent != null) {
             String touchSmokeScenario = intent.getStringExtra("KRITA_TOUCH_SMOKE");
             if (touchSmokeScenario != null && !touchSmokeScenario.isEmpty()) {
                 JNIWrappers.runTouchSmokeFromIntent(touchSmokeScenario);
