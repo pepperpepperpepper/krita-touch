@@ -121,6 +121,36 @@ void KisTouchUiMouseFallbackFilter::sendMouseEvent(QWidget *targetWidget,
 namespace
 {
 
+static QPointF globalFromWindowLocalForTouch(QWindow *sourceWindow, const QPointF &windowLocalPos, QWidget *topLevelWidget)
+{
+    if (!sourceWindow) {
+        return QPointF();
+    }
+
+    // Prefer QWidget mapping when the touch arrives on the top-level QWidgetWindow.
+    //
+    // Some desktop Qt/Wayland paths can produce unreliable QWindow mapToGlobal/mapFromGlobal
+    // results after input device switches, while QWidget's mapping remains stable.
+    if (topLevelWidget && topLevelWidget->windowHandle() == sourceWindow) {
+        return QPointF(topLevelWidget->mapToGlobal(windowLocalPos.toPoint()));
+    }
+
+    return QPointF(sourceWindow->mapToGlobal(windowLocalPos.toPoint()));
+}
+
+static QPointF windowOriginGlobalForTouch(QWindow *sourceWindow, QWidget *topLevelWidget)
+{
+    if (!sourceWindow) {
+        return QPointF();
+    }
+
+    if (topLevelWidget && topLevelWidget->windowHandle() == sourceWindow) {
+        return QPointF(topLevelWidget->mapToGlobal(QPoint(0, 0)));
+    }
+
+    return QPointF(sourceWindow->mapToGlobal(QPoint(0, 0)));
+}
+
 static bool globalPosLooksInside(QWidget *topLevelWidget, const QPointF &globalPos)
 {
     if (!topLevelWidget) {
@@ -131,10 +161,18 @@ static bool globalPosLooksInside(QWidget *topLevelWidget, const QPointF &globalP
     return topLevelWidget->rect().contains(windowPoint);
 }
 
-static bool globalPosLooksInsideWindow(QWindow *sourceWindow, const QPointF &globalPos)
+static bool globalPosLooksInsideWindow(QWindow *sourceWindow, const QPointF &globalPos, QWidget *topLevelWidget)
 {
     if (!sourceWindow) {
         return false;
+    }
+
+    // Prefer QWidget mapping when the touch arrives on the top-level QWidgetWindow. This avoids
+    // reliance on QWindow mapFromGlobal in environments where it can become unreliable after
+    // input device switches.
+    if (topLevelWidget && topLevelWidget->windowHandle() == sourceWindow) {
+        const QPoint localPoint = topLevelWidget->mapFromGlobal(globalPos.toPoint());
+        return topLevelWidget->rect().contains(localPoint);
     }
 
     const QPoint localPoint = sourceWindow->mapFromGlobal(globalPos.toPoint());
@@ -154,9 +192,9 @@ static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
     // Primary: derive global position from the window-local `pos` using QWindow mapping.
     // This is required for our Wayland simulation where TouchPoint::screenPos may actually
     // contain window-local coordinates.
-    const QPointF globalFromPos(sourceWindow->mapToGlobal(pos.toPoint()));
+    const QPointF globalFromPos = globalFromWindowLocalForTouch(sourceWindow, pos, topLevelWidget);
 
-    const QPointF windowOriginGlobal(sourceWindow->mapToGlobal(QPoint(0, 0)));
+    const QPointF windowOriginGlobal = windowOriginGlobalForTouch(sourceWindow, topLevelWidget);
     const QPointF originDelta = globalFromPos - screenPos;
     const bool screenPosLooksWindowLocal =
         qAbs(originDelta.x() - windowOriginGlobal.x()) <= 2.0 &&
@@ -171,8 +209,8 @@ static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
     // Prefer whichever coordinate set looks plausible for the relevant window. When both look
     // plausible but conflict, screenPos is often the more reliable global coordinate on desktop
     // Wayland (we've observed platforms reporting a bogus `pos` after switching input devices).
-    const bool posPlausible = posInside || globalPosLooksInsideWindow(sourceWindow, globalFromPos);
-    const bool screenPlausible = screenInside || globalPosLooksInsideWindow(sourceWindow, screenPos);
+    const bool posPlausible = posInside || globalPosLooksInsideWindow(sourceWindow, globalFromPos, topLevelWidget);
+    const bool screenPlausible = screenInside || globalPosLooksInsideWindow(sourceWindow, screenPos, topLevelWidget);
 
     if (screenPlausible && !posPlausible) {
         return screenPos;
@@ -188,6 +226,45 @@ static QPointF bestGlobalPosForWindowTouch(QWindow *sourceWindow,
     }
 
     return globalFromPos; // Best-effort.
+}
+
+// Result of resolving a single touch point's coordinates. Field order matches the
+// historical declaration order at the call sites (bestGlobalPos, screenPos, windowPos).
+struct TouchCoordinateTriple {
+    QPointF bestGlobalPos;
+    QPointF screenPos;   // Intentionally equal to bestGlobalPos (preserves existing behavior).
+    QPointF windowPos;
+};
+
+// Encapsulates the {bestGlobalPos, screenPos, windowPos} computation that was
+// duplicated as inline lambdas in the TouchBegin and mouse-emulation paths.
+// Pure function of its three inputs; composes the existing coordinate helpers.
+// NOTE: takes the per-site windowWidget (NOT topLevelWidget) — both original call
+// sites only ever read windowWidget, and they compute it differently on purpose.
+static TouchCoordinateTriple resolveTouchTriple(QWindow *sourceWindow,
+                                                QWidget *windowWidget,
+                                                const QTouchEvent::TouchPoint &tp)
+{
+    const QPointF bestGlobalPos = [&]() -> QPointF {
+        if (sourceWindow) {
+            return bestGlobalPosForWindowTouch(sourceWindow, tp.pos(), tp.screenPos(), windowWidget);
+        }
+        if (windowWidget) {
+            return QPointF(windowWidget->mapToGlobal(tp.scenePos().toPoint()));
+        }
+        return tp.screenPos();
+    }();
+
+    const QPointF screenPos = bestGlobalPos;
+
+    const QPointF windowPos = [&]() -> QPointF {
+        if (windowWidget) {
+            return QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
+        }
+        return sourceWindow ? tp.pos() : tp.scenePos();
+    }();
+
+    return TouchCoordinateTriple{bestGlobalPos, screenPos, windowPos};
 }
 
 static QWidget *topLevelWidgetForWatched(QObject *watched)
@@ -225,9 +302,7 @@ static QWidget *resolveWidgetAtTouchPoint(QObject *watched,
                                          const QTouchEvent::TouchPoint &tp,
                                          QWidget **outTopLevelWidget)
 {
-    const bool debug =
-        qEnvironmentVariableIsSet("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") &&
-        qEnvironmentVariableIntValue("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") != 0;
+    const bool debug = KisTouchUiMouseFallbackFilter::debugLoggingEnabled();
 
     if (QWidget *watchedWidget = qobject_cast<QWidget *>(watched)) {
         if (outTopLevelWidget) {
@@ -416,8 +491,7 @@ static void sendMappedTouchEvent(QWidget *targetWidget,
                             mappedPoints);
     mappedEvent.setTimestamp(srcEvent->timestamp());
 
-    if (qEnvironmentVariableIsSet("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") &&
-        qEnvironmentVariableIntValue("KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG") != 0) {
+    if (KisTouchUiMouseFallbackFilter::debugLoggingEnabled()) {
         qWarning() << "Touch UI mouse fallback: send mapped touch"
                    << "type=" << srcEvent->type()
                    << "points=" << mappedPoints.size()
@@ -504,26 +578,9 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
         QWidget *targetWidget = resolveWidgetAtTouchPoint(watched, tp, &topLevelWidget);
         QWidget *windowWidget = topLevelWidget ? topLevelWidget : (targetWidget ? targetWidget->window() : nullptr);
 
-        const QPointF bestGlobalPos = [&]() -> QPointF {
-            if (sourceWindow) {
-                return bestGlobalPosForWindowTouch(sourceWindow, tp.pos(), tp.screenPos(), windowWidget);
-            }
-            if (windowWidget) {
-                return QPointF(windowWidget->mapToGlobal(tp.scenePos().toPoint()));
-            }
-            return tp.screenPos();
-        }();
-
-        const QPointF screenPos = [&]() -> QPointF {
-            return bestGlobalPos;
-        }();
-
-        const QPointF windowPos = [&]() -> QPointF {
-            if (windowWidget) {
-                return QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
-            }
-            return sourceWindow ? tp.pos() : tp.scenePos();
-        }();
+        const TouchCoordinateTriple coords = resolveTouchTriple(sourceWindow, windowWidget, tp);
+        const QPointF screenPos = coords.screenPos;
+        const QPointF windowPos = coords.windowPos;
 
         if (debugLoggingEnabled()) {
             qWarning() << "Touch UI mouse fallback: raw begin"
@@ -660,26 +717,9 @@ bool KisTouchUiMouseFallbackFilter::eventFilter(QObject *watched, QEvent *event)
     QWindow *sourceWindow = qobject_cast<QWindow *>(watched);
 
     QWidget *windowWidget = m_targetWidget ? m_targetWidget->window() : nullptr;
-    const QPointF bestGlobalPos = [&]() -> QPointF {
-        if (sourceWindow) {
-            return bestGlobalPosForWindowTouch(sourceWindow, tp.pos(), tp.screenPos(), windowWidget);
-        }
-        if (windowWidget) {
-            return QPointF(windowWidget->mapToGlobal(tp.scenePos().toPoint()));
-        }
-        return tp.screenPos();
-    }();
-
-    const QPointF screenPos = [&]() -> QPointF {
-        return bestGlobalPos;
-    }();
-
-    const QPointF windowPos = [&]() -> QPointF {
-        if (windowWidget) {
-            return QPointF(windowWidget->mapFromGlobal(bestGlobalPos.toPoint()));
-        }
-        return sourceWindow ? tp.pos() : tp.scenePos();
-    }();
+    const TouchCoordinateTriple coords = resolveTouchTriple(sourceWindow, windowWidget, tp);
+    const QPointF screenPos = coords.screenPos;
+    const QPointF windowPos = coords.windowPos;
 
     if (m_touchId >= 0 && tpId != m_touchId) {
         return false;

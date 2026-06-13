@@ -34,6 +34,10 @@ class KRITAUI_EXPORT KisTouchUiMouseFallbackFilter : public QObject
 public:
     explicit KisTouchUiMouseFallbackFilter(QObject *parent = nullptr);
 
+    // True when KRITA_TOUCH_UI_MOUSE_FALLBACK_DEBUG is set to a non-zero value.
+    // Public so the file-local coordinate helpers can share this single predicate.
+    static bool debugLoggingEnabled();
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -43,8 +47,6 @@ private:
         Mouse,
         TouchForward,
     };
-
-    static bool debugLoggingEnabled();
 
     static bool isCanvasWidget(QWidget *w);
     static bool isInCanvas(QWidget *w);
