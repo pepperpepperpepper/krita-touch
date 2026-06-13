@@ -132,6 +132,7 @@ bool touchTapCheckableActionWithFallback(KisMainWindow *mainWindow,
                                         bool expectedChecked,
                                         int timeoutMs,
                                         int fallbackShortcut,
+                                        bool requireInputManager,
                                         QJsonObject *details,
                                         QString *errorOut);
 

@@ -556,9 +556,10 @@ bool KisTouchSmokeScriptRunner::runScript(const QJsonObject &script,
             const int timeoutMs = step.value(QStringLiteral("timeout_ms")).toInt(900);
             const QString shortcutName = step.value(QStringLiteral("fallback_shortcut")).toString();
             const int shortcut = touchShortcutFromString(shortcutName);
+            const bool requireInputManager = step.value(QStringLiteral("require_input_manager")).toBool(false);
             details.insert(QStringLiteral("fingers"), fingers);
             details.insert(QStringLiteral("fallback_shortcut"), shortcutName);
-            ok = touchTapCheckableActionWithFallback(mainWindow, fingers, posObj, actionId, expected, timeoutMs, shortcut, &details, &localError);
+            ok = touchTapCheckableActionWithFallback(mainWindow, fingers, posObj, actionId, expected, timeoutMs, shortcut, requireInputManager, &details, &localError);
         } else if (op == QStringLiteral("touch.tap_checkable_action_no_change")) {
             const int fingers = step.value(QStringLiteral("fingers")).toInt(1);
             const QJsonObject posObj = step.value(QStringLiteral("pos")).toObject();

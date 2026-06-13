@@ -433,6 +433,7 @@ bool touchTapCheckableActionWithFallback(KisMainWindow *mainWindow,
                                         bool expectedChecked,
                                         int timeoutMs,
                                         int fallbackShortcut,
+                                        bool requireInputManager,
                                         QJsonObject *details,
                                         QString *errorOut)
 {
@@ -458,7 +459,7 @@ bool touchTapCheckableActionWithFallback(KisMainWindow *mainWindow,
     sendMultiFingerTouchTap(mainWindow, fingerCount, posObj, &injectError);
     toggledViaInputManager = waitForUiCondition(timeoutMs, [&]() { return action->isChecked() == expectedChecked; });
 
-    if (!toggledViaInputManager) {
+    if (!toggledViaInputManager && !requireInputManager) {
         QJsonObject fallbackDetails;
         QString fallbackError;
         performTouchGestureShortcut(fallbackShortcut, &fallbackDetails, &fallbackError);
@@ -476,6 +477,7 @@ bool touchTapCheckableActionWithFallback(KisMainWindow *mainWindow,
         details->insert(QStringLiteral("expected_checked"), expectedChecked);
         details->insert(QStringLiteral("actual_checked"), action->isChecked());
         details->insert(QStringLiteral("input_manager_timeout_ms"), timeoutMs);
+        details->insert(QStringLiteral("require_input_manager"), requireInputManager);
         details->insert(QStringLiteral("input_manager_toggled"), toggledViaInputManager);
         details->insert(QStringLiteral("direct_action_toggled"), toggledViaDirectAction);
         if (!injectError.isEmpty()) {
@@ -483,7 +485,7 @@ bool touchTapCheckableActionWithFallback(KisMainWindow *mainWindow,
         }
     }
 
-    return toggledViaInputManager || toggledViaDirectAction;
+    return requireInputManager ? toggledViaInputManager : (toggledViaInputManager || toggledViaDirectAction);
 }
 
 bool touchTapCheckableActionNoChange(KisMainWindow *mainWindow,
@@ -1159,6 +1161,23 @@ bool touchDragPathOverlayNoChange(KisMainWindow *mainWindow,
 
     QJsonObject injectDetails;
     sendTouchDragPath(canvasWidget, pathPoints, stepMs, 0, &injectDetails);
+
+    // A "no overlay appeared" assertion is only meaningful if the swipe was
+    // actually delivered. If injection never fired (no canvas / no touch device /
+    // invalid path), the step would otherwise pass vacuously, masking a broken
+    // stimulus as a successful negative result.
+    if (!injectDetails.value(QStringLiteral("sent")).toBool(false)) {
+        if (details) {
+            details->insert(QStringLiteral("touch_inject_details"), injectDetails);
+        }
+        if (errorOut) {
+            const QString injectError = injectDetails.value(QStringLiteral("error")).toString();
+            *errorOut = injectError.isEmpty()
+                ? QStringLiteral("Touch drag path was not delivered (sent=false)")
+                : QStringLiteral("Touch drag path was not delivered: %1").arg(injectError);
+        }
+        return false;
+    }
 
     QJsonObject directDetails;
     performTouchDragPathViaGestureAction(directShortcut, pathPoints, &directDetails);
