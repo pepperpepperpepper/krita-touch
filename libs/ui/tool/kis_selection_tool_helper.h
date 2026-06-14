@@ -17,6 +17,7 @@
 #include "kis_processing_applicator.h"
 
 class KoShape;
+class QPainterPath;
 
 /**
  * XXX: Doc!
@@ -30,6 +31,30 @@ public:
 
     void selectPixelSelection(KisProcessingApplicator& applicator, KisPixelSelectionSP selection, SelectionAction action);
     void selectPixelSelection(KisPixelSelectionSP selection, SelectionAction action);
+
+    /**
+     * Commits @p path as a pixel selection. Allocates a temporary
+     * KisPixelSelection bounded by @p image, builds a DEFERRED stroke command
+     * that rasterizes @p path with the given antiAlias/grow/feather settings
+     * (KisPainter::paintPainterPath + grow/shrink/feather filters + outline
+     * cache), enqueues it on a fresh KisProcessingApplicator rooted at @p node
+     * and named with this helper's undo name, then calls selectPixelSelection()
+     * and ends the applicator.
+     *
+     * The rasterization runs deferred inside the stroke job, not at call time;
+     * @p path and the scalars are captured by value. Pass currentNode() for
+     * @p node (it is the processing root, NOT a layer) and currentImage() for
+     * @p image (it bounds the temporary selection). Callers retain the concerns
+     * that differ per shape: early-out guards, cursor overrides, the undo-name
+     * string (given to this helper's constructor), and path construction.
+     */
+    void applyShapePath(const QPainterPath &path,
+                        SelectionAction action,
+                        KisNodeSP node,
+                        KisImageSP image,
+                        bool antiAlias,
+                        int grow,
+                        int feather);
 
     void addSelectionShape(KoShape* shape, SelectionAction action = SELECTION_DEFAULT);
     void addSelectionShapes(QList<KoShape*> shapes, SelectionAction action = SELECTION_DEFAULT);

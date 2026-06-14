@@ -28,7 +28,6 @@
 #include <kis_default_bounds.h>
 #include <kis_fill_painter.h>
 #include <kis_image.h>
-#include <kis_painter.h>
 #include <kis_pixel_selection.h>
 #include <kis_selection_manager.h>
 #include <kis_selection_options.h>
@@ -37,7 +36,6 @@
 #include <KisCursorOverrideLock.h>
 
 #include <kis_command_utils.h>
-#include <kis_selection_filters.h>
 
 #include <klocalizedstring.h>
 #include <ksharedconfig.h>
@@ -1179,60 +1177,12 @@ void KisToolSelectTouch::applyFreehandSelection(const QVector<QPointF> &points)
 
     KisCursorOverrideLock cursorLock(KisCursor::waitCursor());
 
-    KisProcessingApplicator applicator(currentImage(),
-                                       currentNode(),
-                                       KisProcessingApplicator::NONE,
-                                       KisImageSignalVector(),
-                                       kundo2_i18n("Freehand Selection"));
-
-    KisPixelSelectionSP tmpSel =
-        new KisPixelSelection(new KisDefaultBounds(currentImage()));
-
-    const bool antiAlias = antiAliasSelection();
-    const int grow = growSelection();
-    const int feather = featherSelection();
-
     QPainterPath path;
     path.addPolygon(points);
     path.closeSubpath();
 
-    KUndo2Command *cmd = new KisCommandUtils::LambdaCommand(
-        [tmpSel, antiAlias, grow, feather, path]() mutable -> KUndo2Command * {
-            KisPainter painter(tmpSel);
-            painter.setPaintColor(KoColor(Qt::black, tmpSel->colorSpace()));
-            painter.setAntiAliasPolygonFill(antiAlias && feather == 0);
-            painter.setFillStyle(KisPainter::FillStyleForegroundColor);
-            painter.setStrokeStyle(KisPainter::StrokeStyleNone);
-
-            painter.paintPainterPath(path);
-
-            if (grow > 0) {
-                KisGrowSelectionFilter biggy(grow, grow);
-                biggy.process(tmpSel,
-                              tmpSel->selectedRect().adjusted(-grow, -grow, grow, grow));
-            } else if (grow < 0) {
-                KisShrinkSelectionFilter tiny(-grow, -grow, false);
-                tiny.process(tmpSel, tmpSel->selectedRect());
-            }
-
-            if (feather > 0) {
-                KisFeatherSelectionFilter feathery(feather);
-                feathery.process(tmpSel,
-                                 tmpSel->selectedRect().adjusted(-feather, -feather, feather, feather));
-            }
-
-            if (grow == 0 && feather == 0) {
-                tmpSel->setOutlineCache(path);
-            } else {
-                tmpSel->invalidateOutlineCache();
-            }
-
-            return nullptr;
-        });
-
-    applicator.applyCommand(cmd, KisStrokeJobData::SEQUENTIAL);
-    helper.selectPixelSelection(applicator, tmpSel, selectionAction());
-    applicator.end();
+    helper.applyShapePath(path, selectionAction(), currentNode(), currentImage(),
+                          antiAliasSelection(), growSelection(), featherSelection());
 }
 
 void KisToolSelectTouch::applyRectSelection(const QRectF &rect, bool elliptical)
@@ -1252,19 +1202,6 @@ void KisToolSelectTouch::applyRectSelection(const QRectF &rect, bool elliptical)
         return;
     }
 
-    KisProcessingApplicator applicator(currentImage(),
-                                       currentNode(),
-                                       KisProcessingApplicator::NONE,
-                                       KisImageSignalVector(),
-                                       elliptical ? kundo2_i18n("Select Ellipse") : kundo2_i18n("Select Rectangle"));
-
-    KisPixelSelectionSP tmpSel =
-        new KisPixelSelection(new KisDefaultBounds(currentImage()));
-
-    const bool antiAlias = antiAliasSelection();
-    const int grow = growSelection();
-    const int feather = featherSelection();
-
     QPainterPath path;
     if (elliptical) {
         path.addEllipse(rect);
@@ -1272,41 +1209,6 @@ void KisToolSelectTouch::applyRectSelection(const QRectF &rect, bool elliptical)
         path.addRect(rect);
     }
 
-    KUndo2Command *cmd = new KisCommandUtils::LambdaCommand(
-        [tmpSel, antiAlias, grow, feather, path]() mutable -> KUndo2Command * {
-            KisPainter painter(tmpSel);
-            painter.setPaintColor(KoColor(Qt::black, tmpSel->colorSpace()));
-            painter.setAntiAliasPolygonFill(antiAlias && feather == 0);
-            painter.setFillStyle(KisPainter::FillStyleForegroundColor);
-            painter.setStrokeStyle(KisPainter::StrokeStyleNone);
-
-            painter.paintPainterPath(path);
-
-            if (grow > 0) {
-                KisGrowSelectionFilter biggy(grow, grow);
-                biggy.process(tmpSel,
-                              tmpSel->selectedRect().adjusted(-grow, -grow, grow, grow));
-            } else if (grow < 0) {
-                KisShrinkSelectionFilter tiny(-grow, -grow, false);
-                tiny.process(tmpSel, tmpSel->selectedRect());
-            }
-
-            if (feather > 0) {
-                KisFeatherSelectionFilter feathery(feather);
-                feathery.process(tmpSel,
-                                 tmpSel->selectedRect().adjusted(-feather, -feather, feather, feather));
-            }
-
-            if (grow == 0 && feather == 0) {
-                tmpSel->setOutlineCache(path);
-            } else {
-                tmpSel->invalidateOutlineCache();
-            }
-
-            return nullptr;
-        });
-
-    applicator.applyCommand(cmd, KisStrokeJobData::SEQUENTIAL);
-    helper.selectPixelSelection(applicator, tmpSel, selectionAction());
-    applicator.end();
+    helper.applyShapePath(path, selectionAction(), currentNode(), currentImage(),
+                          antiAliasSelection(), growSelection(), featherSelection());
 }

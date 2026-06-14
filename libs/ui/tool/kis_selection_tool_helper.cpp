@@ -16,6 +16,9 @@
 #include "kis_pixel_selection.h"
 #include "kis_shape_selection.h"
 #include "kis_image.h"
+#include "kis_default_bounds.h"
+#include "kis_painter.h"
+#include "kis_selection_filters.h"
 #include "canvas/kis_canvas2.h"
 #include "KisViewManager.h"
 #include "kis_selection_manager.h"
@@ -34,7 +37,9 @@
 #include "kis_config.h"
 #include "kis_action_manager.h"
 #include "kis_action.h"
+#include <KoColor.h>
 #include <QMenu>
+#include <QPainterPath>
 
 
 KisSelectionToolHelper::KisSelectionToolHelper(KisCanvas2* canvas, const KUndo2MagicString& name)
@@ -157,6 +162,63 @@ void KisSelectionToolHelper::selectPixelSelection(KisProcessingApplicator& appli
 
     applicator.applyCommand(new ApplyToPixelSelection(view, selection, action, canvas), KisStrokeJobData::SEQUENTIAL);
 
+}
+
+void KisSelectionToolHelper::applyShapePath(const QPainterPath &path,
+                                            SelectionAction action,
+                                            KisNodeSP node,
+                                            KisImageSP image,
+                                            bool antiAlias,
+                                            int grow,
+                                            int feather)
+{
+    KisProcessingApplicator applicator(image,
+                                       node,
+                                       KisProcessingApplicator::NONE,
+                                       KisImageSignalVector(),
+                                       m_name);
+
+    KisPixelSelectionSP tmpSel =
+        new KisPixelSelection(new KisDefaultBounds(image));
+
+    KUndo2Command *cmd = new KisCommandUtils::LambdaCommand(
+        [tmpSel, antiAlias, grow, feather, path]() mutable -> KUndo2Command * {
+            KisPainter painter(tmpSel);
+            painter.setPaintColor(KoColor(Qt::black, tmpSel->colorSpace()));
+            painter.setAntiAliasPolygonFill(antiAlias && feather == 0);
+            painter.setFillStyle(KisPainter::FillStyleForegroundColor);
+            painter.setStrokeStyle(KisPainter::StrokeStyleNone);
+
+            // paintPainterPath (NOT fillPainterPath) is load-bearing here.
+            painter.paintPainterPath(path);
+
+            if (grow > 0) {
+                KisGrowSelectionFilter biggy(grow, grow);
+                biggy.process(tmpSel,
+                              tmpSel->selectedRect().adjusted(-grow, -grow, grow, grow));
+            } else if (grow < 0) {
+                KisShrinkSelectionFilter tiny(-grow, -grow, false);
+                tiny.process(tmpSel, tmpSel->selectedRect());
+            }
+
+            if (feather > 0) {
+                KisFeatherSelectionFilter feathery(feather);
+                feathery.process(tmpSel,
+                                 tmpSel->selectedRect().adjusted(-feather, -feather, feather, feather));
+            }
+
+            if (grow == 0 && feather == 0) {
+                tmpSel->setOutlineCache(path);
+            } else {
+                tmpSel->invalidateOutlineCache();
+            }
+
+            return nullptr;
+        });
+
+    applicator.applyCommand(cmd, KisStrokeJobData::SEQUENTIAL);
+    selectPixelSelection(applicator, tmpSel, action);
+    applicator.end();
 }
 
 void KisSelectionToolHelper::addSelectionShape(KoShape* shape, SelectionAction action)
