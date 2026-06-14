@@ -262,8 +262,10 @@ void KisTouchCopyPasteOverlay::rebuildUi()
 
 void KisTouchCopyPasteOverlay::triggerAndClose(QAction *action)
 {
+    // Release the Qt::Popup mouse/touch grab (via hide()) BEFORE triggering, so an
+    // action that opens a modal dialog isn't left fighting the still-active grab.
+    hide();
     if (action) {
         action->trigger();
     }
-    hide();
 }

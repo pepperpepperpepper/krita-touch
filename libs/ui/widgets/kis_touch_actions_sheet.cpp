@@ -507,8 +507,10 @@ QWidget *KisTouchActionsSheet::buildCategoryPage(const QList<QPair<QString, QStr
 void KisTouchActionsSheet::triggerAndClose(const QString &actionId)
 {
     QAction *action = m_actionCollection ? m_actionCollection->action(actionId) : nullptr;
+    // Release the Qt::Popup mouse/touch grab (via hide()) BEFORE triggering, so an
+    // action that opens a modal dialog isn't left fighting the still-active grab.
+    hide();
     if (action) {
         action->trigger();
     }
-    hide();
 }

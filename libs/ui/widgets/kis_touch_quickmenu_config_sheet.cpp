@@ -283,6 +283,10 @@ void KisTouchQuickMenuConfigSheet::rebuildUi()
     m_resetButton = nullptr;
     m_closeButton = nullptr;
     m_selectedSlot = 0;
+    // QButtonGroup is a QObject, not a QWidget, so the findChildren<QWidget*>
+    // teardown below never reclaims it. Delete the previous group explicitly to
+    // avoid leaking one group (plus its stale connections) per rebuild.
+    delete m_slotGroup;
     m_slotGroup = nullptr;
 
     // This sheet is rebuilt on open and when config changes. Ensure we fully

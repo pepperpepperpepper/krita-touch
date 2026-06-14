@@ -48,6 +48,10 @@ private:
     QPointer<KisKActionCollection> m_actionCollection;
     QToolButton *m_closeButton{nullptr};
     KisSliderSpinBox *m_opacitySlider{nullptr};
+    // sigNodeActivated is connected to the long-lived node manager with `this` as
+    // context, so it survives every rebuildUi(). Tracked here so rebuildUi() can
+    // disconnect the previous one (Qt::UniqueConnection does not dedupe lambdas).
+    QMetaObject::Connection m_nodeActivatedConnection;
 };
 
 #endif // KIS_TOUCH_LAYER_OPTIONS_SHEET_H

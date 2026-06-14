@@ -301,12 +301,19 @@ void KisTouchLayerOptionsSheet::rebuildUi()
         opacityRow->addWidget(m_opacitySlider, 1);
         root->addLayout(opacityRow);
 
+        // The old opacity slider was just destroyed by the rebuild, so its
+        // valueChanged connection died with it; recreate it for the new slider.
+        // sigNodeActivated, by contrast, binds the long-lived node manager to
+        // `this`, so it outlives the rebuild. Qt::UniqueConnection does NOT dedupe
+        // functor/lambda slots, so drop the previous one by hand before reconnecting
+        // (otherwise one connection accumulates per open).
+        QObject::disconnect(m_nodeActivatedConnection);
         if (nodeManager) {
             connect(m_opacitySlider,
                     &KisSliderSpinBox::valueChanged,
                     this,
                     [nodeManager](int opacity) { nodeManager->nodeOpacityChanged(opacity); });
-            connect(nodeManager,
+            m_nodeActivatedConnection = connect(nodeManager,
                     &KisNodeManager::sigNodeActivated,
                     this,
                     [this](KisNodeSP node) {
@@ -318,8 +325,7 @@ void KisTouchLayerOptionsSheet::rebuildUi()
                         QSignalBlocker blocker(m_opacitySlider);
                         m_opacitySlider->setValue(opacity);
                         m_opacitySlider->setEnabled(bool(node));
-                    },
-                    Qt::UniqueConnection);
+                    });
         }
     }
 
@@ -411,8 +417,10 @@ QToolButton *KisTouchLayerOptionsSheet::buildActionButton(QWidget *parent,
 void KisTouchLayerOptionsSheet::triggerAndClose(const QString &actionId)
 {
     QAction *action = m_actionCollection ? m_actionCollection->action(actionId) : nullptr;
+    // Release the Qt::Popup mouse/touch grab (via hide()) BEFORE triggering, so an
+    // action that opens a modal dialog isn't left fighting the still-active grab.
+    hide();
     if (action) {
         action->trigger();
     }
-    hide();
 }

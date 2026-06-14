@@ -198,6 +198,22 @@ void KisTouchQuickMenuAction::slotConfigureTimeout()
         return;
     }
 
+    // Guard against a gesture abandoned without end() being called. When focus is
+    // lost mid-gesture, KisShortcutMatcher::lostFocusEvent deliberately leaves touch
+    // shortcuts running (so touch strokes survive focus-out) and never calls end()
+    // on this action, so the single-shot timer would otherwise pop the configure
+    // sheet for a gesture the user already walked away from. If the gesture's main
+    // window is gone, is no longer the overlay's parent, or is no longer the active
+    // window, treat the gesture as abandoned: hide and bail without triggering.
+    KisCanvas2 *canvas = inputManager() ? inputManager()->canvas() : nullptr;
+    KisViewManager *viewManager = canvas ? canvas->viewManager() : nullptr;
+    KisMainWindow *mainWindow = viewManager ? viewManager->mainWindow() : nullptr;
+    if (!mainWindow || mainWindow != m_overlay->parentWidget() || !mainWindow->isActiveWindow()) {
+        m_overlay->hide();
+        m_overlay->setHighlightedSlot(-1);
+        return;
+    }
+
     QAction *configureAction = actionCollection->action(QStringLiteral("touch_quickmenu_configure"));
     if (!configureAction) {
         return;
