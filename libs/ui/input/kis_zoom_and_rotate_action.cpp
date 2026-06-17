@@ -23,6 +23,7 @@
 
 #include "kis_zoom_and_rotate_action.h"
 #include "kis_input_manager.h"
+#include "KisTouchTransformGesture.h"
 #include <KoViewTransformStillPoint.h>
 
 class KisZoomAndRotateAction::Private {
@@ -38,8 +39,7 @@ public:
 
     KoViewTransformStillPoint actionStillPoint;
 
-    QPointer<QObject> touchTransformTool;
-    bool touchTransformActive {false};
+    KisTouchTransformGesture m_touchXform;
 
     QElapsedTimer quickPinchTimer;
     bool quickPinchCandidate {false};
@@ -82,8 +82,7 @@ void KisZoomAndRotateAction::begin(int shortcut, QEvent *event)
 {
     QTouchEvent *touchEvent = dynamic_cast<QTouchEvent *>(event);
 
-    d->touchTransformTool.clear();
-    d->touchTransformActive = false;
+    d->m_touchXform.reset();
 
     d->quickPinchCandidate = false;
     d->quickPinchStartDistance = 0.0f;
@@ -112,59 +111,8 @@ void KisZoomAndRotateAction::begin(int shortcut, QEvent *event)
                     d->quickPinchTimer.start();
                 }
 
-                KoToolManager *toolManager = KoToolManager::instance();
-                if (toolManager && toolManager->activeToolId() == QStringLiteral("KisToolTransform")) {
-                    QObject *toolObj = dynamic_cast<QObject *>(toolManager->toolById(inputManager()->canvas(), toolManager->activeToolId()));
-
-                    if (toolObj) {
-                        const QPointF p0 = touchEvent->touchPoints().at(0).pos();
-                        const QPointF p1 = touchEvent->touchPoints().at(1).pos();
-
-                        auto hitTestWidgetPoint = [&](const QPointF &widgetPoint, bool &hitOut) -> bool {
-                            hitOut = false;
-                            return QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
-                                                             Q_RETURN_ARG(bool, hitOut),
-                                                             Q_ARG(QPointF, widgetPoint));
-                        };
-
-                        const QPointF centerWidget = (p0 + p1) * 0.5;
-
-                        bool hit0 = false;
-                        bool hit1 = false;
-                        bool hitCenter = false;
-                        const bool canHit0 = hitTestWidgetPoint(p0, hit0);
-                        const bool canHit1 = hitTestWidgetPoint(p1, hit1);
-                        const bool canHitCenter = hitTestWidgetPoint(centerWidget, hitCenter);
-
-                        int hits = 0;
-                        if (canHit0 && hit0) {
-                            ++hits;
-                        }
-                        if (canHit1 && hit1) {
-                            ++hits;
-                        }
-                        if (canHitCenter && hitCenter) {
-                            ++hits;
-                        }
-
-                        // Require at least two "inside bounds" confirmations so that pinch gestures
-                        // around the selection (both fingers outside, center inside) still navigate
-                        // the canvas rather than transforming content.
-                        if (hits >= 2) {
-                            bool began = false;
-                            const bool invokedBegin =
-                                QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
-                                                          Q_RETURN_ARG(bool, began),
-                                                          Q_ARG(QPointF, p0),
-                                                          Q_ARG(QPointF, p1));
-
-                            if (invokedBegin && began) {
-                                d->touchTransformTool = toolObj;
-                                d->touchTransformActive = true;
-                                d->quickPinchCandidate = false;
-                            }
-                        }
-                    }
+                if (d->m_touchXform.maybeBegin(inputManager(), touchEvent)) {
+                    d->quickPinchCandidate = false;
                 }
             }
         }
@@ -191,25 +139,8 @@ void KisZoomAndRotateAction::inputEvent(QEvent *event)
         QTouchEvent *tevent = dynamic_cast<QTouchEvent *>(event);
         if (tevent && tevent->touchPoints().size() > 1) {
 
-            if (d->touchTransformActive && d->touchTransformTool) {
-                const QTouchEvent::TouchPoint tp0 = tevent->touchPoints().at(0);
-                const QTouchEvent::TouchPoint tp1 = tevent->touchPoints().at(1);
-
-                if (tp0.state() == Qt::TouchPointReleased || tp1.state() == Qt::TouchPointReleased) {
-                    return;
-                }
-
-                const QPointF p0 = tp0.pos();
-                const QPointF p1 = tp1.pos();
-
-                if ((p0 - p1).manhattanLength() < 10) {
-                    return;
-                }
-
-                QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
-                                          Q_ARG(QPointF, p0),
-                                          Q_ARG(QPointF, p1));
-
+            if (d->m_touchXform.isActive()) {
+                d->m_touchXform.handleUpdate(tevent);
                 return;
             }
 
@@ -255,9 +186,7 @@ void KisZoomAndRotateAction::end(QEvent *event)
 {
     Q_UNUSED(event);
 
-    if (d->touchTransformActive && d->touchTransformTool) {
-        QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureEnd", Qt::DirectConnection);
-    }
+    d->m_touchXform.end();
 
     if (d->quickPinchCandidate && d->quickPinchTimer.isValid()) {
         const KisConfig cfg(true);
@@ -291,8 +220,6 @@ void KisZoomAndRotateAction::end(QEvent *event)
         }
     }
 
-    d->touchTransformActive = false;
-    d->touchTransformTool.clear();
 }
 
 KisInputActionGroup KisZoomAndRotateAction::inputActionGroup(int shortcut) const

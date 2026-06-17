@@ -19,6 +19,7 @@
 #include "kis_input_manager.h"
 #include <KoViewTransformStillPoint.h>
 #include <KoToolManager.h>
+#include "KisTouchTransformGesture.h"
 
 #include <math.h>
 
@@ -38,8 +39,7 @@ public:
     bool allowRotation {false};
     KoViewTransformStillPoint actionStillPoint;
 
-    QPointer<QObject> touchTransformTool;
-    bool touchTransformActive {false};
+    KisTouchTransformGesture m_touchXform;
 };
 
 
@@ -91,8 +91,7 @@ void KisRotateCanvasAction::begin(int shortcut, QEvent *event)
     d->previousAngle = 0;
     d->snapRotation = 0;
     d->touchRotation = 0;
-    d->touchTransformTool.clear();
-    d->touchTransformActive = false;
+    d->m_touchXform.reset();
 
     KisCanvasController *canvasController =
         dynamic_cast<KisCanvasController*>(inputManager()->canvas()->canvasController());
@@ -104,62 +103,8 @@ void KisRotateCanvasAction::begin(int shortcut, QEvent *event)
         case RotateModeShortcut:
         case DiscreteRotateModeShortcut: {
             if (event && (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate)) {
-                QTouchEvent *touchEvent = dynamic_cast<QTouchEvent *>(event);
-                if (touchEvent && touchEvent->touchPoints().count() > 1) {
-                    KisConfig cfg(true);
-                    if (cfg.touchModeEnabled()) {
-                        KoToolManager *toolManager = KoToolManager::instance();
-                        if (toolManager && toolManager->activeToolId() == QStringLiteral("KisToolTransform")) {
-                            QObject *toolObj =
-                                dynamic_cast<QObject *>(toolManager->toolById(inputManager()->canvas(), toolManager->activeToolId()));
-
-                            if (toolObj) {
-                                const QPointF p0 = touchEvent->touchPoints().at(0).pos();
-                                const QPointF p1 = touchEvent->touchPoints().at(1).pos();
-
-                                auto hitTestWidgetPoint = [&](const QPointF &widgetPoint, bool &hitOut) -> bool {
-                                    hitOut = false;
-                                    return QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
-                                                                     Q_RETURN_ARG(bool, hitOut),
-                                                                     Q_ARG(QPointF, widgetPoint));
-                                };
-
-                                const QPointF centerWidget = (p0 + p1) * 0.5;
-
-                                bool hit0 = false;
-                                bool hit1 = false;
-                                bool hitCenter = false;
-                                const bool canHit0 = hitTestWidgetPoint(p0, hit0);
-                                const bool canHit1 = hitTestWidgetPoint(p1, hit1);
-                                const bool canHitCenter = hitTestWidgetPoint(centerWidget, hitCenter);
-
-                                int hits = 0;
-                                if (canHit0 && hit0) {
-                                    ++hits;
-                                }
-                                if (canHit1 && hit1) {
-                                    ++hits;
-                                }
-                                if (canHitCenter && hitCenter) {
-                                    ++hits;
-                                }
-
-                                if (hits >= 2) {
-                                    bool began = false;
-                                    const bool invokedBegin =
-                                        QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
-                                                                 Q_RETURN_ARG(bool, began),
-                                                                 Q_ARG(QPointF, p0),
-                                                                 Q_ARG(QPointF, p1));
-                                    if (invokedBegin && began) {
-                                        d->touchTransformTool = toolObj;
-                                        d->touchTransformActive = true;
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if (d->m_touchXform.maybeBegin(inputManager(), dynamic_cast<QTouchEvent *>(event))) {
+                    return;
                 }
             }
 
@@ -188,10 +133,7 @@ void KisRotateCanvasAction::end(QEvent *event)
 {
     Q_UNUSED(event);
 
-    if (d->touchTransformActive && d->touchTransformTool) {
-        QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureEnd", Qt::DirectConnection);
-        d->touchTransformTool.clear();
-        d->touchTransformActive = false;
+    if (d->m_touchXform.end()) {
         return;
     }
 
@@ -264,24 +206,8 @@ void KisRotateCanvasAction::inputEvent(QEvent* event)
             if (touchEvent->touchPoints().count() != 2)
                 break;
 
-            if (d->touchTransformActive && d->touchTransformTool) {
-                const QTouchEvent::TouchPoint tp0 = touchEvent->touchPoints().at(0);
-                const QTouchEvent::TouchPoint tp1 = touchEvent->touchPoints().at(1);
-
-                if (tp0.state() == Qt::TouchPointReleased || tp1.state() == Qt::TouchPointReleased) {
-                    return;
-                }
-
-                const QPointF p0 = tp0.pos();
-                const QPointF p1 = tp1.pos();
-
-                if ((p0 - p1).manhattanLength() < 10) {
-                    return;
-                }
-
-                QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
-                                          Q_ARG(QPointF, p0),
-                                          Q_ARG(QPointF, p1));
+            if (d->m_touchXform.isActive()) {
+                d->m_touchXform.handleUpdate(touchEvent);
                 return;
             }
 

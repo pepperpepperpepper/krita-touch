@@ -23,6 +23,7 @@
 #include "KisViewManager.h"
 #include "kis_input_manager.h"
 #include "kis_config.h"
+#include "KisTouchTransformGesture.h"
 
 
 class KisZoomAction::Private
@@ -44,8 +45,7 @@ public:
     qreal startZoom {1.0};
     qreal lastDiscreteZoomDistance {0.0};
 
-    QPointer<QObject> touchTransformTool;
-    bool touchTransformActive {false};
+    KisTouchTransformGesture m_touchXform;
 };
 
 QPointF KisZoomAction::Private::centerPoint(QTouchEvent* event)
@@ -120,64 +120,9 @@ void KisZoomAction::begin(int shortcut, QEvent *event)
 {
     KisAbstractInputAction::begin(shortcut, event);
 
-    d->touchTransformTool.clear();
-    d->touchTransformActive = false;
-
+    d->m_touchXform.reset();
     if (event && (event->type() == QEvent::TouchBegin || event->type() == QEvent::TouchUpdate)) {
-        QTouchEvent *touchEvent = dynamic_cast<QTouchEvent *>(event);
-        if (touchEvent && touchEvent->touchPoints().count() > 1) {
-            KisConfig cfg(true);
-            if (cfg.touchModeEnabled()) {
-                KoToolManager *toolManager = KoToolManager::instance();
-                if (toolManager && toolManager->activeToolId() == QStringLiteral("KisToolTransform")) {
-                    QObject *toolObj = dynamic_cast<QObject *>(toolManager->toolById(inputManager()->canvas(), toolManager->activeToolId()));
-                    if (toolObj) {
-                        const QPointF p0 = touchEvent->touchPoints().at(0).pos();
-                        const QPointF p1 = touchEvent->touchPoints().at(1).pos();
-
-                        auto hitTestWidgetPoint = [&](const QPointF &widgetPoint, bool &hitOut) -> bool {
-                            hitOut = false;
-                            return QMetaObject::invokeMethod(toolObj, "touchTransformHitTest", Qt::DirectConnection,
-                                                             Q_RETURN_ARG(bool, hitOut),
-                                                             Q_ARG(QPointF, widgetPoint));
-                        };
-
-                        const QPointF centerWidget = (p0 + p1) * 0.5;
-
-                        bool hit0 = false;
-                        bool hit1 = false;
-                        bool hitCenter = false;
-                        const bool canHit0 = hitTestWidgetPoint(p0, hit0);
-                        const bool canHit1 = hitTestWidgetPoint(p1, hit1);
-                        const bool canHitCenter = hitTestWidgetPoint(centerWidget, hitCenter);
-
-                        int hits = 0;
-                        if (canHit0 && hit0) {
-                            ++hits;
-                        }
-                        if (canHit1 && hit1) {
-                            ++hits;
-                        }
-                        if (canHitCenter && hitCenter) {
-                            ++hits;
-                        }
-
-                        if (hits >= 2) {
-                            bool began = false;
-                            const bool invokedBegin =
-                                QMetaObject::invokeMethod(toolObj, "touchTransformGestureBegin", Qt::DirectConnection,
-                                                          Q_RETURN_ARG(bool, began),
-                                                          Q_ARG(QPointF, p0),
-                                                          Q_ARG(QPointF, p1));
-                            if (invokedBegin && began) {
-                                d->touchTransformTool = toolObj;
-                                d->touchTransformActive = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        d->m_touchXform.maybeBegin(inputManager(), dynamic_cast<QTouchEvent *>(event));
     }
 
     d->lastDistance = 0.f;
@@ -260,12 +205,7 @@ void KisZoomAction::end(QEvent *event)
 {
     Q_UNUSED(event);
 
-    if (d->touchTransformActive && d->touchTransformTool) {
-        QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureEnd", Qt::DirectConnection);
-    }
-
-    d->touchTransformActive = false;
-    d->touchTransformTool.clear();
+    d->m_touchXform.end();
 }
 
 void KisZoomAction::inputEvent( QEvent* event )
@@ -274,24 +214,8 @@ void KisZoomAction::inputEvent( QEvent* event )
         case QEvent::TouchUpdate: {
             QTouchEvent *tevent = static_cast<QTouchEvent*>(event);
 
-            if (d->touchTransformActive && d->touchTransformTool && tevent->touchPoints().count() > 1) {
-                const QTouchEvent::TouchPoint tp0 = tevent->touchPoints().at(0);
-                const QTouchEvent::TouchPoint tp1 = tevent->touchPoints().at(1);
-
-                if (tp0.state() == Qt::TouchPointReleased || tp1.state() == Qt::TouchPointReleased) {
-                    return;
-                }
-
-                const QPointF p0 = tp0.pos();
-                const QPointF p1 = tp1.pos();
-
-                if ((p0 - p1).manhattanLength() < 10) {
-                    return;
-                }
-
-                QMetaObject::invokeMethod(d->touchTransformTool, "touchTransformGestureUpdate", Qt::DirectConnection,
-                                          Q_ARG(QPointF, p0),
-                                          Q_ARG(QPointF, p1));
+            if (d->m_touchXform.isActive() && tevent->touchPoints().count() > 1) {
+                d->m_touchXform.handleUpdate(tevent);
                 return;
             }
 
