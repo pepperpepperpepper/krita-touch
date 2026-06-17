@@ -11,6 +11,8 @@
 #include <brushengine/kis_paintop_settings.h>
 #include <kis_distance_information.h>
 
+#include <memory>
+
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QVector>
@@ -31,6 +33,7 @@ class QPainter;
 
 class KisPaintingInformationBuilder;
 class KisToolFreehandHelper;
+class KisToolFreehandQuickShape;
 
 
 class KRITAUI_EXPORT KisToolFreehand : public KisToolPaint
@@ -96,32 +99,7 @@ protected Q_SLOTS:
 
 private:
     friend class KisToolFreehandPaintingInformationBuilder;
-
-    void resetTouchQuickShapeTracking();
-
-    struct TouchQuickShapeGeometry {
-        enum class Kind {
-            None,
-            Rect,
-            Ellipse,
-            Polygon,
-            Line,
-        };
-
-        Kind kind{Kind::None};
-        QRectF rect;
-        QVector<QPointF> polygon;
-        QPointF lineP0;
-        QPointF lineP1;
-    };
-
-    void showTouchQuickShapeEditPopup();
-    void startTouchQuickShapeEdit();
-    void commitTouchQuickShapeEdit();
-
-    void touchQuickShapeEditBegin(KoPointerEvent *event);
-    void touchQuickShapeEditContinue(KoPointerEvent *event);
-    void touchQuickShapeEditEnd(KoPointerEvent *event);
+    friend class KisToolFreehandQuickShape;
 
     /**
      * Adjusts a coordinates according to a KisPaintingAssistant,
@@ -161,20 +139,7 @@ private:
 
     std::optional<KoPointerEventWrapper> m_beginAlternateActionEvent;
 
-    QVector<QPointF> m_touchQuickShapePoints;
-    QPointF m_touchQuickShapeLastRecordedPixelPos;
-    QElapsedTimer m_touchQuickShapeSinceLastMove;
-    bool m_touchQuickShapeTracking {false};
-
-    std::optional<TouchQuickShapeGeometry> m_touchQuickShapeLastShape;
-    std::optional<TouchQuickShapeGeometry> m_touchQuickShapeEditShape;
-    bool m_touchQuickShapeEditActive{false};
-    int m_touchQuickShapeEditHandle{-1};
-    bool m_touchQuickShapeEditDragAll{false};
-    bool m_touchQuickShapeEditMoved{false};
-    bool m_touchQuickShapeEditPendingCommit{false};
-    QPointF m_touchQuickShapeEditLastPixelPos;
-    QPointer<QFrame> m_touchQuickShapeEditPopup;
+    std::unique_ptr<KisToolFreehandQuickShape> m_quickShape;
 };
 
 
